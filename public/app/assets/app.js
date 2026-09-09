@@ -52,6 +52,9 @@ const ICONS = {
   alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v4M12 17h.01"/>',
   loop: '<path d="M12 4 L14.29 4.52 L16.29 5.63 L17.87 7.23 L18.9 9.15 L19.34 11.24 L19.18 13.31 L18.47 15.2 L17.28 16.77 L15.74 17.91 L14 18.55 L12.2 18.67 L10.49 18.29 L9 17.47 L7.85 16.3 L7.1 14.9 L6.79 13.39 L6.91 11.92 L7.43 10.59 L8.27 9.5 L9.34 8.74 L10.53 8.32 L11.74 8.27 L12.86 8.55 L13.81 9.11 L14.52 9.88 L14.95 10.78 L15.1 11.71 L14.98 12.59 L14.62 13.34 L14.1 13.93"/><circle cx="12" cy="12.4" r="1.4" fill="currentColor" stroke="none"/>',
   pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  plug: '<path d="M9 3v5M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/>',
+  link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.5-1.5"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M13 10l2 2"/>',
   play: '<path d="M7 5l12 7-12 7z"/>',
 };
 function icon(name, size = 18, extra = '') {
@@ -178,12 +181,14 @@ const LENGTHS = { concise: 'Concise', balanced: 'Balanced', detailed: 'Detailed'
 
 // ---------- Router ----------
 function parseRoute() {
-  const h = location.hash.replace(/^#\/?/, '');
+  const full = location.hash.replace(/^#\/?/, '');
+  const [h, qs] = full.split('?');
+  const query = Object.fromEntries(new URLSearchParams(qs || ''));
   const [name, id] = h.split('/');
-  if (!name) return { name: 'home' };
-  if (['thread', 'space', 'build'].includes(name) && id) return { name, id };
-  if (['discover', 'spaces', 'library', 'graph', 'account'].includes(name)) return { name };
-  return { name: 'home' };
+  if (!name) return { name: 'home', query };
+  if (['thread', 'space', 'build'].includes(name) && id) return { name, id, query };
+  if (['discover', 'spaces', 'library', 'graph', 'account', 'connectors'].includes(name)) return { name, query };
+  return { name: 'home', query };
 }
 function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
 
@@ -251,9 +256,11 @@ function renderSidebar() {
   });
   const recent = state.threads.slice(0, 7);
   const box = $('#recent');
-  box.innerHTML = recent.length ? `<div class="recent-h">Recent</div>` + recent.map(t =>
-    `<a href="#/thread/${t.id}" class="${state.route.name === 'thread' && state.route.id === t.id ? 'on' : ''}" title="${esc(t.title)}"><span>${esc(t.title)}</span></a>`
+  box.innerHTML = recent.length ? `<div class="recent-h"><span>Recent</span><button type="button" class="icon-btn recent-clear" data-clear-recent title="Delete all recent conversations" aria-label="Delete all recent conversations">${icon('trash', 13)}</button></div>` + recent.map(t =>
+    `<div class="recent-row"><a href="#/thread/${t.id}" class="${state.route.name === 'thread' && state.route.id === t.id ? 'on' : ''}" title="${esc(t.title)}"><span>${esc(t.title)}</span></a><button type="button" class="icon-btn recent-del" data-recent-del="${t.id}" title="Delete this conversation" aria-label="Delete conversation">${icon('trash', 13)}</button></div>`
   ).join('') : '';
+  $$('[data-recent-del]', box).forEach(b => b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); const t = getThreadSummary(b.dataset.recentDel); if (t) confirmDelete(t); }));
+  const clr = $('[data-clear-recent]', box); if (clr) clr.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); confirmDeleteMany(recent); });
   const acct = $('#acctRow');
   if (acct && state.user) {
     const name = state.user.name || state.user.email || 'You';
@@ -490,20 +497,15 @@ function parseLearned(block) {
 }
 
 const ERROR_COPY = {
-  not_granted: 'Answers are turned off for this page. Allow Ricorsa to use Claude when asked, then try again.',
-  sampling_disabled: 'Claude isn’t available on this account, so Ricorsa can’t answer here.',
-  not_declared: 'This page can’t reach Claude right now.',
-  capability_disabled: 'This page can’t reach Claude in this view. Try opening it in the Claude app.',
-  capability_removed: 'This page can’t reach Claude in this view. Try opening it in the Claude app.',
-  rate_limited: 'You’re asking faster than your Claude plan allows right now. Wait a minute and try again.',
-  session_expired: 'Your Claude session expired. Sign in again, then retry.',
-  refused: 'Claude declined to answer that as asked. Try rephrasing the question.',
+  provider_billing: 'Ricorsa cannot reach its AI provider right now because the account behind it needs attention. The site owner has been notified; please try again later.',
+  provider_auth: 'Ricorsa cannot reach its AI provider right now because its access key was rejected. The site owner has been notified; please try again later.',
+  rate_limited: 'Ricorsa is handling a lot of questions right now. Wait a minute and try again.',
+  overloaded: 'The model is overloaded at the moment. Try again in a minute.',
+  session_expired: 'Your session expired. Sign in again, then retry.',
   empty_completion: 'No answer came back. Try rephrasing or asking for less at once.',
   prompt_too_large: 'This thread is too long to continue. Start a new thread for this question.',
-  image_rejected: 'That image couldn’t be used, try a smaller JPEG or PNG.',
-  images_unavailable: 'Images can’t be sent from this view. Ask without the attachment.',
-  invalid_request: 'Something went wrong preparing the request. Try again.',
-  upstream_error: 'The connection hiccupped and the answer was interrupted.',
+  invalid_request: 'The request was rejected. Try again, or start a new thread.',
+  upstream_error: 'The answer was interrupted on the way back. Try again.',
   unavailable: 'Ricorsa is not reachable right now. Check your connection and try again.',
   network: 'You appear to be offline.',
   daily_limit: 'You have used today\u2019s questions on your plan.',
@@ -580,7 +582,7 @@ async function readSse(res, onEvent) {
   }
 }
 async function runTurn(thread, turn, { rewrite } = {}) {
-  turn.status = 'running'; turn.error = null; turn.raw = ''; turn.answer = ''; turn.related = []; turn.sources = []; turn.truncated = false; turn.tierApplied = null; turn.learned = null; turn.learnedMerged = false; turn.statusText = 'Searching the web';
+  turn.status = 'running'; turn.error = null; turn.raw = ''; turn.answer = ''; turn.related = []; turn.sources = []; turn.tools = []; turn.truncated = false; turn.tierApplied = null; turn.learned = null; turn.learnedMerged = false; turn.statusText = 'Searching the web';
   liveRender(thread, turn);
   const ctl = new AbortController();
   state.runs.set(thread.id, ctl);
@@ -600,6 +602,7 @@ async function runTurn(thread, turn, { rewrite } = {}) {
         if (data.title && thread.title !== data.title) thread.title = data.title;
       } else if (ev === 'status') { turn.statusText = data.text || ''; liveRender(thread, turn); }
       else if (ev === 'sources') { turn.sources = data || []; liveRender(thread, turn); }
+      else if (ev === 'tools') { turn.tools = data || []; liveRender(thread, turn); }
       else if (ev === 'delta') { turn.raw += data.text || ''; applyParsed(turn); liveRender(thread, turn); }
       else if (ev === 'done') { Object.assign(turn, data.turn, { raw: turn.raw }); if (typeof data.graphEvents === 'number' && state.graph) state.graph.events = data.graphEvents; }
       else if (ev === 'error') { if (data.turn) Object.assign(turn, data.turn, { raw: turn.raw }); turn.status = 'error'; turn.error = data.code || 'upstream_error'; turn.errorMessage = data.message; }
@@ -890,8 +893,21 @@ function provenanceModal(thread) {
   });
 }
 function confirmDelete(thread) {
-  openModal(`<h2>Delete this thread?</h2><p class="sub">\u201c${esc(thread.title)}\u201d will be removed from your library. This can\u2019t be undone.</p><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="delOk">Delete</button></div>`, {
-    onMount: () => $('#delOk').addEventListener('click', async () => { stopRun(thread.id); closeModal(); try { await deleteThreadRemote(thread.id); } catch (e) { apiToast(e, 'Could not delete'); return; } renderSidebar(); if (state.route.name === 'thread' && state.route.id === thread.id) go('#/library'); else render(); toast('Thread deleted'); })
+  openModal(`<h2>Delete this conversation?</h2><p class="sub">\u201c${esc(thread.title)}\u201d will be removed from your library. This can\u2019t be undone.</p><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="delOk">Delete</button></div>`, {
+    onMount: () => $('#delOk').addEventListener('click', async () => { stopRun(thread.id); closeModal(); try { await deleteThreadRemote(thread.id); } catch (e) { apiToast(e, 'Could not delete'); return; } renderSidebar(); if (state.route.name === 'thread' && state.route.id === thread.id) go('#/library'); else render(); toast('Conversation deleted'); })
+  });
+}
+/** Delete several conversations at once (the Recent list). */
+function confirmDeleteMany(threads) {
+  const list = (threads || []).filter(Boolean); if (!list.length) return;
+  openModal(`<h2>Delete ${list.length} recent conversation${list.length === 1 ? '' : 's'}?</h2><p class="sub">These will be removed from your library. Your identity graph keeps what it has already learned. This can\u2019t be undone.</p><ul class="del-list">${list.map(t => `<li>${esc(truncate(t.title, 70))}</li>`).join('')}</ul><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="delManyOk">Delete all</button></div>`, {
+    onMount: () => $('#delManyOk').addEventListener('click', async () => {
+      closeModal();
+      let n = 0, failed = 0; const open = state.route.name === 'thread' ? state.route.id : null;
+      for (const t of list) { stopRun(t.id); try { await deleteThreadRemote(t.id); n++; } catch { failed++; } }
+      renderSidebar(); if (open && !getThreadSummary(open)) go('#/home'); else render();
+      toast(failed ? `Deleted ${n}, ${failed} could not be deleted` : `Deleted ${n} conversation${n === 1 ? '' : 's'}`, failed ? 'bad' : 'ok');
+    })
   });
 }
 function turnHtml(thread, t) {
@@ -953,6 +969,10 @@ function paintTurn(sec, thread, t) {
   }
   if (t.status === 'done' && t.truncated) noteHtml += `<div class="answer-note warn">${icon('alert', 14)}This answer ran unusually long and was trimmed at the end. Ask a follow-up to keep going.</div>`;
   if (t.status === 'done' && t.tierApplied && t.tier && t.tierApplied !== t.tier) noteHtml += `<div class="answer-note">${icon('info', 14)}Answered with the ${TIERS[t.tierApplied] ? TIERS[t.tierApplied].label : t.tierApplied} model, your plan doesn’t include ${TIERS[t.tier] ? TIERS[t.tier].label : t.tier}.</div>`;
+  if (t.tools && t.tools.length) {
+    const byServer = {}; for (const c of t.tools) (byServer[c.server] = byServer[c.server] || []).push(c);
+    noteHtml += `<div class="answer-note tools-note">${icon('plug', 14)}<span>${running ? 'Using' : 'Used'} your connectors: ${Object.entries(byServer).map(([srv, calls]) => `<b>${esc(srv)}</b> (${calls.map(c => esc(c.name.replace(/_/g, ' ')) + (c.error ? ' ✕' : '')).join(', ')})`).join(' · ')}</span></div>`;
+  }
   if (t.status === 'done') noteHtml += `<div class="answer-note">${icon('info', 14)}Sources were retrieved from the web when you asked. Ricorsa can still misread them, so verify important details.</div>`;
   note.innerHTML = noteHtml;
 
@@ -1403,6 +1423,152 @@ function openSettings() {
 }
 
 // ---------- Render / init ----------
+// ---------- Connectors ----------
+// Outside applications and MCP servers the person has linked. Enabled connectors become tools the model
+// can call while it answers, so a question about their own issues, pages, deals or data is answered from the source.
+const AUTH_LABEL = { none: 'No sign-in', bearer: 'Token', oauth: 'Sign in with the app' };
+function connStatus(c) {
+  if (c.status === 'ok') return { cls: 'ok', text: `${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}${c.allowedTools ? ` · ${c.allowedTools.length} allowed` : ''}` };
+  if (c.status === 'needs_auth') return { cls: 'warn', text: c.authType === 'oauth' ? 'Needs sign-in' : c.authType === 'bearer' ? 'Token rejected' : 'Needs a sign-in' };
+  if (c.status === 'error') return { cls: 'bad', text: 'Not reachable' };
+  return { cls: '', text: 'Not checked yet' };
+}
+async function loadConnectors() {
+  const r = await api('/api/connectors');
+  state.connectors = r.items || []; state.catalog = r.catalog || []; state.connLimit = r.limit || 0; state.connCallback = r.callback || '';
+  return r;
+}
+function renderConnectors() {
+  const main = $('#main');
+  main.innerHTML = `<div class="view">${topbarHtml('Connectors')}<div class="scroll"><div class="col wide">
+    <div class="page-h"><h1>${icon('plug', 26)}Connectors</h1><button type="button" class="btn primary sm" data-add-conn>${icon('plus', 15)}<span>Add connector</span></button></div>
+    <p class="page-sub">Connect Ricorsa to the apps and MCP servers you use. When a connector is on, its tools are available to every answer: ask about your own issues, pages, deals, customers or code and Ricorsa reads the live source instead of guessing. Credentials are stored encrypted and never leave your account.</p>
+    <div data-conn-list><div class="skel"><i></i><i></i></div></div>
+  </div></div></div>`;
+  wireTopbar(main);
+  $('[data-add-conn]', main).addEventListener('click', () => { if (state.connLimit <= 0 && !(state.user && state.user.admin)) { toast('Connectors are part of the Pro and Team plans', 'bad'); return; } addConnectorModal(); });
+  loadConnectors().then(() => { paintConnectors(); afterOauthReturn(); }).catch(e => { const box = $('[data-conn-list]', main); if (box) box.innerHTML = `<div class="empty">${icon('alert', 26)}<div>${esc((e && e.message) || 'Could not load your connectors')}</div></div>`; });
+}
+function afterOauthReturn() {
+  const q = state.route.query || {}; if (!q.oauth) return;
+  if (q.oauth === 'ok') toast('Connected. Its tools are ready to use.'); else toast(q.reason ? `Sign-in did not finish: ${q.reason}` : 'Sign-in did not finish', 'bad');
+  history.replaceState(null, '', '#/connectors'); state.route = parseRoute();
+}
+function paintConnectors() {
+  const box = $('[data-conn-list]'); if (!box) return;
+  const list = state.connectors || []; const limit = state.connLimit; const admin = state.user && state.user.admin;
+  let html = '';
+  if (limit <= 0 && !admin) html += upgradeCard('Connectors are part of Pro and Team', 'Pro links up to 3 outside apps or MCP servers to your answers; Team links up to 25.', 'Pro');
+  else if (list.length >= limit && !admin) html += `<p class="page-sub">You are using all ${limit} connectors on the ${esc(state.plan ? state.plan.name : '')} plan. <a href="/pricing">See plans</a> for more.</p>`;
+  if (!list.length) {
+    const picks = (state.catalog || []).filter(p => p.key !== 'custom').slice(0, 6);
+    html += `<div class="conn-empty"><div class="empty">${icon('plug', 28)}<div>No connectors yet.</div><p>Start with one of these, or add any MCP server by URL.</p></div>
+      <div class="conn-cat">${picks.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}" ${limit <= 0 && !admin ? 'disabled' : ''}><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div></div>`;
+  } else {
+    html += `<div class="conn-list">${list.map(c => {
+      const st = connStatus(c); const dom = domainOf(c.url) || c.url;
+      return `<div class="conn-card${c.enabled ? '' : ' off'}" data-conn="${esc(c.id)}">
+        <div class="conn-main">
+          <span class="conn-logo" style="background:${colorFor(c.name)}">${esc(c.name[0] || '?').toUpperCase()}</span>
+          <div class="conn-txt"><b>${esc(c.name)}</b><span class="conn-url" title="${esc(c.url)}">${esc(dom)} · ${esc(AUTH_LABEL[c.authType] || c.authType)}</span>
+            <span class="conn-status ${st.cls}">${esc(st.text)}${c.lastError && c.status !== 'ok' ? `: ${esc(truncate(c.lastError, 120))}` : ''}</span></div>
+          <label class="switch${c.enabled ? ' on' : ''}" title="${c.enabled ? 'On: its tools are available to answers' : 'Off: kept, but not used'}" data-toggle><i></i><span>${c.enabled ? 'On' : 'Off'}</span></label>
+        </div>
+        <div class="conn-actions">
+          ${c.authType === 'oauth' ? `<a class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" href="/api/connectors/${encodeURIComponent(c.id)}/oauth/start" title="Sign in to the app and approve access">${icon('key', 14)}<span>${c.status === 'needs_auth' ? 'Sign in' : 'Sign in again'}</span></a>` : ''}
+          <button type="button" class="btn sm" data-test title="Reach the server and refresh its tool list">${icon('refresh', 14)}<span>Test</span></button>
+          <button type="button" class="btn sm" data-tools title="Choose which of its tools Ricorsa may use" ${c.tools.length ? '' : 'disabled'}>${icon('check', 14)}<span>Tools</span></button>
+          <button type="button" class="btn sm" data-edit title="Rename, change the URL or the token">${icon('edit', 14)}<span>Edit</span></button>
+          <button type="button" class="btn sm danger" data-remove title="Remove this connector and its credentials">${icon('trash', 14)}<span>Remove</span></button>
+        </div>
+      </div>`; }).join('')}</div>`;
+    html += `<p class="page-sub" style="margin-top:14px">Answers that used a connector say so under the answer. Ricorsa asks a connector only when the question is about your own data in that app.</p>`;
+  }
+  box.innerHTML = html;
+  $$('[data-pick]', box).forEach(b => b.addEventListener('click', () => addConnectorModal(b.dataset.pick)));
+  $$('.conn-card', box).forEach(card => {
+    const c = (state.connectors || []).find(x => x.id === card.dataset.conn); if (!c) return;
+    $('[data-toggle]', card).addEventListener('click', async e => { e.preventDefault(); try { const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body: { enabled: !c.enabled } }); Object.assign(c, r.connector); paintConnectors(); } catch (err) { apiToast(err); } });
+    $('[data-test]', card).addEventListener('click', async e => { const b = e.currentTarget; b.disabled = true; b.querySelector('span').textContent = 'Testing'; try { const r = await api('/api/connectors/' + encodeURIComponent(c.id) + '/test', { method: 'POST' }); Object.assign(c, r.connector); toast(c.status === 'ok' ? `${c.name}: ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'} available` : `${c.name}: ${c.lastError || 'not reachable'}`, c.status === 'ok' ? 'ok' : 'bad'); } catch (err) { apiToast(err); } paintConnectors(); });
+    const tb = $('[data-tools]', card); if (tb) tb.addEventListener('click', () => toolsModal(c));
+    $('[data-edit]', card).addEventListener('click', () => editConnectorModal(c));
+    $('[data-remove]', card).addEventListener('click', () => openModal(`<h2>Remove ${esc(c.name)}?</h2><p class="sub">Its credentials are deleted from your account. Past answers keep their notes.</p><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="cDel">Remove</button></div>`, {
+      onMount: () => $('#cDel').addEventListener('click', async () => { try { await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'DELETE' }); state.connectors = state.connectors.filter(x => x.id !== c.id); closeModal(); paintConnectors(); toast('Connector removed'); } catch (err) { apiToast(err); } })
+    }));
+  });
+}
+function addConnectorModal(presetKey) {
+  const cat = state.catalog || [];
+  const preset = presetKey ? cat.find(p => p.key === presetKey) : null;
+  if (!preset) {
+    openModal(`<h2>Add a connector</h2><p class="sub">Pick an app, or connect any MCP server by URL.</p>
+      <div class="conn-cat modal-cat">${cat.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}"><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div>
+      <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button></div>`, {
+      onMount: ov => $$('[data-pick]', ov).forEach(b => b.addEventListener('click', () => addConnectorModal(b.dataset.pick)))
+    });
+    return;
+  }
+  const custom = preset.key === 'custom';
+  const authOpts = ['none', 'bearer', 'oauth'].map(a => `<option value="${a}"${a === preset.auth ? ' selected' : ''}>${AUTH_LABEL[a]}</option>`).join('');
+  openModal(`<h2>${custom ? 'Custom MCP server' : 'Connect ' + esc(preset.name)}</h2><p class="sub">${esc(preset.blurb)}${preset.docs ? ` <a href="${esc(preset.docs)}" target="_blank" rel="noopener">Vendor docs</a>` : ''}</p>
+    <div class="field"><label for="cName">Name</label><input type="text" id="cName" maxlength="60" value="${esc(custom ? '' : preset.name)}" placeholder="e.g. Company Jira"></div>
+    <div class="field"><label for="cUrl">Server URL</label><input type="url" id="cUrl" maxlength="500" value="${esc(preset.url)}" placeholder="https://mcp.example.com/mcp"><span class="hint">${custom ? 'The remote MCP endpoint, over HTTPS.' : 'The vendor’s published endpoint. Edit it if their docs show a different one.'}</span></div>
+    <div class="field"><label for="cAuth">Sign-in</label><select id="cAuth">${authOpts}</select><span class="hint" data-auth-hint></span></div>
+    <div class="field" data-token-field hidden><label for="cToken">Token</label><input type="password" id="cToken" maxlength="4000" autocomplete="off" placeholder="Paste the token"><span class="hint">${esc(preset.tokenHint || 'A personal access token or API key from the app’s settings. Stored encrypted.')}</span></div>
+    <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="cOk">Connect</button></div>`, {
+    onMount: ov => {
+      const auth = $('#cAuth'), tok = $('[data-token-field]', ov), hint = $('[data-auth-hint]', ov);
+      const sync = () => { tok.hidden = auth.value !== 'bearer'; hint.textContent = auth.value === 'oauth' ? 'You will be sent to the app to approve access, then brought back here.' : auth.value === 'bearer' ? 'Ricorsa sends this token with every request to the server.' : 'The server is open, or the URL itself carries the key.'; };
+      auth.addEventListener('change', sync); sync();
+      $('#cOk').addEventListener('click', async () => {
+        const name = $('#cName').value.trim(), url = $('#cUrl').value.trim(), authType = auth.value, token = $('#cToken').value;
+        if (!name) { $('#cName').focus(); return; } if (!url) { $('#cUrl').focus(); return; }
+        if (authType === 'bearer' && !token.trim()) { $('#cToken').focus(); return; }
+        const btn = $('#cOk'); btn.disabled = true; btn.textContent = authType === 'oauth' ? 'Starting sign-in' : 'Checking the server';
+        try {
+          const r = await api('/api/connectors', { body: { name, url, authType, token: authType === 'bearer' ? token : null, preset: custom ? null : preset.key } });
+          state.connectors = [...(state.connectors || []), r.connector];
+          closeModal();
+          if (authType === 'oauth') { location.href = '/api/connectors/' + encodeURIComponent(r.connector.id) + '/oauth/start'; return; }
+          paintConnectors();
+          const c = r.connector; toast(c.status === 'ok' ? `${c.name} connected: ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'} available` : `${c.name} saved, but ${c.lastError || 'it could not be reached'}`, c.status === 'ok' ? 'ok' : 'bad');
+        } catch (err) { btn.disabled = false; btn.textContent = 'Connect'; apiToast(err, 'Could not add the connector'); }
+      });
+      $('#cName').focus();
+    }
+  });
+}
+function editConnectorModal(c) {
+  openModal(`<h2>Edit ${esc(c.name)}</h2>
+    <div class="field"><label for="eName">Name</label><input type="text" id="eName" maxlength="60" value="${esc(c.name)}"></div>
+    <div class="field"><label for="eUrl">Server URL</label><input type="url" id="eUrl" maxlength="500" value="${esc(c.url)}"></div>
+    ${c.authType === 'bearer' ? `<div class="field"><label for="eToken">New token</label><input type="password" id="eToken" maxlength="4000" autocomplete="off" placeholder="Leave blank to keep the current token"><span class="hint">${c.hasCredential ? 'A token is stored. Paste a new one to replace it.' : 'No token stored yet.'}</span></div>` : ''}
+    <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="eOk">Save</button></div>`, {
+    onMount: () => $('#eOk').addEventListener('click', async () => {
+      const body = { name: $('#eName').value.trim(), url: $('#eUrl').value.trim() };
+      const t = $('#eToken'); if (t && t.value.trim()) body.token = t.value.trim();
+      if (!body.name || !body.url) return;
+      try { const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body }); Object.assign(c, r.connector); closeModal(); paintConnectors(); toast('Saved'); } catch (err) { apiToast(err, 'Could not save'); }
+    })
+  });
+}
+function toolsModal(c) {
+  const allowed = c.allowedTools ? new Set(c.allowedTools) : null;
+  openModal(`<h2>${esc(c.name)} tools</h2><p class="sub">Untick a tool to keep Ricorsa from using it. All ticked means everything the server offers.</p>
+    <div class="tool-list">${c.tools.map(t => `<label class="tool-row"><input type="checkbox" data-tool="${esc(t.name)}" ${!allowed || allowed.has(t.name) ? 'checked' : ''}><span><b>${esc(t.name)}</b>${t.description ? `<small>${esc(t.description)}</small>` : ''}</span></label>`).join('')}</div>
+    <div class="modal-actions"><button type="button" class="btn" id="tAll">Tick all</button><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="tOk">Save</button></div>`, {
+    onMount: ov => {
+      $('#tAll').addEventListener('click', () => $$('[data-tool]', ov).forEach(x => { x.checked = true; }));
+      $('#tOk').addEventListener('click', async () => {
+        const boxes = $$('[data-tool]', ov); const picked = boxes.filter(x => x.checked).map(x => x.dataset.tool);
+        const allowedTools = picked.length === boxes.length ? null : picked;
+        if (!picked.length) { toast('Keep at least one tool, or turn the connector off instead', 'bad'); return; }
+        try { const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body: { allowedTools } }); Object.assign(c, r.connector); closeModal(); paintConnectors(); toast('Tools saved'); } catch (err) { apiToast(err, 'Could not save'); }
+      });
+    }
+  });
+}
+
 function render() {
   closePop();
   state.route = parseRoute();
@@ -1415,6 +1581,7 @@ function render() {
   else if (r.name === 'space') renderSpace(r.id);
   else if (r.name === 'library') renderLibrary();
   else if (r.name === 'graph') renderGraph();
+  else if (r.name === 'connectors') renderConnectors();
   renderSidebar();
   closeDrawer();
 }

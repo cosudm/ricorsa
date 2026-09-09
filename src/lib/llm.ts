@@ -25,13 +25,59 @@ function client(): Anthropic {
 /** Web search server-tool versions, newest first; an unknown version falls back to the next one. */
 const SEARCH_TOOL_VERSIONS = [process.env.WEB_SEARCH_TOOL || 'web_search_20260318', 'web_search_20260209', 'web_search_20250305'];
 
+export type ProviderErrorCode = 'provider_billing' | 'provider_auth' | 'rate_limited' | 'overloaded' | 'prompt_too_large' | 'invalid_request' | 'upstream_error';
+export type ProviderError = { code: ProviderErrorCode; status: number | null; type: string; message: string; forAdmin: string; forUser: string };
+
+/**
+ * Read what the model provider actually said. The SDK error carries the HTTP status and the JSON body;
+ * the body's message is the useful part (out of credit, bad key, rate limit, overloaded), so surface it.
+ */
+export function describeProviderError(e: unknown): ProviderError {
+  const err = e as { status?: number; message?: string; error?: { error?: { type?: string; message?: string }; type?: string; message?: string } };
+  const status = typeof err?.status === 'number' ? err.status : null;
+  const body = err?.error?.error || err?.error || {};
+  const type = String(body?.type || '');
+  const message = String(body?.message || err?.message || e || '').slice(0, 400);
+  const m = message.toLowerCase();
+  let code: ProviderErrorCode = 'upstream_error';
+  if (/credit balance|purchase credits|spend limit|billing|plans & billing/.test(m)) code = 'provider_billing';
+  else if (status === 401 || status === 403 || type === 'authentication_error' || type === 'permission_error') code = 'provider_auth';
+  else if (status === 429 || type === 'rate_limit_error') code = 'rate_limited';
+  else if (status === 529 || status === 503 || type === 'overloaded_error') code = 'overloaded';
+  else if (status === 400 && /prompt is too long|too many tokens|context length/.test(m)) code = 'prompt_too_large';
+  else if (status === 400 || type === 'invalid_request_error') code = 'invalid_request';
+  const forUser = {
+    provider_billing: 'Ricorsa cannot reach its AI provider right now because the account behind it needs attention. The site owner has been notified; please try again later.',
+    provider_auth: 'Ricorsa cannot reach its AI provider right now because its access key was rejected. The site owner has been notified; please try again later.',
+    rate_limited: 'Ricorsa is handling a lot of questions right now. Wait a minute and try again.',
+    overloaded: 'The model is overloaded at the moment. Try again in a minute.',
+    prompt_too_large: 'This thread is too long to continue. Start a new thread for this question.',
+    invalid_request: 'The request was rejected by the AI provider. Try again, or start a new thread.',
+    upstream_error: 'The answer was interrupted on the way back. Try again.',
+  }[code];
+  const forAdmin = `${forUser} Provider said${status ? ` (HTTP ${status}${type ? `, ${type}` : ''})` : ''}: ${message}`;
+  return { code, status, type, message, forAdmin, forUser };
+}
+
+/** True when a 400 is about the web search tool itself (unknown version) rather than about the account or the request. */
+function isToolVersionRejection(e: unknown): boolean {
+  const p = describeProviderError(e);
+  return p.status === 400 && /web_search|tools\.\d|tool type|tool.*(version|not supported|unsupported|invalid)/i.test(p.message);
+}
+
 export type SystemBlock = { text: string; cache?: boolean };
 export type Msg = { role: 'user' | 'assistant'; content: string };
 export type SearchOpts = { maxUses: number; allowedDomains?: string[] };
 export type StreamResult = {
   text: string; truncated: boolean; model: string; sources: Source[];
   usage: { in: number; out: number; cacheRead: number; cacheWrite: number; searches: number };
+  /** Connector tools the model called (server name, tool, whether the call failed). */
+  tools: ToolCall[];
 };
+export type ToolCall = { server: string; name: string; error?: boolean };
+/** A connector handed to the model through the provider's MCP connector. */
+export type McpServerSpec = { name: string; label: string; url: string; token: string | null; allowedTools: string[] | null };
+const MCP_BETA = 'mcp-client-2025-04-04';
 
 function domainOf(url: string): string { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } }
 function normUrl(url: string): string { return url.replace(/#.*$/, '').replace(/\/$/, ''); }
@@ -46,9 +92,11 @@ function normUrl(url: string): string { return url.replace(/#.*$/, '').replace(/
 export async function streamAnswer(opts: {
   tier: Tier; system: SystemBlock[]; messages: Msg[]; maxTokens: number; signal?: AbortSignal;
   search?: SearchOpts | null;
+  mcp?: McpServerSpec[] | null;
   onText: (delta: string) => void;
   onSources?: (sources: Source[]) => void;
   onStatus?: (text: string) => void;
+  onTool?: (call: ToolCall) => void;
 }): Promise<StreamResult> {
   const model = modelFor(opts.tier);
   if (mockMode()) return mockStream(opts, model);
@@ -66,12 +114,13 @@ export async function streamAnswer(opts: {
       ? [{ type: version, name: 'web_search', max_uses: opts.search.maxUses, ...(opts.search.allowedDomains?.length ? { allowed_domains: opts.search.allowedDomains } : {}) }]
       : undefined;
     try {
-      return await runStream({ model, system, messages, maxTokens: opts.maxTokens, tools: tools as never, signal: opts.signal, onText: opts.onText, onSources: opts.onSources, onStatus: opts.onStatus });
+      return await runStream({ model, system, messages, maxTokens: opts.maxTokens, tools: tools as never, mcp: opts.mcp?.length ? opts.mcp : undefined, signal: opts.signal, onText: opts.onText, onSources: opts.onSources, onStatus: opts.onStatus, onTool: opts.onTool });
     } catch (e) {
       lastErr = e;
-      const err = e as { status?: number; message?: string };
       // An unsupported tool version is rejected before anything streams; try the previous version.
-      if (opts.search && err?.status === 400 && /tool|type/i.test(String(err.message || '')) && version !== SEARCH_TOOL_VERSIONS[SEARCH_TOOL_VERSIONS.length - 1]) { console.warn('web search tool version rejected, falling back', version); continue; }
+      if (opts.search && isToolVersionRejection(e) && version !== SEARCH_TOOL_VERSIONS[SEARCH_TOOL_VERSIONS.length - 1]) { console.warn('web search tool version rejected, falling back', version); continue; }
+      const p = describeProviderError(e);
+      console.error('[provider] request failed', JSON.stringify({ code: p.code, status: p.status, type: p.type, message: p.message, model }));
       throw e;
     }
   }
@@ -79,11 +128,14 @@ export async function streamAnswer(opts: {
 }
 
 async function runStream(o: {
-  model: string; system: unknown; messages: unknown; maxTokens: number; tools?: unknown; signal?: AbortSignal;
-  onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void;
+  model: string; system: unknown; messages: unknown; maxTokens: number; tools?: unknown; mcp?: McpServerSpec[]; signal?: AbortSignal;
+  onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; onTool?: (c: ToolCall) => void;
 }): Promise<StreamResult> {
   let out = '';
   const sources: Source[] = [];
+  const toolCalls: ToolCall[] = [];
+  const labelOf = new Map((o.mcp || []).map(m => [m.name, m.label]));
+  const mcpServers = o.mcp?.map(m => ({ type: 'url' as const, url: m.url, name: m.name, ...(m.token ? { authorization_token: m.token } : {}), ...(m.allowedTools ? { tool_configuration: { enabled: true, allowed_tools: m.allowedTools } } : {}) }));
   const byUrl = new Map<string, number>();
   const emit = (t: string) => { out += t; o.onText(t); };
   const sourceFor = (url: string, title: string | null, snippet?: string): number => {
@@ -99,7 +151,12 @@ async function runStream(o: {
   let truncated = false;
   // The server tool loop can pause a long turn (stop_reason "pause_turn"); continue it a few times.
   for (let round = 0; round < 4; round++) {
-    const stream = client().messages.stream({ model: o.model, max_tokens: o.maxTokens, system: o.system as never, messages: messages as never, ...(o.tools ? { tools: o.tools as never } : {}) }, { signal: o.signal });
+    const params = { model: o.model, max_tokens: o.maxTokens, system: o.system as never, messages: messages as never, ...(o.tools ? { tools: o.tools as never } : {}) };
+    // With connectors, the request goes through the beta endpoint that knows how to call MCP servers.
+    type AnyStream = { on: (event: 'streamEvent', listener: (ev: { type: string; index: number; content_block?: unknown; delta?: unknown }) => void) => unknown; finalMessage: () => Promise<{ usage: unknown; content: Array<{ type: string }>; stop_reason: string | null }> };
+    const stream: AnyStream = (mcpServers?.length
+      ? client().beta.messages.stream({ ...params, mcp_servers: mcpServers, betas: [MCP_BETA] } as never, { signal: o.signal })
+      : client().messages.stream(params, { signal: o.signal })) as unknown as AnyStream;
     const marked = new Map<number, Set<number>>();   // content block index -> source numbers already marked in it
     const toolInput = new Map<number, string>();
 
@@ -120,6 +177,18 @@ async function runStream(o: {
             console.log('[search] error', (content as { error_code?: string }).error_code);
           }
         } else if (b.type === 'server_tool_use') { toolInput.set(ev.index, ''); }
+        else if (b.type === 'mcp_tool_use') {
+          const m = b as unknown as { server_name?: string; name?: string };
+          const call: ToolCall = { server: String(m.server_name || ''), name: String(m.name || '') };
+          toolCalls.push(call); o.onTool?.(call);
+          o.onStatus?.(`Using ${labelOf.get(call.server) || call.server}: ${call.name.replace(/_/g, ' ')}`);
+          console.log('[mcp] tool use', call.server, call.name);
+        } else if (b.type === 'mcp_tool_result') {
+          const m = b as unknown as { is_error?: boolean };
+          const last = [...toolCalls].reverse().find(c => c.error === undefined);
+          if (last) { last.error = !!m.is_error; o.onTool?.(last); }
+          if (m.is_error) console.warn('[mcp] tool result error', last?.server, last?.name);
+        }
       } else if (ev.type === 'content_block_delta') {
         const d = ev.delta as { type: string; text?: string; partial_json?: string; citation?: { type: string; url?: string; title?: string | null; cited_text?: string } };
         if (d.type === 'text_delta' && d.text) emit(d.text);
@@ -138,9 +207,10 @@ async function runStream(o: {
     const final = await stream.finalMessage();
     const u = final.usage as unknown as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; server_tool_use?: { web_search_requests?: number } };
     usage.in += u.input_tokens || 0; usage.out += u.output_tokens || 0; usage.cacheRead += u.cache_read_input_tokens || 0; usage.cacheWrite += u.cache_creation_input_tokens || 0; usage.searches += u.server_tool_use?.web_search_requests || 0;
-    const cited = final.content.filter(c => c.type === 'text' && Array.isArray((c as { citations?: unknown[] }).citations) && (c as { citations: unknown[] }).citations.length).length;
+    const cited = final.content.filter(c => c.type === 'text' && Array.isArray((c as { citations?: unknown[] }).citations) && ((c as { citations?: unknown[] }).citations || []).length).length;
     console.log('[answer]', JSON.stringify({ round, stop: final.stop_reason, searches: u.server_tool_use?.web_search_requests || 0, sources: sources.length, citedBlocks: cited, markers: (out.match(/\[\d{1,2}\]/g) || []).length, chars: out.length, model: o.model }));
     if (final.stop_reason === 'pause_turn' && round < 3) { messages.push({ role: 'assistant', content: final.content }); continue; }
+    if (final.stop_reason === 'tool_use') { truncated = false; break; }  // a client tool we did not offer; stop cleanly
     if (final.stop_reason === 'max_tokens' && round < 3 && out.trim().length > 0 && !/<\/learned>\s*$/.test(out)) {
       // Ran out of room mid-answer: hand the text back as a prefill and let the model carry on where it stopped.
       const last = messages[messages.length - 1];
@@ -151,7 +221,7 @@ async function runStream(o: {
     truncated = final.stop_reason === 'max_tokens';
     break;
   }
-  return { text: out, truncated, model: o.model, sources, usage };
+  return { text: out, truncated, model: o.model, sources, usage, tools: toolCalls };
 }
 
 /** Small structured call (query planning, rewrites, Discover ideas). Returns parsed JSON or null. */
@@ -163,7 +233,7 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400): P
     const a = text.indexOf('['), b = text.lastIndexOf(']'); const oa = text.indexOf('{'), ob = text.lastIndexOf('}');
     const slice = a >= 0 && (oa < 0 || a < oa) ? text.slice(a, b + 1) : text.slice(oa, ob + 1);
     return JSON.parse(slice) as T;
-  } catch (e) { console.warn('quickJson failed', e); return null; }
+  } catch (e) { const p = describeProviderError(e); console.warn('[provider] quickJson failed', JSON.stringify({ code: p.code, status: p.status, type: p.type, message: p.message })); return null; }
 }
 
 async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
@@ -200,7 +270,7 @@ Where do exported files go?
     await new Promise(r => setTimeout(r, 15));
     opts.onText(full.slice(i, i + 24));
   }
-  return { text: full, truncated: false, model, sources, usage: { in: 1200, out: 320, cacheRead: 900, cacheWrite: 0, searches: sources.length ? 1 : 0 } };
+  return { text: full, truncated: false, model, sources, usage: { in: 1200, out: 320, cacheRead: 900, cacheWrite: 0, searches: sources.length ? 1 : 0 }, tools: [] };
 }
 
 async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
@@ -230,7 +300,7 @@ render();
     await new Promise(r => setTimeout(r, 12));
     opts.onText(full.slice(i, i + 40));
   }
-  return { text: full, truncated: false, model, sources: [], usage: { in: 900, out: 700, cacheRead: 0, cacheWrite: 0, searches: 0 } };
+  return { text: full, truncated: false, model, sources: [], usage: { in: 900, out: 700, cacheRead: 0, cacheWrite: 0, searches: 0 }, tools: [] };
 }
 
 function mockSources(query: string): Source[] {

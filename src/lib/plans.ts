@@ -5,7 +5,7 @@
  */
 export type PlanKey = 'free' | 'pro' | 'team';
 
-export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full' };
+export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; connectors: number };
 
 export type Plan = {
   key: PlanKey;
@@ -27,7 +27,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'free',
     name: 'Free',
     priceUsd: 0,
-    caps: { graph: 'preview', discover: 'locked' },
+    caps: { graph: 'preview', discover: 'locked', connectors: 0 },
     questionsPerDay: 10,
     questionsPerMonth: 150,
     researchPerMonth: 0,
@@ -41,28 +41,28 @@ export const PLANS: Record<PlanKey, Plan> = {
     name: 'Pro',
     priceUsd: 20,
     paypalPlanEnv: 'PAYPAL_PLAN_PRO',
-    caps: { graph: 'full', discover: 'locked' },
+    caps: { graph: 'full', discover: 'locked', connectors: 3 },
     questionsPerDay: 300,
     questionsPerMonth: 1500,
     researchPerMonth: 40,
     tiers: ['quick', 'default', 'complex'],
     spaces: 25,
     blurb: 'The full identity graph, for people who ask all day.',
-    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month', '40 Research reports a month', 'Reasoning model', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
+    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month', '40 Research reports a month', 'Reasoning model', '3 Connectors: outside apps and MCP servers the answers can use', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
   },
   team: {
     key: 'team',
     name: 'Team',
     priceUsd: 49,
     paypalPlanEnv: 'PAYPAL_PLAN_TEAM',
-    caps: { graph: 'full', discover: 'full' },
+    caps: { graph: 'full', discover: 'full', connectors: 25 },
     questionsPerDay: 1000,
     questionsPerMonth: 5000,
     researchPerMonth: 150,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100,
     blurb: 'Everything in Pro, plus Discover.',
-    features: ['Everything in Pro', 'Discover, fully unlocked: agents, apps, tools, credentials and data products drawn from your graph, each with a provenance id', 'Up to 5,000 questions a month', '150 Research reports a month', '100 Spaces', 'Priority support'],
+    features: ['Everything in Pro', 'Discover, fully unlocked: agents, apps, tools, credentials and data products drawn from your graph, each with a provenance id', 'Up to 5,000 questions a month', '150 Research reports a month', '25 Connectors', '100 Spaces', 'Priority support'],
   },
 };
 

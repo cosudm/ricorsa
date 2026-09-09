@@ -13,17 +13,19 @@ export const dynamic = 'force-dynamic';
 /** Everything the app needs on load: who you are, your plan and usage, thread list, spaces, graph. */
 export const GET = handle(async () => {
   const user = await currentUser();
-  const [threads, spaces, graph, usage] = await Promise.all([
+  const [threads, spaces, graph, usage, connectors] = await Promise.all([
     listThreads(user.id),
     db().select().from(schema.spaces).where(eq(schema.spaces.userId, user.id)),
     loadGraph(user.id),
     readUsage(user.id),
+    db().select({ id: schema.connectors.id, name: schema.connectors.name, enabled: schema.connectors.enabled, status: schema.connectors.status }).from(schema.connectors).where(eq(schema.connectors.userId, user.id)),
   ]);
   const plan = planFor(user.plan);
   return json({
     user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings, admin: !!user.admin },
     plan: { key: plan.key, name: plan.name, caps: plan.caps, tiers: plan.tiers, questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
     usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research },
+    connectors: { total: connectors.length, active: connectors.filter(c => c.enabled && c.status === 'ok').length, limit: user.admin ? 100 : plan.caps.connectors },
     threads,
     spaces: spaces.map(s => ({ ...s, createdAt: new Date(s.createdAt).getTime() })),
     graph: graphView(graph, plan.caps),

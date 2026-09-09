@@ -7,6 +7,7 @@ import { loadGraph } from '@/lib/graph';
 import { planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
 import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer } from '@/lib/build';
+import { describeProviderError } from '@/lib/llm';
 import { recordUsage } from '@/lib/usage';
 import { estimateCostMicros } from '@/lib/plans';
 
@@ -86,7 +87,12 @@ export async function POST(req: Request) {
         const err = e as { name?: string; message?: string };
         const p = parseBuild(raw);
         if (err?.name === 'AbortError' || ctl.signal.aborted) { await save({ status: 'error', error: 'stopped', plan: p.plan, html: p.html }); }
-        else { console.error('build failed', e); await save({ status: 'error', error: String(err?.message || 'failed').slice(0, 300), plan: p.plan, html: p.html }); send('error', { message: 'The build was interrupted. Try again.' }); }
+        else {
+          const why = describeProviderError(e);
+          console.error('build failed', JSON.stringify({ code: why.code, status: why.status, type: why.type, message: why.message, user: user.id }));
+          await save({ status: 'error', error: String(why.message || err?.message || 'failed').slice(0, 300), plan: p.plan, html: p.html });
+          send('error', { code: why.code, message: user.admin ? why.forAdmin : why.forUser });
+        }
       } finally {
         try { controller.close(); } catch {}
       }

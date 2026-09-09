@@ -7,12 +7,14 @@ import { createThread, getThreadOwned, makeTurn, saveTurns } from '@/lib/threads
 import { searchPlan, type Source } from '@/lib/search';
 import { loadGraph, saveGraph, mergeLearned, graphPromptBlock } from '@/lib/graph';
 import { buildMessages, dynamicSystem, systemBlocks } from '@/lib/prompt';
-import { streamAnswer } from '@/lib/llm';
+import { streamAnswer, describeProviderError } from '@/lib/llm';
 import { parseStream } from '@/lib/parse';
 import { estimateCostMicros } from '@/lib/plans';
 import { db, schema } from '@/lib/db';
 import type { Turn } from '@/lib/db/schema';
 import { chain } from '@/lib/hash';
+import { connectorsForModel, connectorsPromptBlock } from '@/lib/connectors';
+import { planFor } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -96,15 +98,21 @@ export async function POST(req: Request) {
         const profile = graphPromptBlock(graph);
         let space = null;
         if (th.spaceId) { const rows = await db().select().from(schema.spaces).where(and(eq(schema.spaces.id, th.spaceId), eq(schema.spaces.userId, user.id))).limit(1); space = rows[0] || null; }
-        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space }));
+        // Connected apps: enabled connectors become tools for this answer (Pro and Team; admins always).
+        let mcp: Awaited<ReturnType<typeof connectorsForModel>> = [];
+        try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors); } catch (e) { console.warn('connectors unavailable', e); }
+        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp) }));
         const messages = buildMessages(history, turn.q);
+        turn.tools = [];
 
         // 3. Generation: the model searches, reads, and writes; sources and citations stream out as they appear
         let wroteText = false;
         const result = await streamAnswer({
           tier: turn.tier, system, messages, signal: ctl.signal, search,
+          mcp: mcp.map(m => ({ name: m.name, label: m.label, url: m.url, token: m.token, allowedTools: m.allowedTools })),
           maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' ? 6000 : 4000),
           onStatus: (text) => { if (!wroteText) send('status', { text }); },
+          onTool: (call) => { const label = mcp.find(m => m.name === call.server)?.label || call.server; const i = (turn.tools || []).findIndex(t => t.server === call.server && t.name === call.name && t.error === undefined); const rec = { server: label, name: call.name, error: call.error }; if (i >= 0) turn.tools![i] = rec; else turn.tools = [...(turn.tools || []), rec]; send('tools', turn.tools); },
           onSources: (list) => { sources = list; turn.sources = list.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url })); send('sources', turn.sources); },
           onText: (delta) => { if (!wroteText) { wroteText = true; send('status', { text: turn.mode === 'research' ? 'Working through the sources' : 'Writing' }); } raw += delta; send('delta', { text: delta }); },
         });
@@ -121,16 +129,17 @@ export async function POST(req: Request) {
         await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches) });
         send('done', { turn, graphEvents: graph.events });
       } catch (e) {
-        const err = e as { name?: string; status?: number; message?: string };
+        const err = e as { name?: string };
         if (err?.name === 'AbortError' || ctl.signal.aborted) {
           const p = parseStream(raw); turn.answer = p.answer; turn.related = p.related; turn.status = 'stopped';
           if (raw.length > 200) await recordUsage(user.id, { questions: 1 });
           send('done', { turn });
         } else {
-          console.error('ask failed', e);
+          const why = describeProviderError(e);
+          console.error('ask failed', JSON.stringify({ code: why.code, status: why.status, type: why.type, message: why.message, user: user.id }));
           const p = parseStream(raw); turn.answer = p.answer; turn.status = 'error';
-          turn.error = err?.status === 429 ? 'rate_limited' : err?.status === 529 || err?.status === 503 ? 'upstream_error' : 'upstream_error';
-          send('error', { code: turn.error, message: turn.error === 'rate_limited' ? 'The model is busy right now. Try again in a moment.' : 'The answer was interrupted. Try again.', turn });
+          turn.error = why.code;
+          send('error', { code: turn.error, message: user.admin ? why.forAdmin : why.forUser, turn });
         }
       } finally {
         await finish();

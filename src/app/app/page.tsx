@@ -20,6 +20,7 @@ const SHELL = `
       <a class="nav-item tip" href="#/spaces" data-route="spaces" data-tip="Spaces" title="Spaces: group threads under standing instructions"><span class="ico" data-icon="layers"></span><span class="lbl">Spaces</span></a>
       <a class="nav-item tip" href="#/library" data-route="library" data-tip="Library" title="Library: every thread you have started"><span class="ico" data-icon="library"></span><span class="lbl">Library</span></a>
       <a class="nav-item tip" href="#/graph" data-route="graph" data-tip="Your graph" title="Graph: what Ricorsa has learned about you, and the controls for it"><span class="ico" data-icon="loop"></span><span class="lbl">Graph</span></a>
+      <a class="nav-item tip" href="#/connectors" data-route="connectors" data-tip="Connectors" title="Connectors: link outside apps and MCP servers so answers can use your own data"><span class="ico" data-icon="plug"></span><span class="lbl">Connectors</span></a>
     </div>
     <div class="recent" id="recent"></div>
     <div class="side-bottom">

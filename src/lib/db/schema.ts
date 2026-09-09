@@ -58,6 +58,8 @@ export type Turn = {
   vote?: 'up' | 'down' | null;
   model?: string;
   usage?: { in: number; out: number; cacheRead?: number; searches?: number };
+  /** Connector tools the model called while answering (server name, tool name, whether the call failed). */
+  tools?: { server: string; name: string; error?: boolean }[];
   /** Provenance hash for this turn: chained from the thread's origin and the previous turn. */
   lineage?: string;
 };
@@ -147,6 +149,37 @@ export const config = sqliteTable('config', {
   value: text('value', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
   updatedAt: tsNow('updated_at'),
 });
+
+/**
+ * Connectors: outside applications and MCP servers the person has linked. Enabled connectors are handed
+ * to the model as tools while it answers. Credentials are stored encrypted (`secret`), never returned to the client.
+ */
+export type ConnectorAuth = 'none' | 'bearer' | 'oauth';
+export type ConnectorStatus = 'new' | 'ok' | 'error' | 'needs_auth';
+export type ConnectorTool = { name: string; description?: string };
+/** Encrypted at rest. Bearer: { token }. OAuth: tokens plus what is needed to refresh them. */
+export type ConnectorSecret = { token?: string; accessToken?: string; refreshToken?: string; expiresAt?: number; tokenEndpoint?: string; clientId?: string; clientSecret?: string; scope?: string; resource?: string };
+/** An OAuth sign-in that has started and not yet come back. */
+export type ConnectorPending = { state: string; verifier: string; authEndpoint: string; tokenEndpoint: string; clientId: string; clientSecret?: string; redirectUri: string; resource?: string; scope?: string; startedAt: number };
+export const connectors = sqliteTable('connectors', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  serverName: text('server_name').notNull(),   // the name the model sees; letters, digits, _ and - only
+  preset: text('preset'),                        // catalog key, or null for a custom server
+  url: text('url').notNull(),
+  authType: text('auth_type').$type<ConnectorAuth>().notNull().default('none'),
+  secret: text('secret'),                        // encrypted JSON (ConnectorSecret)
+  pending: text('pending', { mode: 'json' }).$type<ConnectorPending>(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  allowedTools: text('allowed_tools', { mode: 'json' }).$type<string[]>(),
+  tools: text('tools', { mode: 'json' }).$type<ConnectorTool[]>().notNull().$defaultFn(() => []).default(sql`'[]'`),
+  status: text('status').$type<ConnectorStatus>().notNull().default('new'),
+  lastError: text('last_error'),
+  lastCheckedAt: ts('last_checked_at'),
+  createdAt: tsNow('created_at'),
+  updatedAt: tsNow('updated_at'),
+}, (t) => [index('connectors_user_idx').on(t.userId)]);
 
 /** Apps and tools built from a Discover idea: a single self-contained HTML document, streamed in as it is written. */
 export type BuildStatus = 'building' | 'done' | 'error';

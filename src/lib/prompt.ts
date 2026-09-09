@@ -43,9 +43,10 @@ const FOCUS_TEXT: Record<string, string> = {
   code: 'Focus: Code. Prefer complete, runnable code in fenced blocks with a language tag, explain briefly, and search for and prefer official documentation.',
 };
 
-export function dynamicSystem(opts: { mode: 'search' | 'research'; focus: string; length: string | null; profile: string; space?: { name: string; description: string; instructions: string } | null }): string {
+export function dynamicSystem(opts: { mode: 'search' | 'research'; focus: string; length: string | null; profile: string; space?: { name: string; description: string; instructions: string } | null; connectors?: string }): string {
   const L: string[] = [];
   if (opts.profile) L.push(opts.profile);
+  if (opts.connectors) L.push(opts.connectors);
   const f = FOCUS_TEXT[opts.focus] || ''; if (f) L.push(f);
   if (opts.mode === 'research') {
     L.push('Mode: Research. Search from several angles before writing (the core question, key sub-questions, a source of numbers or data, a counterpoint or alternative view; use up to 8 searches). Then write an in-depth report: open with a 2 to 3 sentence summary of the answer, then 4 to 7 sections with ## headings covering background, how it works, key figures and evidence, trade-offs or competing views, and practical implications; finish with a "## Bottom line" section. Aim for 700 to 1200 words and draw on as many of the sources you read as are relevant.');
