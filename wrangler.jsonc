@@ -22,6 +22,7 @@
     "MODEL_DEFAULT": "claude-sonnet-5",
     "MODEL_COMPLEX": "claude-opus-5",
     "PAYPAL_ENV": "live",
+    "ADMIN_EMAILS": "chrismiguez78@gmail.com,cmiguez@smeprotech.com,admin@smepro.app",
     "PAYPAL_CLIENT_ID": "BAAkDyjF4FPGW2WJrgPvOtFE1c0HUkZ0jRaRkooPnmsvBlNIzSxicOj-aKA0NDLcQQRGSmd-L4WEBEGLQQ"
   }
 }

@@ -258,11 +258,13 @@ function renderSidebar() {
   if (acct && state.user) {
     const name = state.user.name || state.user.email || 'You';
     const planName = state.plan ? state.plan.name : 'Free';
-    acct.innerHTML = `<span class="avatar">${esc(name[0] || 'Y').toUpperCase()}</span><span class="lbl acct-lbl"><span class="acct-name">${esc(truncate(name, 22))}</span><span class="acct-plan">${esc(planName)} plan</span></span>`;
+    const demo = state.user.admin && state.settings && state.settings.demoPlan;
+    acct.innerHTML = `<span class="avatar">${esc(name[0] || 'Y').toUpperCase()}</span><span class="lbl acct-lbl"><span class="acct-name">${esc(truncate(name, 22))}</span><span class="acct-plan">${state.user.admin ? (demo ? `Admin · demo as ${esc(planName)}` : 'Admin · all access') : esc(planName) + ' plan'}</span></span>`;
+    acct.title = state.user.admin ? 'Admin account: every capability, no limits. Use Settings to demo a plan.' : 'Account: plan, billing, export and sign out';
     const up = $('#upgradeRow');
     if (up) {
       const k = state.plan ? state.plan.key : 'free';
-      up.hidden = k === 'team';
+      up.hidden = k === 'team' || (state.user && state.user.admin && !(state.settings && state.settings.demoPlan));
       const lbl = up.querySelector('span:last-child'); if (lbl) lbl.textContent = k === 'pro' ? 'Upgrade to Team' : 'Upgrade to Pro';
       up.title = k === 'pro' ? 'Team unlocks Discover: build agents, apps and tools from your graph' : 'Pro unlocks the full identity graph';
     }
@@ -776,6 +778,7 @@ function learnLine() {
 }
 function quotaNotice() {
   const p = state.plan, u = state.usage; if (!p) return '';
+  if (state.user && state.user.admin) return ''; // admins have no counted limits
   if (p.status && !['ACTIVE', 'APPROVAL_PENDING'].includes(p.status) && p.key !== 'free') return `<div class="notice">${icon('info', 17)}<div>Your subscription is ${esc(String(p.status).toLowerCase())}. <a href="/account">Fix it on the Account page</a> to keep your ${esc(p.name)} limits.</div></div>`;
   if (u.today >= p.questionsPerDay) return `<div class="notice">${icon('info', 17)}<div>You have used today\u2019s ${p.questionsPerDay} questions on the ${esc(p.name)} plan. ${p.key === 'free' ? '<a href="/pricing">Upgrade to Pro</a> for up to 300 a day.' : 'The counter resets at midnight UTC.'}</div></div>`;
   if (p.key === 'free' && u.today >= Math.max(1, p.questionsPerDay - 3)) return `<div class="notice info">${icon('info', 17)}<div>${p.questionsPerDay - u.today} free question${p.questionsPerDay - u.today === 1 ? '' : 's'} left today. <a href="/pricing">See Pro</a>.</div></div>`;
@@ -1384,13 +1387,15 @@ function openSettings() {
     <div class="setting"><div class="l"><b>Default focus</b><small>Shapes the framing and the kind of references used.</small></div>${sel('stFocus', FOCI, s.focus)}</div>
     <div class="setting"><div class="l"><b>Answer length</b><small>Applies to Search mode.</small></div>${sel('stLen', LENGTHS, s.length)}</div>
     <div class="setting"><div class="l"><b>Learning loop</b><small>Let each answer update your identity graph, which shapes how later questions are read.</small></div><select id="stLearn"><option value="on"${state.graph && state.graph.paused ? '' : ' selected'}>On</option><option value="paused"${state.graph && state.graph.paused ? ' selected' : ''}>Paused</option></select></div>
-    <div class="setting"><div class="l"><b>Plan and usage</b><small>${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.</small></div><a class="btn sm" href="/account">Account</a></div>
+    ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Pro or Team customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="pro"${s.demoPlan === 'pro' ? ' selected' : ''}>Pro</option><option value="team"${s.demoPlan === 'team' ? ' selected' : ''}>Team</option></select></div>` : ''}
+    <div class="setting"><div class="l"><b>Plan and usage</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. No question limits. Today ${state.usage.today} questions, this month ${state.usage.month}${state.usage.research ? `, Research ${state.usage.research}` : ''}.` : `${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.`}</small></div><a class="btn sm" href="/account">Account</a></div>
     <div class="setting"><div class="l"><b>Export everything</b><small>All threads, Spaces and your graph as one JSON file.</small></div><a class="btn sm" href="/api/account/export">${icon('download', 14)}Export</a></div>
     <div class="about">Threads, Spaces, settings and your identity graph are stored in your Ricorsa account and used only inside your own questions. Sources are retrieved live from the web at the moment you ask.</div>
     <div class="modal-actions"><button type="button" class="btn primary" data-close>Done</button></div>`, {
     onMount: ov => {
       const bind = (id, key) => $(id).addEventListener('change', e => { s[key] = e.target.value; persistSettings(); });
       bind('#stMode', 'mode'); bind('#stTier', 'tier'); bind('#stFocus', 'focus'); bind('#stLen', 'length');
+      const demo = $('#stDemo'); if (demo) demo.addEventListener('change', async e => { s.demoPlan = e.target.value; try { await api('/api/me', { method: 'PATCH', body: { demoPlan: e.target.value } }); await bootstrap(); renderSidebar(); render(); toast(e.target.value ? `Showing Ricorsa as a ${state.plan ? state.plan.name : e.target.value} customer` : 'Back to full admin access'); } catch (err) { apiToast(err); } });
       $('#stLearn').addEventListener('change', async e => { try { await setGraphPaused(e.target.value === 'paused'); } catch (err) { apiToast(err); } });
     }
   });

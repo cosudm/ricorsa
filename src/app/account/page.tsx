@@ -25,7 +25,7 @@ export default async function Account() {
           <div className="cards">
             <div className="card">
               <h3>Plan</h3>
-              <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>Renews {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
+              <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}{user.admin ? ' · admin, all access' : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>Renews {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
               {!active && <div className="notice" style={{ marginBottom: 12 }}>Your PayPal subscription is {user.subscriptionStatus?.toLowerCase()}. Update the payment method in PayPal, or subscribe again on the pricing page, to restore {plan.name} limits.</div>}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {plan.key === 'free' ? <a className="btn primary" href="/pricing">Upgrade</a> : <a className="btn" href="/pricing">Change plan</a>}

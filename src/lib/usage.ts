@@ -19,17 +19,17 @@ export async function readUsage(userId: string) {
 /** Throws a 402/429 when the plan does not allow another answer of this kind. */
 export async function assertQuota(user: CurrentUser, mode: 'search' | 'research', tier: string) {
   const plan = planFor(user.plan);
-  if (user.plan !== 'free' && user.subscriptionStatus && !['ACTIVE', 'APPROVAL_PENDING'].includes(user.subscriptionStatus)) {
+  if (!user.admin && user.plan !== 'free' && user.subscriptionStatus && !['ACTIVE', 'APPROVAL_PENDING'].includes(user.subscriptionStatus)) {
     throw new HttpError(402, 'Your subscription is not active. Update your payment method or resubscribe.', 'subscription_inactive');
   }
+  // Feature gates follow the plan (for an admin, the plan they chose to demo); the counted limits never apply to an admin.
   if (!plan.tiers.includes(tier as never)) throw new HttpError(402, `The ${tier === 'complex' ? 'Reasoning' : tier} model needs a Pro plan.`, 'upgrade_required');
+  if (mode === 'research' && plan.researchPerMonth === 0) throw new HttpError(402, 'Research mode needs a Pro plan.', 'upgrade_required');
   const u = await readUsage(user.id);
+  if (user.admin) return { plan, usage: u };
   if (u.day.questions >= plan.questionsPerDay) throw new HttpError(429, `You have used today's ${plan.questionsPerDay} questions on the ${plan.name} plan.`, 'daily_limit');
   if (u.month.questions >= plan.questionsPerMonth) throw new HttpError(429, `You have used this month's ${plan.questionsPerMonth} questions on the ${plan.name} plan.`, 'monthly_limit');
-  if (mode === 'research') {
-    if (plan.researchPerMonth === 0) throw new HttpError(402, 'Research mode needs a Pro plan.', 'upgrade_required');
-    if (u.month.research >= plan.researchPerMonth) throw new HttpError(429, `You have used this month's ${plan.researchPerMonth} Research reports.`, 'research_limit');
-  }
+  if (mode === 'research' && u.month.research >= plan.researchPerMonth) throw new HttpError(429, `You have used this month's ${plan.researchPerMonth} Research reports.`, 'research_limit');
   return { plan, usage: u };
 }
 

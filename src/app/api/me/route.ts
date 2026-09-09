@@ -21,7 +21,7 @@ export const GET = handle(async () => {
   ]);
   const plan = planFor(user.plan);
   return json({
-    user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings },
+    user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings, admin: !!user.admin },
     plan: { key: plan.key, name: plan.name, caps: plan.caps, tiers: plan.tiers, questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
     usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research },
     threads,
@@ -31,11 +31,14 @@ export const GET = handle(async () => {
   });
 });
 
-const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), focus: z.enum(['web', 'academic', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional() });
+const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), focus: z.enum(['web', 'academic', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional(), demoPlan: z.enum(['free', 'pro', 'team', '']).optional() });
 export const PATCH = handle(async (req: Request) => {
   const user = await currentUser();
   const b = Settings.safeParse(await readJson(req)); if (!b.success) return fail(400, 'Invalid settings');
-  const settings = { ...(user.settings || {}), ...b.data };
+  const patch: Record<string, unknown> = { ...b.data };
+  if ('demoPlan' in patch) { if (!user.admin) delete patch.demoPlan; else if (!patch.demoPlan) patch.demoPlan = undefined; }
+  const settings = { ...(user.settings || {}), ...patch };
+  for (const k of Object.keys(settings)) if (settings[k] === undefined) delete settings[k];
   await db().update(schema.users).set({ settings }).where(eq(schema.users.id, user.id));
   return json({ settings });
 });

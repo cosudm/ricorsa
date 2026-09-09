@@ -3,7 +3,22 @@ import { auth0, auth0Configured, devFakeUserEnabled } from './auth0';
 import { db, schema } from './db';
 import { HttpError } from './http';
 
-export type CurrentUser = typeof schema.users.$inferSelect;
+export type CurrentUser = typeof schema.users.$inferSelect & { admin?: boolean; effectivePlan?: string };
+
+/** Emails with full access (ADMIN_EMAILS, comma separated): every capability, no quotas, and a "demo as" switch for showing the plans. */
+export function isAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const list = String(process.env.ADMIN_EMAILS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+  return list.includes(email.toLowerCase());
+}
+
+/** Admins act as Team (or as the plan they chose to demo); everyone else is what PayPal says they are. */
+function withAccess(u: typeof schema.users.$inferSelect): CurrentUser {
+  if (!isAdminEmail(u.email)) return u;
+  const demo = (u.settings as { demoPlan?: string } | null)?.demoPlan;
+  const plan = demo && ['free', 'pro', 'team'].includes(demo) ? demo : 'team';
+  return { ...u, admin: true, effectivePlan: plan, plan, subscriptionStatus: null };
+}
 
 /**
  * Resolve the signed-in person and make sure they have a row. Throws 401 when signed out.
@@ -26,10 +41,10 @@ export async function currentUser(): Promise<CurrentUser> {
     if (Date.now() - new Date(existing[0].lastSeenAt).getTime() > 3600e3) {
       await d.update(schema.users).set({ lastSeenAt: new Date(), email, name, picture }).where(eq(schema.users.id, sub));
     }
-    return existing[0];
+    return withAccess(existing[0]);
   }
   const inserted = await d.insert(schema.users).values({ id: sub, email, name, picture }).onConflictDoNothing().returning();
-  if (inserted[0]) return inserted[0];
+  if (inserted[0]) return withAccess(inserted[0]);
   const again = await d.select().from(schema.users).where(eq(schema.users.id, sub)).limit(1);
-  return again[0];
+  return withAccess(again[0]);
 }
