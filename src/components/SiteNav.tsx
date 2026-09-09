@@ -12,6 +12,7 @@ export function SiteNav({ signedIn }: { signedIn: boolean }) {
           {signedIn ? (
             <>
               <a className="btn ghost" href="/account">Account</a>
+              <a className="btn ghost hide-sm" href="/auth/logout" title="Sign out of this account">Sign out</a>
               <a className="btn primary" href="/app">Open Ricorsa</a>
             </>
           ) : (

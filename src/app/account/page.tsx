@@ -52,7 +52,11 @@ export default async function Account() {
               <DeleteAccountButton />
             </div>
           </div>
-          <p className="note" style={{ marginTop: 18 }}><a href="/auth/logout">Sign out</a></p>
+          <div className="card" style={{ marginTop: 18 }}>
+            <h3>Signed in as {user.email || user.name || 'you'}</h3>
+            <p>To use a different account, sign out here and then sign in or sign up again from the home page.</p>
+            <a className="btn" href="/auth/logout">Sign out</a>
+          </div>
         </section>
       </main>
       <SiteFooter />
