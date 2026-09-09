@@ -1163,37 +1163,67 @@ async function loadBuilds() { try { const r = await api('/api/builds'); state.bu
 function buildsRowHtml() {
   const list = state.builds || [];
   if (!list.length) return '<div data-builds-row hidden></div>';
-  return `<div class="builds-row" data-builds-row><div class="tiles-head">${icon('zap', 14)}<span>Your builds</span></div><div class="builds-list">${list.slice(0, 8).map(b => `<a class="build-chip" href="#/build/${esc(b.id)}" title="${esc(b.summary || b.title)}"><span class="k">${esc(b.kind || 'App')}</span><span class="t">${esc(truncate(b.title, 48))}</span><span class="s ${esc(b.status)}">${b.status === 'building' ? 'building' : b.status === 'error' ? 'stopped' : 'ready'}</span></a>`).join('')}</div></div>`;
+  return `<div class="builds-row" data-builds-row><div class="tiles-head">${icon('zap', 14)}<span>Your builds</span></div><div class="builds-list">${list.slice(0, 8).map(b => `<a class="build-chip" href="#/build/${esc(b.id)}" title="${esc(b.summary || b.title)}"><span class="k">${esc(b.kind || 'App')}</span><span class="t">${esc(truncate(b.title, 48))}</span><span class="s ${esc(b.status)}">${b.status === 'building' ? 'building' : b.status === 'error' ? 'stopped' : (b.versions > 1 ? `v${b.versions}` : 'ready')}</span></a>`).join('')}</div></div>`;
 }
 function wireBuildsRow() {}
-function startBuild(it, cat, opts = {}) {
-  if (caps().discover !== 'full') { openModal(`<h2>${icon('zap', 20)}Build it</h2><p class="sub">Ricorsa turns a Discover idea into a working app, personalised with your graph, and shows it here as it is written.</p>${upgradeCard('Building is part of the Team plan', 'Team unlocks Discover fully: ideas generated from your own graph, and any of them built into a working app or tool with a provenance id.', 'Team')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
-  const id = 'pending';
-  state.buildLive = { id, title: it.title, kind: it.kind || 'App', status: 'building', plan: '', html: '', raw: '', statusText: 'Starting', lineage: null, ideaId: it.id || null, graphHash: it.graphHash || null, category: cat, spec: it, changes: opts.changes || null, parentId: opts.parentId || null, error: null };
-  go('#/build/live');
-  runBuild(it, cat, opts);
+// ---------- Build studio: chat on one side, the working app on the other ----------
+// A build is a conversation. The first message is the idea; each later message either produces the
+// next version (streamed into the app pane as it is written) or gets a plain answer when it was a question.
+function newStudio(it, cat) {
+  return { sessionId: null, title: it.title, kind: it.kind || 'App', category: cat || null, ideaId: it.id || null, graphHash: it.graphHash || null, spec: it, messages: [], versions: [], current: null, selected: null, live: null, tab: 'chat', error: null };
 }
-async function runBuild(it, cat, opts) {
-  const live = state.buildLive;
-  const body = { ideaId: it.id, graphHash: it.graphHash, category: cat, kind: it.kind || 'App', title: it.title, what: it.what || it.title, prompt: it.prompt, builds: it.builds, parentId: opts.parentId, changes: opts.changes };
+function startBuild(it, cat) {
+  if (caps().discover !== 'full') { openModal(`<h2>${icon('zap', 20)}Build it</h2><p class="sub">Ricorsa turns a Discover idea into a working app, personalised with your graph, and keeps building it with you in a chat.</p>${upgradeCard('Building is part of the Team plan', 'Team unlocks Discover fully: ideas generated from your own graph, and any of them built into a working app, tool, agent or dApp you can keep shaping in conversation.', 'Team')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
+  state.studio = newStudio(it, cat);
+  state.studio.messages.push({ id: 'm0', role: 'user', text: it.prompt || it.what || it.title, kind: 'request', at: Date.now() });
+  go('#/build/live');
+  runBuildRequest({ ideaId: it.id, graphHash: it.graphHash, category: cat, kind: it.kind || 'App', title: it.title, what: it.what || it.title, prompt: it.prompt, builds: it.builds });
+}
+function sendBuildMessage(text) {
+  const st = state.studio; if (!st || !st.sessionId) return;
+  if (st.live) { toast('Wait for the current version to finish, or stop it', 'bad'); return; }
+  st.messages.push({ id: 'u' + Date.now(), role: 'user', text, kind: 'request', at: Date.now() });
+  paintStudio();
+  runBuildRequest({ sessionId: st.sessionId, message: text });
+}
+async function runBuildRequest(body) {
+  const st = state.studio; if (!st) return;
+  const ctl = new AbortController();
+  st.live = { ctl, raw: '', statusText: 'Starting', plan: '', reply: '', version: null, buildId: null, html: '', lastFrame: 0 };
+  st.error = null; paintStudio();
   let res;
   try {
-    res = await fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    res = await fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
     if (!res.ok) { const err = await res.json().catch(() => ({})); throw Object.assign(new Error(err.error || 'Build failed'), { status: res.status, code: err.code }); }
-  } catch (e) { live.status = 'error'; live.error = e.message; apiToast(e, 'Could not start the build'); paintBuild(); return; }
+  } catch (e) {
+    st.messages.push({ id: 'e' + Date.now(), role: 'assistant', text: e.message || 'Could not start the build', kind: 'error', at: Date.now() });
+    st.live = null; paintStudio(); return;
+  }
   let lastPaint = 0;
   await readSse(res, (ev, data) => {
-    if (ev === 'meta') { live.id = data.buildId; live.lineage = data.lineage; }
-    else if (ev === 'status') { live.statusText = data.text || ''; paintBuild(); }
-    else if (ev === 'plan') { live.plan = data.text || ''; paintBuild(); }
-    else if (ev === 'delta') { live.raw += data.text || ''; const now = Date.now(); if (now - lastPaint > 250) { lastPaint = now; paintBuild(); } }
-    else if (ev === 'done') { Object.assign(live, data.build, { status: 'done' }); }
-    else if (ev === 'error') { live.status = 'error'; live.error = data.message; }
-  }).catch(e => { live.status = 'error'; live.error = e.message; });
-  if (live.status === 'building') live.status = 'done';
-  paintBuild(true);
-  loadBuilds().then(() => renderSidebar());
+    const live = st.live; if (!live) return;
+    if (ev === 'meta') { if (!st.sessionId && data.sessionId) { st.sessionId = data.sessionId; if (location.hash === '#/build/live') { history.replaceState(null, '', '#/build/' + data.sessionId); state.route = parseRoute(); } } live.buildId = data.buildId; live.version = data.version; live.lineage = data.lineage; }
+    else if (ev === 'status') { live.statusText = data.text || ''; paintStudio(); }
+    else if (ev === 'plan') { live.plan = data.text || ''; paintStudio(); }
+    else if (ev === 'reply') { live.reply = data.text || ''; paintStudio(); }
+    else if (ev === 'delta') { live.raw += data.text || ''; const p = parseBuildRaw(live.raw); if (p.html) live.html = p.html; const now = Date.now(); if (now - lastPaint > 250) { lastPaint = now; paintStudio(); } }
+    else if (ev === 'done') {
+      if (data.reply) st.messages.push(data.reply);
+      if (data.build) {
+        if (data.message) st.messages.push(data.message);
+        const v = { id: data.build.id, version: data.build.version, status: 'done', summary: data.build.summary, plan: data.build.plan, lineage: data.build.lineage, createdAt: data.build.createdAt, html: data.build.html };
+        st.versions = st.versions.filter(x => x.id !== v.id).concat(v);
+        st.current = v; st.selected = v.version;
+      }
+      st.live = null;
+    }
+    else if (ev === 'error') { st.messages.push(data.messageRecord || { id: 'e' + Date.now(), role: 'assistant', text: data.message || 'The build was interrupted', kind: 'error', at: Date.now() }); st.error = data.code || 'upstream_error'; st.live = null; }
+  }).catch(e => { if (st.live) { st.messages.push({ id: 'e' + Date.now(), role: 'assistant', text: e && e.name === 'AbortError' ? 'Stopped.' : (e.message || 'The build was interrupted'), kind: 'error', at: Date.now() }); st.live = null; } });
+  if (st.live) st.live = null;
+  paintStudio(true);
+  loadBuilds().then(() => { if (state.route.name === 'discover') render(); });
 }
+function stopBuild() { const st = state.studio; if (st && st.live && st.live.ctl) st.live.ctl.abort(); }
 function parseBuildRaw(raw) {
   const t = raw || '';
   const pO = t.indexOf('<plan>'), pC = t.indexOf('</plan>'), aO = t.indexOf('<app>'), aC = t.lastIndexOf('</app>');
@@ -1204,42 +1234,94 @@ function parseBuildRaw(raw) {
 }
 function renderBuild(id) {
   const main = $('#main');
-  if (id === 'live' && state.buildLive) { main.innerHTML = `<div class="view">${topbarHtml('Build')}<div class="scroll"><div class="col wide build-col" data-build-root></div></div></div>`; wireTopbar(main); paintBuild(true); return; }
-  main.innerHTML = `<div class="view">${topbarHtml('Build')}<div class="scroll"><div class="col wide build-col" data-build-root><div class="empty">${icon('zap', 24)}<div>Loading the build</div></div></div></div></div>`;
-  wireTopbar(main);
-  api('/api/builds/' + encodeURIComponent(id)).then(r => { state.buildLive = Object.assign({ raw: '', statusText: '' }, r.build); if (state.route.name === 'build') paintBuild(true); }).catch(e => { apiToast(e, 'That build is not available'); go('#/discover'); });
+  if (id === 'live' && state.studio) { main.innerHTML = `<div class="view">${studioTopbar()}<div class="studio" data-studio></div></div>`; wireStudioShell(main); paintStudio(true); return; }
+  if (state.studio && state.studio.sessionId === id) { main.innerHTML = `<div class="view">${studioTopbar()}<div class="studio" data-studio></div></div>`; wireStudioShell(main); paintStudio(true); return; }
+  main.innerHTML = `<div class="view">${studioTopbar()}<div class="studio" data-studio><div class="empty" style="grid-column:1/-1">${icon('zap', 24)}<div>Loading the build</div></div></div></div>`;
+  wireStudioShell(main);
+  api('/api/builds/' + encodeURIComponent(id)).then(r => {
+    const s = r.session; const spec = s.spec && typeof s.spec === 'object' ? s.spec : { title: s.title, kind: s.kind, what: '' };
+    state.studio = { sessionId: s.id, title: s.title, kind: s.kind, category: s.category, ideaId: s.ideaId, graphHash: s.graphHash, spec, messages: s.messages || [], versions: (r.versions || []).map(v => Object.assign({}, v, { html: r.current && r.current.id === v.id ? r.current.html : null })), current: r.current ? Object.assign({}, r.current) : null, selected: r.current ? r.current.version : null, live: null, tab: 'chat', error: null };
+    if (state.route.name === 'build') { $('#main').innerHTML = `<div class="view">${studioTopbar()}<div class="studio" data-studio></div></div>`; wireStudioShell($('#main')); paintStudio(true); }
+  }).catch(e => { apiToast(e, 'That build is not available'); go('#/discover'); });
 }
-function paintBuild(final) {
-  const root = $('[data-build-root]'); const b = state.buildLive; if (!root || !b) return;
-  const parsed = b.raw ? parseBuildRaw(b.raw) : { plan: b.plan || '', html: b.html || '', htmlDone: b.status === 'done' };
-  const plan = b.plan || parsed.plan; const html = b.status === 'done' && b.html ? b.html : parsed.html;
-  const building = b.status === 'building';
-  const lines = html ? html.split('\n').length : 0;
-  const planHtml = plan ? `<ul class="build-plan">${plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : '';
-  const prov = b.lineage ? `<span class="pill-hash" title="Build lineage ${esc(b.lineage)}${b.ideaId ? ' · from idea ' + esc(b.ideaId) : ''}">${icon('loop', 12)}${esc(shortHash(b.lineage))}</span>` : '';
+function studioTopbar() {
+  const st = state.studio;
+  return topbarHtml(st ? st.title : 'Build', `<div class="studio-tabs" data-studio-tabs><button type="button" class="tab-btn on" data-tab="chat">${icon('sparkles', 14)}Chat</button><button type="button" class="tab-btn" data-tab="app">${icon('zap', 14)}App</button></div>`);
+}
+function wireStudioShell(root) {
+  wireTopbar(root);
+  $$('[data-studio-tabs] [data-tab]', root).forEach(b => b.addEventListener('click', () => { if (state.studio) state.studio.tab = b.dataset.tab; $$('[data-studio-tabs] [data-tab]', root).forEach(x => x.classList.toggle('on', x === b)); const s = $('[data-studio]', root); if (s) s.dataset.tab = b.dataset.tab; }));
+}
+function studioMessageHtml(m, st) {
+  if (m.role === 'user') return `<div class="smsg user"><div class="bubble">${esc(m.text)}</div></div>`;
+  if (m.kind === 'error') return `<div class="smsg bot err"><div class="bubble">${icon('alert', 15)}<span>${esc(m.text)}</span></div><div class="smsg-actions"><button type="button" class="btn sm" data-retry-build>${icon('refresh', 13)}Try again</button></div></div>`;
+  if (m.kind === 'plan') {
+    const lines = String(m.text || '').split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean);
+    const v = st.versions.find(x => x.id === m.buildId);
+    return `<div class="smsg bot"><div class="bubble"><div class="smsg-title">${icon('zap', 14)}Version ${esc(m.version || (v && v.version) || '')} ${v && v.status === 'done' ? 'is ready' : 'was written'}</div><ul class="build-plan">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>${m.buildId ? `<div class="smsg-actions"><button type="button" class="btn sm${st.selected === (m.version || (v && v.version)) ? ' primary' : ''}" data-show-version="${esc(m.version || (v && v.version) || '')}">${icon('external', 13)}Show this version</button></div>` : ''}</div>`;
+  }
+  return `<div class="smsg bot"><div class="bubble">${md(m.text || '')}</div></div>`;
+}
+function paintStudio(final) {
+  const root = $('[data-studio]'); const st = state.studio; if (!root || !st) return;
+  root.dataset.tab = st.tab || 'chat';
   if (!root.dataset.ready) {
     root.dataset.ready = '1';
-    root.innerHTML = `<div class="page-h"><h1>${icon('zap', 24)}<span data-b-title></span></h1><div class="g-controls"><button type="button" class="btn sm" data-b-open title="Open the app in its own tab">${icon('external', 14)}<span>Open</span></button><button type="button" class="btn sm" data-b-download title="Save the app as a single HTML file">${icon('download', 14)}<span>Download</span></button><button type="button" class="btn sm" data-b-refine title="Describe a change and Ricorsa rebuilds it">${icon('edit', 14)}<span>Refine</span></button></div></div>
-      <div class="build-meta"><span class="cat-tag" data-b-kind></span><span data-b-prov></span><span class="build-status" data-b-status></span></div>
-      <div class="build-grid"><div class="build-side"><h3>${icon('sparkles', 14)}Plan</h3><div data-b-plan class="muted">Reading your graph and planning</div><h3 style="margin-top:14px">${icon('code', 14)}Source</h3><div class="build-code-meta" data-b-lines></div><pre class="build-code" data-b-code></pre></div><div class="build-stage"><div class="build-frame-wrap"><iframe class="build-frame" data-b-frame sandbox="allow-scripts allow-forms allow-modals allow-popups" title="Your app" referrerpolicy="no-referrer"></iframe><div class="build-overlay" data-b-overlay><div class="spinner"></div><div data-b-overlay-text>Building</div></div></div></div></div>`;
-    $('[data-b-open]', root).addEventListener('click', () => { const cur = state.buildLive; if (!cur || cur.status !== 'done') { toast('Wait for the build to finish', 'bad'); return; } window.open('/api/builds/' + encodeURIComponent(cur.id) + '?raw=1', '_blank', 'noopener'); });
-    $('[data-b-download]', root).addEventListener('click', () => { const cur = state.buildLive; if (!cur || !cur.html) { toast('Nothing to download yet', 'bad'); return; } downloadFile(slugify(cur.title || 'ricorsa-app') + '.html', cur.html, 'text/html'); toast('Saved'); });
-    $('[data-b-refine]', root).addEventListener('click', () => { const cur = state.buildLive; if (!cur || cur.status !== 'done') { toast('Wait for the build to finish', 'bad'); return; } openModal(`<h2>${icon('edit', 20)}Refine this build</h2><p class="sub">Describe what should change. Ricorsa rebuilds it and keeps the rest working.</p><textarea id="refineText" rows="4" style="width:100%" placeholder="For example: add a weekly view, make the totals editable, use my project names"></textarea><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="refineGo">${icon('zap', 14)}Rebuild</button></div>`, { onMount: ov => { $('#refineGo', ov).addEventListener('click', () => { const changes = $('#refineText', ov).value.trim(); if (changes.length < 3) return; closeModal(); startBuild({ id: cur.ideaId, graphHash: cur.graphHash, kind: cur.kind, title: cur.title, what: cur.spec && cur.spec.what ? cur.spec.what : (cur.summary || cur.spec || cur.title), prompt: cur.spec && cur.spec.prompt, builds: cur.spec && cur.spec.builds }, cur.category, { parentId: cur.id, changes }); }); } }); });
+    root.innerHTML = `<section class="studio-chat"><div class="studio-msgs" data-msgs></div><div class="studio-compose"><div class="studio-hints" data-hints></div><div class="studio-input"><textarea data-compose rows="2" placeholder="Ask for a change, add a screen, or ask how it works"></textarea><button type="button" class="send-btn" data-send aria-label="Send">${icon('arrowUp', 18)}</button></div></div></section>
+      <section class="studio-app"><div class="studio-bar"><span class="cat-tag" data-s-kind></span><div class="versions" data-versions></div><span class="build-status" data-s-status></span><span class="spacer"></span><button type="button" class="btn sm" data-s-open title="Open the app in its own tab">${icon('external', 14)}<span>Open</span></button><button type="button" class="btn sm" data-s-download title="Save the app as a single HTML file">${icon('download', 14)}<span>Download</span></button><button type="button" class="btn sm" data-s-copy title="Copy the app's source">${icon('copy', 14)}<span>Copy code</span></button></div><div class="studio-frame-wrap"><iframe class="studio-frame" data-s-frame sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" title="Your app" referrerpolicy="no-referrer"></iframe><div class="build-overlay" data-s-overlay><div class="spinner"></div><div data-s-overlay-text>Building</div></div></div></section>`;
+    const ta = $('[data-compose]', root);
+    const send = () => { const t = ta.value.trim(); if (!t) return; ta.value = ''; sendBuildMessage(t); };
+    $('[data-send]', root).addEventListener('click', () => { if (state.studio && state.studio.live) stopBuild(); else send(); });
+    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+    $('[data-s-open]', root).addEventListener('click', () => { const v = currentVersion(); if (!v) { toast('Wait for a version to finish', 'bad'); return; } window.open('/api/builds/' + encodeURIComponent(v.id) + '?raw=1', '_blank', 'noopener'); });
+    $('[data-s-download]', root).addEventListener('click', () => { const html = shownHtml(); if (!html) { toast('Nothing to download yet', 'bad'); return; } downloadFile(slugify(st.title || 'ricorsa-app') + '.html', html, 'text/html'); toast('Saved'); });
+    $('[data-s-copy]', root).addEventListener('click', async () => { const html = shownHtml(); if (!html) { toast('Nothing to copy yet', 'bad'); return; } const ok = await copyText(html); toast(ok ? 'Source copied' : 'Could not copy', ok ? 'ok' : 'bad'); });
   }
-  $('[data-b-title]', root).textContent = b.title || 'Build';
-  $('[data-b-kind]', root).textContent = b.kind || 'App';
-  $('[data-b-prov]', root).innerHTML = prov;
-  const st = $('[data-b-status]', root);
-  st.textContent = building ? (b.statusText || 'Building') : b.status === 'error' ? (b.error === 'stopped' ? 'Stopped' : 'Stopped: ' + (b.error || 'try again')) : 'Ready';
-  st.className = 'build-status ' + (building ? 'live' : b.status === 'error' ? 'bad' : 'ok');
-  if (plan) $('[data-b-plan]', root).innerHTML = planHtml;
-  $('[data-b-lines]', root).textContent = html ? `${lines} lines${building ? ', still writing' : ''}` : (building ? 'Waiting for the first lines' : '');
-  const code = $('[data-b-code]', root); if (html) { const tail = html.length > 6000 ? html.slice(-6000) : html; code.textContent = tail; code.scrollTop = code.scrollHeight; }
-  const frame = $('[data-b-frame]', root), overlay = $('[data-b-overlay]', root);
+  const live = st.live;
+  // Chat
+  const msgs = $('[data-msgs]', root);
+  const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80;
+  let html = st.messages.map(m => studioMessageHtml(m, st)).join('');
+  if (live) {
+    if (live.reply) html += `<div class="smsg bot"><div class="bubble">${md(live.reply)}</div></div>`;
+    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: writing the app</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written</div>` : ''}</div></div>`;
+  }
+  msgs.innerHTML = html || `<div class="empty">${icon('zap', 24)}<div>Nothing here yet.</div></div>`;
+  $$('[data-show-version]', msgs).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.showVersion)));
+  $$('[data-retry-build]', msgs).forEach(b => b.addEventListener('click', () => { const lastReq = [...st.messages].reverse().find(m => m.role === 'user'); if (!st.sessionId) { runBuildRequest({ ideaId: st.ideaId, graphHash: st.graphHash, category: st.category, kind: st.kind, title: st.title, what: st.spec && st.spec.what || st.title, prompt: st.spec && st.spec.prompt, builds: st.spec && st.spec.builds }); } else if (lastReq) { runBuildRequest({ sessionId: st.sessionId, message: lastReq.text }); } }));
+  if (atBottom || final) msgs.scrollTop = msgs.scrollHeight;
+  const hints = $('[data-hints]', root);
+  const done = !live && st.current && st.current.status === 'done';
+  hints.innerHTML = done && st.messages.filter(m => m.role === 'user').length < 2 ? ['Add a settings screen', 'Use my real names and numbers', 'Make it work on a phone', 'How does this work?'].map(h => `<button type="button" class="chip" data-hint="${esc(h)}">${esc(h)}</button>`).join('') : '';
+  $$('[data-hint]', hints).forEach(b => b.addEventListener('click', () => sendBuildMessage(b.dataset.hint)));
+  const ta = $('[data-compose]', root); const sendBtn = $('[data-send]', root);
+  ta.disabled = !st.sessionId && !live ? false : false;
+  sendBtn.innerHTML = live ? icon('stop', 16) : icon('arrowUp', 18);
+  sendBtn.title = live ? 'Stop' : 'Send';
+  ta.placeholder = live ? 'Building… you can stop it, or wait to send the next change' : (st.sessionId ? 'Ask for a change, add a screen, or ask how it works' : 'Starting the first version');
+  // App pane
+  $('[data-s-kind]', root).textContent = st.kind || 'App';
+  const versions = st.versions.slice().sort((a, b) => a.version - b.version);
+  $('[data-versions]', root).innerHTML = versions.map(v => `<button type="button" class="vchip${st.selected === v.version && !live ? ' on' : ''}${v.status === 'error' ? ' bad' : ''}" data-v="${v.version}" title="${esc(v.summary || '')}">v${v.version}</button>`).join('') + (live && live.version ? `<span class="vchip live">v${live.version}…</span>` : '');
+  $$('[data-v]', root).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.v)));
+  const stEl = $('[data-s-status]', root);
+  stEl.textContent = live ? (live.statusText || 'Building') : st.error ? 'Stopped' : (st.current ? 'Ready' : 'No version yet');
+  stEl.className = 'build-status ' + (live ? 'live' : st.error ? 'bad' : 'ok');
+  const frame = $('[data-s-frame]', root), overlay = $('[data-s-overlay]', root);
+  const showHtml = live && live.html ? live.html : shownHtml();
   const now = Date.now();
-  if (html && (final || !b._lastFrame || now - b._lastFrame > 2500)) { b._lastFrame = now; frame.srcdoc = html; }
-  overlay.hidden = !building || !!html;
-  $('[data-b-overlay-text]', root).textContent = b.statusText || 'Building';
+  if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; if (frame.dataset.hash !== String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done')) { frame.dataset.hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done'); frame.srcdoc = showHtml; } }
+  overlay.hidden = !(live && !live.html && !live.reply);
+  $('[data-s-overlay-text]', root).textContent = live ? (live.statusText || 'Building') : '';
+}
+function currentVersion() { const st = state.studio; if (!st) return null; return st.versions.find(v => v.version === st.selected && v.status === 'done') || st.current || null; }
+function shownHtml() { const st = state.studio; if (!st) return ''; const v = st.versions.find(x => x.version === st.selected); if (v && v.html) return v.html; if (st.current && (!v || st.current.id === v.id)) return st.current.html || ''; return ''; }
+async function showVersion(n) {
+  const st = state.studio; if (!st) return;
+  const v = st.versions.find(x => x.version === n); if (!v) return;
+  st.selected = n;
+  if (!v.html) { try { const r = await api('/api/builds/' + encodeURIComponent(st.sessionId) + '?version=' + n); if (r.current) v.html = r.current.html; } catch (e) { apiToast(e, 'Could not load that version'); } }
+  if (state.route.name === 'build') { st.tab = 'app'; const root = $('[data-studio]'); if (root) { root.dataset.tab = 'app'; $$('[data-studio-tabs] [data-tab]').forEach(x => x.classList.toggle('on', x.dataset.tab === 'app')); } paintStudio(true); }
 }
 
 // ---------- Spaces ----------

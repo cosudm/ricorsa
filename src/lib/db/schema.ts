@@ -183,10 +183,17 @@ export const connectors = sqliteTable('connectors', {
 
 /** Apps and tools built from a Discover idea: a single self-contained HTML document, streamed in as it is written. */
 export type BuildStatus = 'building' | 'done' | 'error';
+/** One line of the build conversation, kept on the session's root row. */
+export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; at: number };
 export const builds = sqliteTable('builds', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   parentId: text('parent_id'),
+  /** The session this version belongs to (the first build's id); null on the root itself. */
+  rootId: text('root_id'),
+  version: integer('version').notNull().default(1),
+  /** The conversation with the builder; only the root row carries it. */
+  messages: text('messages', { mode: 'json' }).$type<BuildMessage[]>().notNull().$defaultFn(() => []).default(sql`'[]'`),
   ideaId: text('idea_id'),
   graphHash: text('graph_hash'),
   category: text('category'),

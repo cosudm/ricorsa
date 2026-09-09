@@ -275,6 +275,15 @@ Where do exported files go?
 
 async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
   const title = (opts.messages[0]?.content.match(/Idea to build: (.*)/) || [])[1] || 'Your app';
+  const last = opts.messages[opts.messages.length - 1]?.content || '';
+  const request = (last.match(/My request: ([\s\S]*?)\n\nIf this asks/) || [])[1] || '';
+  // The stub answers questions with a reply and treats everything else as a change (a new version with a note).
+  if (request && /\?\s*$/.test(request.trim())) {
+    const full = `<reply>\nThis is the development stub answering your question about "${title}": ${request.trim()} In production the builder reads the current version and answers from it.\n</reply>`;
+    for (let i = 0; i < full.length; i += 30) { await new Promise(r => setTimeout(r, 8)); opts.onText(full.slice(i, i + 30)); }
+    return { text: full, truncated: false, model, sources: [], usage: { in: 300, out: 60, cacheRead: 0, cacheWrite: 0, searches: 0 }, tools: [] };
+  }
+  const note = request ? `<p style="background:#e8eff6;padding:8px 12px;border-radius:8px">Change applied (stub): ${request.replace(/</g, '&lt;').slice(0, 120)}</p>` : '';
   const full = `<plan>
 - A small working tracker for "${title}"
 - One screen: add items, mark them done, see a running total
@@ -284,7 +293,7 @@ async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; s
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
 <style>body{font-family:system-ui,sans-serif;margin:0;background:#fbfbf9;color:#1b2228}main{max-width:640px;margin:0 auto;padding:32px 20px}h1{font-size:24px;margin:0 0 6px}p{color:#55606b}form{display:flex;gap:8px;margin:18px 0}input{flex:1;padding:10px 12px;border:1px solid #cfcfc7;border-radius:10px;font:inherit}button{padding:10px 14px;border:0;border-radius:10px;background:#2d5f8a;color:#fff;font:inherit;cursor:pointer}ul{list-style:none;padding:0;margin:0}li{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #e5e5df}li.done span{text-decoration:line-through;color:#8a939c}footer{margin-top:28px;font-size:12px;color:#8a939c}</style></head>
-<body><main><h1>${title}</h1><p>A mock build from the development stub. Add a few items below.</p>
+<body><main><h1>${title}</h1><p>A mock build from the development stub. Add a few items below.</p>${note}
 <form id="f"><input id="t" placeholder="Add something" aria-label="Add an item" required><button type="submit">Add</button></form>
 <ul id="l"></ul><p id="c"></p><footer>Built by Ricorsa from your identity graph</footer></main>
 <script>
