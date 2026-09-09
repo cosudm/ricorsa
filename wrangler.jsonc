@@ -15,8 +15,8 @@
   "vars": {
     "NEXT_PUBLIC_APP_NAME": "Ricorsa",
     "APP_BASE_URL": "https://ricorsa.com",
-    "AUTH0_DOMAIN": "",
-    "AUTH0_CLIENT_ID": "",
+    "AUTH0_DOMAIN": "dev-xddeyes70ajfjexx.us.auth0.com",
+    "AUTH0_CLIENT_ID": "jt6uHk4Uou5Xn3ZjZvY7KearlBkvngqZ",
     "MODEL_QUICK": "claude-haiku-4-5",
     "MODEL_DEFAULT": "claude-sonnet-5",
     "MODEL_COMPLEX": "claude-opus-5",
