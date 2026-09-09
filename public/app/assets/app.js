@@ -1060,31 +1060,62 @@ const DISCOVER_HUES = { 'For you': 205, 'Apps': 190, 'Agents': 265, 'Tools': 150
 state.discoverCat = 'For you';
 state.discoverGen = {};
 state.discoverTried = {};
-function drawArt(cv, seed, hue) {
-  const w = cv.width = 640, h = cv.height = 360, ctx = cv.getContext('2d');
-  let s = seed >>> 0; const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-  const g = ctx.createLinearGradient(0, 0, w, h);
-  g.addColorStop(0, `hsl(${hue} 42% 94%)`); g.addColorStop(1, `hsl(${(hue + 25) % 360} 40% 86%)`);
-  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-  const cx = w * (0.25 + rnd() * 0.5), cy = h * (0.3 + rnd() * 0.4);
-  ctx.lineWidth = 1.1;
-  const ph = rnd() * 6.28, k = 2 + Math.floor(rnd() * 4);
-  for (let r = 16, i = 0; r < Math.max(w, h) * 1.1; r += 12 + rnd() * 9, i++) {
-    ctx.strokeStyle = `hsl(${hue} 35% ${40 + (i % 3) * 6}% / ${0.55 - Math.min(0.35, i * 0.012)})`;
-    ctx.beginPath();
-    for (let a = 0; a <= 6.2832; a += 0.065) {
-      const wob = 1 + 0.09 * Math.sin(a * k + ph + r * 0.04) + 0.05 * Math.sin(a * (k + 3) - r * 0.02);
-      const x = cx + Math.cos(a) * r * wob * 1.4, y = cy + Math.sin(a) * r * wob;
-      a === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.closePath(); ctx.stroke();
-  }
-  ctx.fillStyle = `hsl(${hue} 45% 38% / .55)`;
-  for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(rnd() * w, rnd() * h, 2 + rnd() * 3, 0, 6.2832); ctx.fill(); }
+// ---------- Discover previews ----------
+// Each idea card shows a small mock of the thing described: a window with the app's own name, menu,
+// and the screen it would open on. The generator supplies a preview spec; older or curated ideas get one inferred.
+const PV_LAYOUTS = ['dashboard', 'list', 'chat', 'form', 'table', 'map', 'editor', 'cards', 'profile', 'timeline'];
+const PV_NAV = { 'For you': ['Home', 'Graph', 'Settings'], 'Apps': ['Home', 'Library', 'Settings'], 'Agents': ['Chat', 'Tasks', 'Log'], 'Tools': ['Tool', 'History', 'Export'], 'Decentralized': ['Profile', 'Consent', 'Network'], 'Data & credentials': ['Data', 'Schema', 'Export'], 'Content': ['Outline', 'Draft', 'Publish'] };
+function cap(s) { s = String(s || '').trim(); return s ? s[0].toUpperCase() + s.slice(1) : ''; }
+function inferPreview(it, cat) {
+  const kind = String(it.kind || '').toLowerCase(), title = String(it.title || ''), text = (kind + ' ' + title + ' ' + (it.what || '')).toLowerCase();
+  let layout = 'dashboard';
+  if (/agent|assistant|bot|tutor|negotiat|watchdog|brief/.test(text)) layout = 'chat';
+  else if (/checklist|generator|kit|calculator|template|prompt|glossary|tool/.test(text)) layout = 'form';
+  else if (/dataset|export|schema|vocabulary|json/.test(text)) layout = 'table';
+  else if (/credential|badge|claim|profile|did|identity document|consent/.test(text)) layout = 'profile';
+  else if (/course|newsletter|talk|playbook|guide|lesson|syllabus/.test(text)) layout = 'editor';
+  else if (/community|marketplace|union|match/.test(text)) layout = 'cards';
+  else if (/queue|reading|feed|notes|knowledge|inbox|tracker/.test(text)) layout = 'list';
+  else if (/map|geo|location|place|route/.test(text)) layout = 'map';
+  else if (/review|weekly|timeline|history|receipt|log/.test(text)) layout = 'timeline';
+  let name = title.replace(/^(a|an|your|the)\s+/i, '').split(/[,:]/)[0].split(' ').slice(0, 3).map(cap).join(' ');
+  if (name.length > 18) name = name.split(' ').slice(0, 2).join(' ');
+  const builds = (it.builds || []).map(cap);
+  const items = builds.length ? builds : ['Overview', 'Details', 'Activity'];
+  const cta = { chat: 'Send', form: 'Generate', profile: 'Share', table: 'Export', editor: 'Publish', cards: 'Join', map: 'Locate', timeline: 'Review', list: 'Add', dashboard: 'Refresh' }[layout];
+  return { layout, name: name || cap(kind) || 'App', nav: PV_NAV[cat] || PV_NAV['For you'], items, stat: layout === 'dashboard' ? { label: items[0] || 'Signals', value: String(7 + (title.length % 41)) } : null, cta };
+}
+function normPreview(it, cat) {
+  const p = it.preview && typeof it.preview === 'object' ? it.preview : null;
+  const base = inferPreview(it, cat);
+  if (!p) return base;
+  const layout = PV_LAYOUTS.includes(p.layout) ? p.layout : base.layout;
+  const list = Array.isArray(p.items) ? p.items.map(x => truncate(String(x || ''), 34)).filter(Boolean) : [];
+  const nav = Array.isArray(p.nav) ? p.nav.map(x => truncate(String(x || ''), 14)).filter(Boolean).slice(0, 4) : [];
+  return { layout, name: truncate(p.name || base.name, 20), nav: nav.length >= 2 ? nav : base.nav, items: list.length ? list.slice(0, 5) : base.items, stat: p.stat && p.stat.value ? { label: truncate(p.stat.label || '', 18), value: truncate(String(p.stat.value), 8) } : base.stat, cta: truncate(p.cta || base.cta, 14) };
+}
+function previewHtml(it, cat, seed, rich) {
+  const pv = normPreview(it, cat); const hue = DISCOVER_HUES[cat] || 205;
+  const e = esc; const w = (i, mod) => 30 + ((seed * 7 + i * 13) % mod);
+  // The feature card is tall, so its screen shows more: every item, plus a details panel below.
+  const items = pv.items; const n = rich ? 6 : 4;
+  const panel = rich ? `<div class="pv-result"><b>${e(pv.nav[1] || 'Details')}</b><em style="width:88%"></em><em style="width:72%"></em><em style="width:80%"></em><em style="width:35%"></em></div>` : '';
+  let body = '';
+  if (pv.layout === 'dashboard') body = `<div class="pv-cols"><div class="pv-stat"><b>${e(pv.stat ? pv.stat.value : '12')}</b><span>${e(pv.stat ? pv.stat.label : items[0] || '')}</span></div><div class="pv-chart">${[0,1,2,3,4,5].map(i => `<i style="height:${w(i, 60)}%"></i>`).join('')}</div></div><div class="pv-rows">${items.slice(0, rich ? 5 : 3).map(t => `<div class="pv-row"><i></i><span>${e(t)}</span><em style="width:${w(t.length, 22)}%"></em></div>`).join('')}</div>${panel}`;
+  else if (pv.layout === 'list') body = `<div class="pv-search">${e('Search ' + pv.name.toLowerCase())}</div><div class="pv-rows">${items.slice(0, n).map((t, i) => `<div class="pv-row"><i class="av"></i><span>${e(t)}</span><em style="width:${w(i, 24)}%"></em></div>`).join('')}</div>${panel}`;
+  else if (pv.layout === 'chat') { const m = pv.items; const msgs = [m[0] || 'Here is what changed today.', m[1] || 'Go deeper on the second one.', m[2] || 'On it. Two sources, one caveat.'].concat(rich ? [m[3] || 'Anything else you want watched?', m[4] || 'Add the new one from last week.', m[5] || 'Added. I will brief you Monday.'] : []); body = `<div class="pv-chat">${msgs.map((m, i) => `<div class="pv-msg ${i % 2 ? 'u' : 'a'}">${e(m)}</div>`).join('')}</div><div class="pv-compose"><span>Message ${e(pv.name)}</span><b>${e(pv.cta)}</b></div>`; }
+  else if (pv.layout === 'form') body = `<div class="pv-form">${items.slice(0, rich ? 4 : 3).map(t => `<label><span>${e(t)}</span><i></i></label>`).join('')}<b class="pv-btn">${e(pv.cta)}</b></div>${rich ? `<div class="pv-result"><b>Result</b><em style="width:88%"></em><em style="width:72%"></em><em style="width:80%"></em><em style="width:35%"></em></div>` : ''}`;
+  else if (pv.layout === 'table') body = `<div class="pv-table"><div class="pv-tr head"><span>${e(pv.nav[0] || 'Field')}</span><span>Type</span><span>Value</span></div>${items.slice(0, rich ? 6 : 4).map((t, i) => `<div class="pv-tr"><span>${e(t)}</span><em style="width:${w(i, 30)}%"></em><em style="width:${w(i + 3, 30)}%"></em></div>`).join('')}</div>${panel}`;
+  else if (pv.layout === 'map') body = `<div class="pv-map"><div class="pv-pins">${[0,1,2,3].slice(0, rich ? 4 : 3).map(i => `<i style="left:${18 + w(i, 55)}%;top:${15 + w(i + 5, 50)}%"></i>`).join('')}</div><div class="pv-side">${items.slice(0, rich ? 5 : 3).map(t => `<span>${e(t)}</span>`).join('')}</div></div>${panel}`;
+  else if (pv.layout === 'editor') body = `<div class="pv-editor"><div class="pv-outline">${items.slice(0, rich ? 7 : 4).map((t, i) => `<span class="${i === 0 ? 'on' : ''}">${e(t)}</span>`).join('')}</div><div class="pv-doc"><b>${e(items[0] || pv.name)}</b><em style="width:92%"></em><em style="width:78%"></em><em style="width:85%"></em><em style="width:40%"></em>${rich ? `<b class="sub">${e(items[1] || 'Next')}</b><em style="width:88%"></em><em style="width:94%"></em><em style="width:66%"></em><em style="width:90%"></em><em style="width:52%"></em>` : ''}</div></div>`;
+  else if (pv.layout === 'cards') body = `<div class="pv-cards">${items.slice(0, rich ? 6 : 4).map(t => `<div class="pv-card"><i></i><span>${e(t)}</span><b>${e(pv.cta)}</b></div>`).join('')}</div>${panel}`;
+  else if (pv.layout === 'profile') body = `<div class="pv-profile"><i class="pv-avatar"></i><div><b>${e(pv.name)}</b><span>${e(it.kind || cat)} · verified</span></div><div class="pv-badges">${pv.items.slice(0, 4).map(t => `<span>${e(t)}</span>`).join('')}</div><b class="pv-btn">${e(pv.cta)}</b></div>${rich ? `<div class="pv-sec">Recent activity</div><div class="pv-rows">${pv.nav.map((t, i) => `<div class="pv-row"><i></i><span>${e(t)}</span><em style="width:${w(i, 22)}%"></em></div>`).join('')}</div>` : ''}`;
+  else if (pv.layout === 'timeline') body = `<div class="pv-timeline">${items.slice(0, rich ? 6 : 4).map((t, i) => `<div class="pv-ev"><i></i><span>${e(t)}</span><em>${['Mon', 'Tue', 'Thu', 'Fri', 'Sat', 'Mon'][i]}</em></div>`).join('')}</div>${panel}`;
+  return `<div class="art pv-wrap" style="--pv-h:${hue}" aria-hidden="true"><div class="pv"><div class="pv-bar"><i></i><i></i><i></i><span class="pv-name">${e(pv.name)}</span><span class="pv-nav">${pv.nav.map(x => `<span>${e(x)}</span>`).join('')}</span></div><div class="pv-body pv-l-${e(pv.layout)}">${body}</div></div></div>`;
 }
 function renderDiscover() {
   const main = $('#main');
-  const cat = state.discoverCat; const hue = DISCOVER_HUES[cat] || 205;
+  const cat = state.discoverCat;
   const entry = state.discoverGen[cat];
   const items = entry ? entry.items : null;
   const nodes = state.graphSize || (state.graph ? Object.keys(state.graph.nodes).length : 0);
@@ -1098,8 +1129,6 @@ function renderDiscover() {
     <div class="cat-row">${DISCOVER_CATS.map(c => `<button type="button" class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
     <div class="disc-grid" data-grid>${items ? items.map((it, i) => discoverCard(it, i, cat)).join('') : `<div class="g-empty" style="grid-column:1/-1">${icon('loop', 30)}<div>Nothing generated yet for ${esc(cat)}.</div><p>Press “Generate from my graph” and Ricorsa will propose things you could build.</p></div>`}</div>
   </div></div></div>`;
-  let seedBase = 0; for (const ch of cat) seedBase = seedBase * 31 + ch.charCodeAt(0);
-  $$('canvas.art', main).forEach(cv => drawArt(cv, seedBase * 97 + (+cv.dataset.seed) * 7919, hue));
   $$('[data-cat]', main).forEach(b => b.addEventListener('click', () => { state.discoverCat = b.dataset.cat; if (!state.discoverGen[b.dataset.cat]) fetchDiscover(b.dataset.cat, false); renderDiscover(); }));
   if (!state.builds) loadBuilds().then(() => { if (state.route.name === 'discover') { const row = $('[data-builds-row]', main); if (row) row.outerHTML = buildsRowHtml(); wireBuildsRow(main); } });
   wireBuildsRow(main);
@@ -1118,7 +1147,7 @@ function discoverCard(it, i, cat) {
   const builds = (it.builds || []).slice(0, 4).map(x => `<span class="nchip"><span class="dot circle" style="background:var(--accent)"></span><span>${esc(x)}</span></span>`).join('');
   const hash = it.id ? `<span class="hash" title="Provenance id ${esc(it.id)} · graph ${esc(it.graphHash || '')}">${icon('loop', 11)}${esc(shortHash(it.id))}</span>` : '';
   const buildTip = caps().discover === 'full' ? 'Build a working version of this, personalised with your graph' : 'Building from Discover is part of the Team plan';
-  return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}"><button type="button" class="disc-open" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Ask Ricorsa about this idea"><canvas class="art" data-seed="${i + 1}" aria-hidden="true"></canvas><div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button><div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Start a thread about this idea">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
+  return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}"><button type="button" class="disc-open" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Ask Ricorsa about this idea">${previewHtml(it, cat, i + 1, i === 0)}<div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button><div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Start a thread about this idea">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
 }
 async function fetchDiscover(cat, refresh) {
   const btn = $('[data-gen]'); if (btn) { btn.disabled = true; btn.innerHTML = icon('sparkles', 15) + '<span class="dots">Generating</span>'; }
