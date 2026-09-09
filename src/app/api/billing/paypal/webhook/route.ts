@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { verifyWebhookSignature, getSubscription } from '@/lib/paypal';
 import { applySubscription } from '@/lib/billing';
 import { db, schema } from '@/lib/db';
+import { paypalProvisioned } from '@/lib/paypal-setup';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +13,11 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request) {
   const raw = await req.text();
   let ok = false;
-  try { ok = await verifyWebhookSignature(req.headers, raw); } catch (e) { console.error('webhook verify error', e); return new Response('verify failed', { status: 500 }); }
+  try {
+    const provisioned = await paypalProvisioned();
+    if (!provisioned?.webhookId) return new Response('webhook not provisioned', { status: 503 });
+    ok = await verifyWebhookSignature(req.headers, raw, provisioned.webhookId);
+  } catch (e) { console.error('webhook verify error', e); return new Response('verify failed', { status: 500 }); }
   if (!ok) return new Response('bad signature', { status: 400 });
   const event = JSON.parse(raw) as { id: string; event_type: string; resource?: Record<string, unknown> };
 

@@ -11,7 +11,8 @@
     { "binding": "DB", "database_name": "ricorsa", "database_id": "47395d3b-09a7-403f-ad59-602ecb4fe1ff", "migrations_dir": "drizzle" }
   ],
   // Plain configuration. Secrets (AUTH0_CLIENT_SECRET, AUTH0_SECRET, ANTHROPIC_API_KEY, PAYPAL_CLIENT_SECRET)
-  // are set on the Worker (Settings, Variables and Secrets) and survive deploys.
+  // are set on the Worker (Settings, Variables and Secrets) and survive deploys. PayPal plans and the
+  // webhook are created by the app itself on first use (src/lib/paypal-setup.ts).
   "vars": {
     "NEXT_PUBLIC_APP_NAME": "Ricorsa",
     "APP_BASE_URL": "https://ricorsa.com",
@@ -21,9 +22,6 @@
     "MODEL_DEFAULT": "claude-sonnet-5",
     "MODEL_COMPLEX": "claude-opus-5",
     "PAYPAL_ENV": "live",
-    "PAYPAL_CLIENT_ID": "",
-    "PAYPAL_PLAN_PRO": "",
-    "PAYPAL_PLAN_TEAM": "",
-    "PAYPAL_WEBHOOK_ID": ""
+    "PAYPAL_CLIENT_ID": "BAAkDyjF4FPGW2WJrgPvOtFE1c0HUkZ0jRaRkooPnmsvBlNIzSxicOj-aKA0NDLcQQRGSmd-L4WEBEGLQQ"
   }
 }

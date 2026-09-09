@@ -64,15 +64,17 @@ export function planFor(key: string | null | undefined): Plan {
   return PLANS[(key as PlanKey) in PLANS ? (key as PlanKey) : 'free'];
 }
 
-export function paypalPlanId(key: PlanKey): string | null {
+/** The PayPal plan id for a paid tier: an explicit env var wins, otherwise the id the app provisioned itself. */
+export function paypalPlanId(key: PlanKey, provisioned?: Partial<Record<PlanKey, string>> | null): string | null {
   const env = PLANS[key].paypalPlanEnv;
-  return env ? process.env[env] || null : null;
+  if (!env) return null;
+  return process.env[env] || provisioned?.[key] || null;
 }
 
 /** Map a PayPal plan id back to our plan key. */
-export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined): PlanKey | null {
+export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, provisioned?: Partial<Record<PlanKey, string>> | null): PlanKey | null {
   if (!paypalPlanId) return null;
-  for (const p of Object.values(PLANS)) if (p.paypalPlanEnv && process.env[p.paypalPlanEnv] === paypalPlanId) return p.key;
+  for (const p of Object.values(PLANS)) if (p.paypalPlanEnv && (process.env[p.paypalPlanEnv] === paypalPlanId || provisioned?.[p.key] === paypalPlanId)) return p.key;
   return null;
 }
 

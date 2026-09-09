@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db';
 import { planKeyFromPaypalPlan, type PlanKey } from './plans';
+import { paypalProvisioned } from './paypal-setup';
 import { getSubscription, type PaypalSubscription } from './paypal';
 
 /** Statuses that grant paid access. APPROVAL_PENDING is allowed briefly while PayPal finishes the first charge. */
@@ -8,7 +9,8 @@ const GRANTING = new Set(['ACTIVE', 'APPROVAL_PENDING']);
 
 /** Apply a PayPal subscription object to our records. Idempotent; safe to call from webhooks and from activation. */
 export async function applySubscription(sub: PaypalSubscription, userIdHint?: string): Promise<{ userId: string; plan: PlanKey; status: string } | null> {
-  const planKey = planKeyFromPaypalPlan(sub.plan_id);
+  const provisioned = await paypalProvisioned();
+  const planKey = planKeyFromPaypalPlan(sub.plan_id, provisioned?.plans);
   const userId = sub.custom_id || userIdHint;
   if (!planKey || !userId) { console.warn('subscription without known plan or user', sub.id, sub.plan_id, sub.custom_id); return null; }
   const d = db();

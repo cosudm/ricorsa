@@ -17,6 +17,6 @@ export const POST = handle(async (req: Request) => {
   const sub = await getSubscription(b.data.subscriptionId);
   if (sub.custom_id && sub.custom_id !== user.id) return fail(403, 'That subscription belongs to another account');
   const result = await applySubscription(sub, user.id);
-  if (!result) return fail(400, 'Subscription plan not recognised. Check PAYPAL_PLAN_* env vars.');
+  if (!result) return fail(400, 'Subscription plan not recognised.');
   return json({ ok: true, plan: result.plan, status: result.status });
 });

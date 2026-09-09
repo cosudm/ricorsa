@@ -140,3 +140,10 @@ export const webhookEvents = sqliteTable('webhook_events', {
   receivedAt: tsNow('received_at'),
   payload: text('payload', { mode: 'json' }).$type<Record<string, unknown>>(),
 });
+
+/** Small key/value store for things the app provisions for itself (PayPal product, plan and webhook ids). */
+export const config = sqliteTable('config', {
+  key: text('key').primaryKey(),
+  value: text('value', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+  updatedAt: tsNow('updated_at'),
+});

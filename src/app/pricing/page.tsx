@@ -3,6 +3,7 @@ import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { PayPalSubscribe } from '@/components/PayPalSubscribe';
 import { viewer } from '@/lib/viewer';
 import { PLANS, paypalPlanId, type PlanKey } from '@/lib/plans';
+import { paypalProvisioned } from '@/lib/paypal-setup';
 import { currentUser } from '@/lib/session';
 
 export const metadata: Metadata = { title: 'Pricing' };
@@ -13,6 +14,8 @@ export default async function Pricing() {
   let current: PlanKey = 'free'; let status: string | null = null; let userId = '';
   if (v) { try { const u = await currentUser(); current = (u.plan as PlanKey) || 'free'; status = u.subscriptionStatus; userId = u.id; } catch {} }
   const clientId = process.env.PAYPAL_CLIENT_ID || ''; // read at request time; the id is public by nature (it renders the buttons)
+  let provisioned: Awaited<ReturnType<typeof paypalProvisioned>> = null;
+  if (clientId && v) { try { provisioned = await paypalProvisioned(); } catch (e) { console.error('PayPal provisioning failed', e); } }
   const signup = '/auth/login?screen_hint=signup&returnTo=/pricing';
   return (
     <>
@@ -24,7 +27,7 @@ export default async function Pricing() {
           {current !== 'free' && <div className="notice good" style={{ marginBottom: 18 }}>You are on the {PLANS[current].name} plan{status ? ` (${status.toLowerCase()})` : ''}. Manage it on your <a href="/account">Account page</a>.</div>}
           <div className="plans">
             {Object.values(PLANS).map(p => {
-              const pid = p.key === 'free' ? null : paypalPlanId(p.key);
+              const pid = p.key === 'free' ? null : paypalPlanId(p.key, provisioned?.plans);
               const isCurrent = current === p.key;
               return (
                 <div key={p.key} className={'plan' + (p.key === 'pro' ? ' hot' : '')}>
@@ -40,7 +43,7 @@ export default async function Pricing() {
                     ) : isCurrent ? (
                       <a className="btn" href="/account">Manage on Account</a>
                     ) : !pid || !clientId ? (
-                      <div className="notice">Checkout is not configured yet. Set PAYPAL_PLAN_{p.key.toUpperCase()} and PAYPAL_CLIENT_ID (see README).</div>
+                      <div className="notice">Checkout is being set up. Please check back in a moment.</div>
                     ) : (
                       <PayPalSubscribe planId={pid} planKey={p.key} clientId={clientId} userId={userId} />
                     )}

@@ -2,6 +2,8 @@
  * PayPal Subscriptions (REST v1 billing). Uses the same Business app credentials as the
  * existing PayPal Checkout; the pricing page passes PAYPAL_CLIENT_ID to the browser to render the buttons.
  */
+export function paypalConfigured(): boolean { return Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET); }
+
 export function paypalBase(): string {
   return process.env.PAYPAL_ENV === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
 }
@@ -67,9 +69,8 @@ export async function createWebhook(url: string) {
 }
 
 /** Ask PayPal to confirm a webhook delivery really came from them. */
-export async function verifyWebhookSignature(headers: Headers, rawBody: string): Promise<boolean> {
-  const webhookId = process.env.PAYPAL_WEBHOOK_ID;
-  if (!webhookId) throw new Error('PAYPAL_WEBHOOK_ID is not set');
+export async function verifyWebhookSignature(headers: Headers, rawBody: string, webhookId: string): Promise<boolean> {
+  if (!webhookId) throw new Error('PayPal webhook id is not known yet');
   const body = {
     auth_algo: headers.get('paypal-auth-algo'), cert_url: headers.get('paypal-cert-url'), transmission_id: headers.get('paypal-transmission-id'),
     transmission_sig: headers.get('paypal-transmission-sig'), transmission_time: headers.get('paypal-transmission-time'),

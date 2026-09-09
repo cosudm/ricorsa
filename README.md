@@ -71,21 +71,7 @@ The stable instruction prefix is marked for prompt caching, and follow-ups cache
 
 You need a PayPal Business account and a REST app (Developer Dashboard). Set `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_ENV` (`sandbox` while testing, `live` for real billing). The pricing page passes the client id to the browser to render the buttons.
 
-Create the product and plans (prices come from `src/lib/plans.ts`; change them first if you want different tiers):
-
-```bash
-npm run paypal:setup
-```
-
-This prints `PAYPAL_PLAN_PRO` and `PAYPAL_PLAN_TEAM` (and writes them to `.env.local`); put them in `wrangler.jsonc` under `vars`. The same plans can be created by hand in the PayPal dashboard (Pay & Get Paid, Subscriptions). PayPal plans are immutable, so a price change means new plans and new ids.
-
-Register the webhook once the site is reachable over HTTPS:
-
-```bash
-APP_BASE_URL=https://ricorsa.com npm run paypal:webhook
-```
-
-It prints `PAYPAL_WEBHOOK_ID`; put it in `wrangler.jsonc` under `vars`. The webhook can also be added in the PayPal developer dashboard (the app's Webhooks section, same URL and event types). Registration is idempotent. Every webhook delivery is verified with PayPal's signature endpoint, recorded once, and applied by re-fetching the subscription so the account always reflects PayPal's current view.
+That is all the configuration. The first time a signed-in person opens the pricing page, the app creates its catalog product, one billing plan per paid tier (prices from `src/lib/plans.ts`) and the webhook at `APP_BASE_URL/api/billing/paypal/webhook`, and keeps the ids in the `config` table (`src/lib/paypal-setup.ts`). If you would rather manage those by hand, set `PAYPAL_PLAN_PRO`, `PAYPAL_PLAN_TEAM` and `PAYPAL_WEBHOOK_ID` and the app uses yours; `npm run paypal:setup` and `npm run paypal:webhook` are the same steps as scripts. PayPal plans are immutable, so a price change means new plans and new ids. Every webhook delivery is verified with PayPal's signature endpoint, recorded once, and applied by re-fetching the subscription so the account always reflects PayPal's current view.
 
 How billing flows: the pricing page renders PayPal's subscription button for each paid plan with the user's id in `custom_id`. On approval the browser posts the subscription id to `/api/billing/paypal/subscribe`, the server fetches it from PayPal, checks the `custom_id`, and sets the plan. Webhooks keep it in sync afterwards (activated, suspended, cancelled, expired, payment failed). Cancel from the Account page calls PayPal's cancel endpoint and re-syncs.
 
@@ -96,7 +82,7 @@ Push this repository to GitHub. In the Cloudflare dashboard open Workers & Pages
 - Build command: `npm run cf:migrate && npx opennextjs-cloudflare build`
 - Deploy command: `npx opennextjs-cloudflare deploy`
 
-Every push to `main` then applies the D1 migrations, builds with the OpenNext Cloudflare adapter and deploys. `wrangler.jsonc` carries the non-secret configuration as `vars` (app URL, Auth0 domain and client id, PayPal client id, plan ids, webhook id, model ids) ; attach the custom domains `ricorsa.com` and `www.ricorsa.com` once in the Worker's Settings, Domains & Routes (the zone is on Cloudflare, so DNS and certificates are handled for you). Add the four secrets in the Worker's Settings, Variables and Secrets: `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET`, `ANTHROPIC_API_KEY`, `PAYPAL_CLIENT_SECRET`. Deploys keep secrets; they only replace the plain `vars`.
+Every push to `main` then applies the D1 migrations, builds with the OpenNext Cloudflare adapter and deploys. `wrangler.jsonc` carries the non-secret configuration as `vars` (app URL, Auth0 domain and client id, PayPal client id, model ids) ; attach the custom domains `ricorsa.com` and `www.ricorsa.com` once in the Worker's Settings, Domains & Routes (the zone is on Cloudflare, so DNS and certificates are handled for you). Add the four secrets in the Worker's Settings, Variables and Secrets: `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET`, `ANTHROPIC_API_KEY`, `PAYPAL_CLIENT_SECRET`. Deploys keep secrets; they only replace the plain `vars`.
 
 To deploy from your own machine instead: `npx wrangler login`, then `npm run db:migrate:remote` and `npm run cf:deploy`, and set the four secrets with `npx wrangler secret put NAME`.
 
