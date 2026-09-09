@@ -103,7 +103,7 @@ export async function POST(req: Request) {
         let wroteText = false;
         const result = await streamAnswer({
           tier: turn.tier, system, messages, signal: ctl.signal, search,
-          maxTokens: turn.mode === 'research' ? 4000 : (turn.length === 'detailed' ? 2200 : 1600),
+          maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' ? 6000 : 4000),
           onStatus: (text) => { if (!wroteText) send('status', { text }); },
           onSources: (list) => { sources = list; turn.sources = list.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url })); send('sources', turn.sources); },
           onText: (delta) => { if (!wroteText) { wroteText = true; send('status', { text: turn.mode === 'research' ? 'Working through the sources' : 'Writing' }); } raw += delta; send('delta', { text: delta }); },

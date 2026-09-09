@@ -5,10 +5,13 @@
  */
 export type PlanKey = 'free' | 'pro' | 'team';
 
+export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full' };
+
 export type Plan = {
   key: PlanKey;
   name: string;
   priceUsd: number;            // per month, 0 for free
+  caps: Caps;                  // what the identity graph and Discover can do on this plan
   paypalPlanEnv?: string;      // env var holding the PayPal plan id
   questionsPerDay: number;     // Search-mode answers per day
   questionsPerMonth: number;   // hard monthly ceiling on all answers
@@ -24,39 +27,42 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'free',
     name: 'Free',
     priceUsd: 0,
+    caps: { graph: 'preview', discover: 'locked' },
     questionsPerDay: 10,
     questionsPerMonth: 150,
     researchPerMonth: 0,
     tiers: ['quick', 'default'],
     spaces: 1,
     blurb: 'Try it and let the graph start learning you.',
-    features: ['10 questions a day', 'Live web citations', 'Your identity graph', '1 Space'],
+    features: ['10 questions a day', 'Live web citations', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
   },
   pro: {
     key: 'pro',
     name: 'Pro',
     priceUsd: 20,
     paypalPlanEnv: 'PAYPAL_PLAN_PRO',
+    caps: { graph: 'full', discover: 'locked' },
     questionsPerDay: 300,
     questionsPerMonth: 1500,
     researchPerMonth: 40,
     tiers: ['quick', 'default', 'complex'],
     spaces: 25,
-    blurb: 'For people who ask all day.',
-    features: ['Up to 1,500 questions a month', '40 Research reports a month', 'Reasoning model', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
+    blurb: 'The full identity graph, for people who ask all day.',
+    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month', '40 Research reports a month', 'Reasoning model', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
   },
   team: {
     key: 'team',
     name: 'Team',
     priceUsd: 49,
     paypalPlanEnv: 'PAYPAL_PLAN_TEAM',
+    caps: { graph: 'full', discover: 'full' },
     questionsPerDay: 1000,
     questionsPerMonth: 5000,
     researchPerMonth: 150,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100,
-    blurb: 'Higher limits for heavy, daily use.',
-    features: ['Up to 5,000 questions a month', '150 Research reports a month', 'Reasoning model', '100 Spaces', 'Priority support'],
+    blurb: 'Everything in Pro, plus Discover.',
+    features: ['Everything in Pro', 'Discover, fully unlocked: agents, apps, tools, credentials and data products drawn from your graph, each with a provenance id', 'Up to 5,000 questions a month', '150 Research reports a month', '100 Spaces', 'Priority support'],
   },
 };
 

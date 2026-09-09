@@ -1,3 +1,4 @@
+import '../globals.css'; // site styles load only on these pages; the app under /app has its own
 import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { PayPalSubscribe } from '@/components/PayPalSubscribe';

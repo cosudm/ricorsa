@@ -10,7 +10,7 @@ export type Source = { n: number; title: string; domain: string; url: string; sn
 /** How many searches a turn may run, by mode and focus. Writing focus answers without the web unless it is a Research turn. */
 export function searchPlan(mode: 'search' | 'research', focus: string): SearchOpts | null {
   if (focus === 'writing' && mode !== 'research') return null;
-  if (mode === 'research') return { maxUses: 8 };
-  if (focus === 'math') return { maxUses: 1 };
-  return { maxUses: 3 };
+  if (mode === 'research') return { maxUses: 10 };
+  if (focus === 'math') return { maxUses: 2 };
+  return { maxUses: 5 };
 }

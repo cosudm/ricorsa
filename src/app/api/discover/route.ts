@@ -6,6 +6,7 @@ import { db, schema } from '@/lib/db';
 import { quickJson } from '@/lib/llm';
 import { loadGraph, topNodes } from '@/lib/graph';
 import { graphFingerprint, sha256Hex, canonical, subjectId } from '@/lib/hash';
+import { planFor } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +42,9 @@ export const POST = handle(async (req: Request) => {
   const cat = b.data.category as Cat;
   const graph = await loadGraph(user.id);
   const nodeCount = Object.keys(graph.nodes).length;
+  const caps = planFor(user.plan).caps;
+  // Discover is generated from the graph on the Team plan; other plans see the curated examples of what it does.
+  if (caps.discover !== 'full') return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, locked: true, graphHash: await graphFingerprint(graph) });
   if (nodeCount < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, graphHash: await graphFingerprint(graph) });
 
   const day = new Date().toISOString().slice(0, 10);

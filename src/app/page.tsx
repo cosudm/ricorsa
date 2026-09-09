@@ -1,3 +1,4 @@
+import './globals.css'; // site styles load only on these pages; the app under /app has its own
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { viewer } from '@/lib/viewer';
 import { PLANS } from '@/lib/plans';

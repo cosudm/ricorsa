@@ -78,6 +78,15 @@ export function mergeLearned(g: GraphData, turn: Turn, threadId: string, origin?
   return touched;
 }
 
+/** The graph as a plan may see it. Preview plans get the strongest nodes only, without the connections, intents or origins. */
+export function graphView(g: GraphData, caps: { graph: 'preview' | 'full' }): GraphData & { preview?: boolean } {
+  if (caps.graph === 'full') return g;
+  const keep = Object.values(g.nodes).sort((a, b) => b.weight - a.weight || b.lastSeen - a.lastSeen).slice(0, 12);
+  const nodes: Record<string, GraphNode> = {};
+  for (const n of keep) { const { origin: _o, ...rest } = n; void _o; nodes[n.id] = rest; }
+  return { ...g, nodes, edges: {}, intents: [], preview: true };
+}
+
 export function topNodes(g: GraphData, type: string, n = 8): GraphNode[] {
   return Object.values(g.nodes).filter(x => x.type === type).sort((a, b) => b.weight - a.weight || b.lastSeen - a.lastSeen).slice(0, n);
 }

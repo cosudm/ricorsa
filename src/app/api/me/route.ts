@@ -5,7 +5,7 @@ import { handle, json, readJson, fail } from '@/lib/http';
 import { planFor } from '@/lib/plans';
 import { readUsage } from '@/lib/usage';
 import { listThreads } from '@/lib/threads';
-import { loadGraph } from '@/lib/graph';
+import { loadGraph, graphView } from '@/lib/graph';
 import { db, schema } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -22,11 +22,12 @@ export const GET = handle(async () => {
   const plan = planFor(user.plan);
   return json({
     user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings },
-    plan: { key: plan.key, name: plan.name, tiers: plan.tiers, questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
+    plan: { key: plan.key, name: plan.name, caps: plan.caps, tiers: plan.tiers, questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
     usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research },
     threads,
     spaces: spaces.map(s => ({ ...s, createdAt: new Date(s.createdAt).getTime() })),
-    graph,
+    graph: graphView(graph, plan.caps),
+    graphSize: Object.keys(graph.nodes).length,
   });
 });
 

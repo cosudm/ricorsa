@@ -114,9 +114,10 @@ async function runStream(o: {
               if (r.type !== 'web_search_result' || !r.url || !/^https?:\/\//.test(r.url)) continue;
               const before = sources.length; sourceFor(r.url, r.title || null); if (sources.length > before) added = true;
             }
+            console.log('[search] results', content.length, 'sources', sources.length);
             if (added) o.onSources?.(sources.map(s => ({ ...s })));
           } else if (content && typeof content === 'object' && (content as { type?: string }).type === 'web_search_tool_result_error') {
-            console.warn('web search error', (content as { error_code?: string }).error_code);
+            console.log('[search] error', (content as { error_code?: string }).error_code);
           }
         } else if (b.type === 'server_tool_use') { toolInput.set(ev.index, ''); }
       } else if (ev.type === 'content_block_delta') {
@@ -137,7 +138,16 @@ async function runStream(o: {
     const final = await stream.finalMessage();
     const u = final.usage as unknown as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; server_tool_use?: { web_search_requests?: number } };
     usage.in += u.input_tokens || 0; usage.out += u.output_tokens || 0; usage.cacheRead += u.cache_read_input_tokens || 0; usage.cacheWrite += u.cache_creation_input_tokens || 0; usage.searches += u.server_tool_use?.web_search_requests || 0;
+    const cited = final.content.filter(c => c.type === 'text' && Array.isArray((c as { citations?: unknown[] }).citations) && (c as { citations: unknown[] }).citations.length).length;
+    console.log('[answer]', JSON.stringify({ round, stop: final.stop_reason, searches: u.server_tool_use?.web_search_requests || 0, sources: sources.length, citedBlocks: cited, markers: (out.match(/\[\d{1,2}\]/g) || []).length, chars: out.length, model: o.model }));
     if (final.stop_reason === 'pause_turn' && round < 3) { messages.push({ role: 'assistant', content: final.content }); continue; }
+    if (final.stop_reason === 'max_tokens' && round < 3 && out.trim().length > 0 && !/<\/learned>\s*$/.test(out)) {
+      // Ran out of room mid-answer: hand the text back as a prefill and let the model carry on where it stopped.
+      const last = messages[messages.length - 1];
+      if (last && last.role === 'assistant') messages.pop();
+      messages.push({ role: 'assistant', content: out.replace(/\s+$/, '') });
+      continue;
+    }
     truncated = final.stop_reason === 'max_tokens';
     break;
   }

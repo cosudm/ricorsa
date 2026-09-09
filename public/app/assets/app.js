@@ -56,7 +56,9 @@ const ICONS = {
 };
 function icon(name, size = 18, extra = '') {
   const body = ICONS[name] || '';
-  return `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${body}</svg>`;
+  let cls = 'ico';
+  extra = String(extra || '').replace(/\bclass="([^"]*)"/, (_, c) => { cls += ' ' + c; return ''; }).trim();
+  return `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${body}</svg>`;
 }
 const SPIRAL = 'M12 4 L13.17 4.18 L14.29 4.52 L15.34 5.01 L16.29 5.63 L17.14 6.38 L17.87 7.23 L18.45 8.16 L18.9 9.15 L19.2 10.19 L19.34 11.24 L19.33 12.28 L19.18 13.31 L18.89 14.28 L18.47 15.2 L17.92 16.03 L17.28 16.77 L16.55 17.4 L15.74 17.91 L14.89 18.29 L14 18.55 L13.09 18.67 L12.2 18.67 L11.32 18.54 L10.49 18.29 L9.71 17.93 L9 17.47 L8.38 16.92 L7.85 16.3 L7.42 15.62 L7.1 14.9 L6.89 14.15 L6.79 13.39 L6.8 12.65 L6.91 11.92 L7.12 11.23 L7.43 10.59 L7.81 10.01 L8.27 9.5 L8.78 9.08 L9.34 8.74 L9.93 8.48 L10.53 8.32 L11.14 8.25 L11.74 8.27 L12.32 8.37 L12.86 8.55 L13.36 8.8 L13.81 9.11 L14.2 9.47 L14.52 9.88 L14.77 10.32 L14.95 10.78 L15.06 11.24 L15.1 11.71 L15.07 12.16 L14.98 12.59 L14.83 12.99 L14.62 13.34 L14.38 13.66 L14.1 13.93';
 // The mark: a spiral converging on its fixed point, recursion arriving somewhere.
@@ -129,7 +131,7 @@ function apiToast(e, fallback) {
 async function bootstrap() {
   const me = await api('/api/me');
   state.user = me.user; state.plan = me.plan; state.usage = me.usage;
-  state.threads = me.threads; state.spaces = me.spaces; state.graph = me.graph;
+  state.threads = me.threads; state.spaces = me.spaces; state.graph = me.graph; state.graphSize = me.graphSize || 0;
   state.settings = Object.assign({}, DEFAULT_SETTINGS, me.user.settings || {});
   state.ready = true;
 }
@@ -257,7 +259,13 @@ function renderSidebar() {
     const name = state.user.name || state.user.email || 'You';
     const planName = state.plan ? state.plan.name : 'Free';
     acct.innerHTML = `<span class="avatar">${esc(name[0] || 'Y').toUpperCase()}</span><span class="lbl acct-lbl"><span class="acct-name">${esc(truncate(name, 22))}</span><span class="acct-plan">${esc(planName)} plan</span></span>`;
-    const up = $('#upgradeRow'); if (up) up.hidden = !(state.plan && state.plan.key === 'free');
+    const up = $('#upgradeRow');
+    if (up) {
+      const k = state.plan ? state.plan.key : 'free';
+      up.hidden = k === 'team';
+      const lbl = up.querySelector('span:last-child'); if (lbl) lbl.textContent = k === 'pro' ? 'Upgrade to Team' : 'Upgrade to Pro';
+      up.title = k === 'pro' ? 'Team unlocks Discover: build agents, apps and tools from your graph' : 'Pro unlocks the full identity graph';
+    }
   }
 }
 function setupSidebar() {
@@ -664,20 +672,22 @@ function createComposer(o) {
     <div class="composer-bar">
       <div class="left">
         <div class="seg" role="radiogroup" aria-label="Mode">
-          ${Object.entries(MODES).map(([k, m]) => `<button type="button" data-mode="${k}" class="${k}" role="radio" aria-checked="${c.mode === k}">${icon(m.icon, 15)}<span>${m.label}</span></button>`).join('')}
+          ${Object.entries(MODES).map(([k, m]) => `<button type="button" data-mode="${k}" class="${k}" role="radio" aria-checked="${c.mode === k}" title="${esc(m.label)}: ${esc(m.desc)}">${icon(m.icon, 15)}<span>${m.label}</span></button>`).join('')}
         </div>
       </div>
       <div class="right">
         <button type="button" class="icon-btn" data-attach-btn aria-label="Attach image" title="Attach image" hidden>${icon('paperclip', 17)}</button>
-        <button type="button" class="chip-btn" data-tier aria-haspopup="menu" aria-expanded="false" title="Model"></button>
-        <button type="button" class="chip-btn" data-focus aria-haspopup="menu" aria-expanded="false" title="Focus"></button>
-        <button type="button" class="send" data-send aria-label="Ask" disabled>${icon('arrowRight', 18)}</button>
+        <button type="button" class="chip-btn" data-tier aria-haspopup="menu" aria-expanded="false" title="Model: which model answers"></button>
+        <button type="button" class="chip-btn" data-focus aria-haspopup="menu" aria-expanded="false" title="Focus: what kind of answer you want"></button>
+        <button type="button" class="send" data-send aria-label="Ask" title="Send (Enter)" disabled>${icon('arrowRight', 18)}</button>
       </div>
     </div>`;
   const ta = $('textarea', el), send = $('[data-send]', el), attachBtn = $('[data-attach-btn]', el), attachRow = $('[data-attach]', el);
   const paintChips = () => {
     $$('[data-mode]', el).forEach(b => { const on = b.dataset.mode === c.mode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
     $('[data-tier]', el).innerHTML = icon(TIERS[c.tier].icon, 15) + `<span class="lbl">${TIERS[c.tier].label}</span>` + icon('chevron', 13, 'class="caret"');
+    $('[data-tier]', el).title = `Model: ${TIERS[c.tier].label}. ${TIERS[c.tier].desc}. Click to change.`;
+    $('[data-focus]', el).title = `Focus: ${FOCI[c.focus].label}. ${FOCI[c.focus].desc}. Click to change.`;
     $('[data-focus]', el).innerHTML = icon(FOCI[c.focus].icon, 15) + (c.focus !== 'web' ? `<span class="lbl">${FOCI[c.focus].label}</span>` : '') + icon('chevron', 13, 'class="caret"');
   };
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; if (o.variant === 'compact') el.classList.toggle('multiline', ta.scrollHeight > 44 || c.images.length > 0); };
@@ -732,13 +742,31 @@ function createComposer(o) {
   return el;
 }
 
+// ---------- Plans ----------
+function caps() { return (state.plan && state.plan.caps) || { graph: 'preview', discover: 'locked' }; }
+function upgradeCard(title, body, plan) {
+  return `<div class="upgrade-card">${icon('sparkles', 20)}<div><b>${esc(title)}</b><p>${esc(body)}</p></div><a class="btn primary sm" href="/pricing" title="See plans and upgrade">Upgrade to ${esc(plan)}</a></div>`;
+}
+
 // ---------- Home ----------
-const HOME_TILES = [
-  { icon: 'compare', q: 'Compare Rust and Go for building a high-throughput API' },
-  { icon: 'lightbulb', q: 'Explain how transformer models work, in plain language' },
-  { icon: 'map', q: 'Plan a three-day, food-focused trip to Mexico City' },
-  { icon: 'sun', q: 'Why is the sky blue but sunsets are red?' },
-];
+// Suggested questions come from the person's own graph (see /api/prompts) and only once it has started to form.
+const ASPECTS = {
+  topic: { label: 'Topic', icon: 'lightbulb', tip: 'Deepens a topic in your graph' },
+  entity: { label: 'Entity', icon: 'compare', tip: 'Adds a tool, company, product or place to your graph' },
+  goal: { label: 'Goal', icon: 'map', tip: 'Records a goal in your graph' },
+  expertise: { label: 'Expertise', icon: 'graduation', tip: 'Shows Ricorsa your level in an area' },
+  style: { label: 'Style', icon: 'pen', tip: 'Teaches Ricorsa how you like answers' },
+};
+async function loadPrompts() {
+  const stamp = state.graph ? `${state.graph.events}:${state.graph.updatedAt}` : '0';
+  if (state.promptsStamp === stamp && state.prompts) return state.prompts;
+  try { const r = await api('/api/prompts'); state.prompts = r.items || []; state.promptsStamp = stamp; } catch { state.prompts = state.prompts || []; }
+  return state.prompts;
+}
+function tilesHtml(items) {
+  if (!items || !items.length) return '';
+  return `<div class="tiles-head">${icon('loop', 14)}<span>Suggested from your graph</span></div><div class="tiles">${items.map((t, i) => { const a = ASPECTS[t.aspect] || ASPECTS.topic; return `<button type="button" class="tile" data-tile="${i}" title="${esc(t.why || a.tip)}">${icon(a.icon, 17)}<span>${esc(t.q)}</span><em class="aspect">${esc(a.label)}</em></button>`; }).join('')}</div>`;
+}
 function learnLine() {
   const g = state.graph; if (!g) return '';
   if (g.paused) return `<div class="learn-line">${icon('pause', 14)}<span>Learning is paused, your questions aren’t shaping the graph.</span><a href="#/graph">Resume</a></div>`;
@@ -761,7 +789,7 @@ function renderHome() {
     ${learnLine()}
     <div data-notice>${quotaNotice()}</div>
     <div data-composer></div>
-    <div class="tiles">${HOME_TILES.map((t, i) => `<button type="button" class="tile" data-tile="${i}">${icon(t.icon, 17)}<span>${esc(t.q)}</span></button>`).join('')}</div>
+    <div data-tiles>${tilesHtml(state.prompts)}</div>
   </div></div></div>`;
   const comp = createComposer({
     variant: 'hero', initial: state.composerDraft,
@@ -769,7 +797,9 @@ function renderHome() {
     onSubmit: ({ text, mode, tier, focus, images, imageCount }) => { state.composerDraft = ''; startThread(text, { mode, tier, focus, images, imageCount }); }
   });
   $('[data-composer]', main).appendChild(comp);
-  $$('[data-tile]', main).forEach(b => b.addEventListener('click', () => comp._composer.set(HOME_TILES[+b.dataset.tile].q)));
+  const wireTiles = () => $$('[data-tile]', main).forEach(b => b.addEventListener('click', () => comp._composer.set(state.prompts[+b.dataset.tile].q)));
+  wireTiles();
+  loadPrompts().then(items => { const box = $('[data-tiles]', main); if (box && box.isConnected) { box.innerHTML = tilesHtml(items); wireTiles(); } });
   wireTopbar(main);
   if (!('ontouchstart' in window)) comp._composer.ta.focus();
 }
@@ -836,6 +866,7 @@ function threadMenu(anchor, thread) {
   })) });
 }
 function provenanceModal(thread) {
+  if (caps().graph !== 'full') { openModal(`<h2>${icon('loop', 20)}Provenance</h2><p class="sub">Every thread and every node carries a cryptographic id that traces where it began. The full chain is part of the Pro identity graph.</p>${upgradeCard('See the provenance chain', 'Pro shows the origin of this thread, the hash of every turn, and which graph nodes each one added.', 'Pro')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
   const o = thread.origin || null;
   const rows = [];
   if (o) {
@@ -917,7 +948,7 @@ function paintTurn(sec, thread, t) {
     const planIssue = PLAN_CODES.has(t.error);
     noteHtml = `<div class="err-box">${icon('alert', 17)}<div>${esc(t.errorMessage || ERROR_COPY[t.error] || ERROR_COPY.upstream_error)}${planIssue ? ' <a href="/pricing">See plans</a>.' : ''}</div>${!planIssue ? `<button type="button" class="btn sm" data-retry>${icon('refresh', 14)}Retry</button>` : ''}</div>`;
   }
-  if (t.status === 'done' && t.truncated) noteHtml += `<div class="answer-note warn">${icon('alert', 14)}The answer was cut short, ask for less at a time, or continue with a follow-up.</div>`;
+  if (t.status === 'done' && t.truncated) noteHtml += `<div class="answer-note warn">${icon('alert', 14)}This answer ran unusually long and was trimmed at the end. Ask a follow-up to keep going.</div>`;
   if (t.status === 'done' && t.tierApplied && t.tier && t.tierApplied !== t.tier) noteHtml += `<div class="answer-note">${icon('info', 14)}Answered with the ${TIERS[t.tierApplied] ? TIERS[t.tierApplied].label : t.tierApplied} model, your plan doesn’t include ${TIERS[t.tier] ? TIERS[t.tier].label : t.tier}.</div>`;
   if (t.status === 'done') noteHtml += `<div class="answer-note">${icon('info', 14)}Sources were retrieved from the web when you asked. Ricorsa can still misread them, so verify important details.</div>`;
   note.innerHTML = noteHtml;
@@ -1033,10 +1064,12 @@ function renderDiscover() {
   const cat = state.discoverCat; const hue = DISCOVER_HUES[cat] || 205;
   const entry = state.discoverGen[cat];
   const items = entry ? entry.items : null;
-  const nodes = state.graph ? Object.keys(state.graph.nodes).length : 0;
+  const nodes = state.graphSize || (state.graph ? Object.keys(state.graph.nodes).length : 0);
   const personal = entry && entry.personal;
+  const locked = caps().discover !== 'full';
   main.innerHTML = `<div class="view">${topbarHtml('Discover')}<div class="scroll"><div class="col wide">
-    <div class="page-h"><h1>${icon('compass', 26)}Discover</h1><div class="disc-tools">${personal ? `<span class="gen-tag">${icon('loop', 14)}Built from your graph</span>` : ''}<button type="button" class="btn sm" data-gen>${icon('sparkles', 15)}<span>${items ? 'Generate again' : 'Generate from my graph'}</span></button></div></div>
+    <div class="page-h"><h1>${icon('compass', 26)}Discover</h1><div class="disc-tools">${personal ? `<span class="gen-tag">${icon('loop', 14)}Built from your graph</span>` : ''}<button type="button" class="btn sm" data-gen>${icon('sparkles', 15)}<span>${locked ? 'Generate from my graph' : items ? 'Generate again' : 'Generate from my graph'}</span></button></div></div>
+    ${locked ? upgradeCard('Discover builds from your graph on the Team plan', 'Agents, apps, tools, credentials and data products proposed from your own identity graph, each stamped with a provenance id. Below are examples of what it produces.', 'Team') : ''}
     <p class="page-sub">What your identity graph can become. ${nodes >= 3 ? 'These ideas are drawn from the topics, entities, goals and expertise in your graph. Open one to start building it with Ricorsa.' : 'Ask a few questions first and these will be drawn from your own graph; until then, here is what an identity graph can create.'} Every idea carries a cryptographic id tied to the exact state of your graph it came from, so anything built from it can be traced back to its origin.${entry && entry.graphHash ? ` <span class="hash" title="SHA-256 fingerprint of your graph at generation time">${icon('loop', 11)}graph ${esc(shortHash(entry.graphHash))}</span>` : ''}</p>
     <div class="cat-row">${DISCOVER_CATS.map(c => `<button type="button" class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
     <div class="disc-grid" data-grid>${items ? items.map((it, i) => discoverCard(it, i, cat)).join('') : `<div class="g-empty" style="grid-column:1/-1">${icon('loop', 30)}<div>Nothing generated yet for ${esc(cat)}.</div><p>Press “Generate from my graph” and Ricorsa will propose things you could build.</p></div>`}</div>
@@ -1049,7 +1082,8 @@ function renderDiscover() {
     const origin = it && it.id ? { kind: 'discover', ideaId: it.id, graphHash: it.graphHash, category: cat, title: it.title, at: it.at || Date.now() } : null;
     startThread(b.dataset.q, { mode: 'search', tier: state.settings.tier, focus: 'web', origin });
   }));
-  $('[data-gen]', main).addEventListener('click', () => fetchDiscover(cat, !!items));
+  const genBtn = $('[data-gen]', main);
+  if (locked) { genBtn.disabled = true; genBtn.title = 'Generating from your graph is part of the Team plan'; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items));
   if (!items && !state.discoverTried[cat]) { state.discoverTried[cat] = true; fetchDiscover(cat, false); }
   wireTopbar(main);
 }
@@ -1221,14 +1255,16 @@ function renderGraph() {
     const list = all.filter(n => n.type === t);
     return `<div class="g-type${t === 'topic' ? ' wide' : ''}"><h3><span class="sw dot ${T.shape}" style="display:inline-block;width:10px;height:10px;border-radius:${T.shape === 'circle' || T.shape === 'ring' ? '50%' : '2px'};background:${T.shape === 'ring' ? 'transparent' : T.hex};${T.shape === 'ring' ? `border:2px solid ${T.hex};box-sizing:border-box;` : ''}${T.shape === 'diamond' ? 'transform:rotate(45deg) scale(.85);' : ''}${T.shape === 'hex' ? 'clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);border-radius:0;' : ''}"></span>${T.label}<span class="gen-tag">${list.length}</span></h3><p>${T.desc}</p><div class="chips">${list.length ? list.map(n => nodeChip(t, n.label, `<span class="cnt" title="Seen ${n.count} time${n.count === 1 ? '' : 's'} · weight ${(n.weight * 100).toFixed(0)}">×${n.count}</span>${n.level ? `<span class="lvl">${esc(n.level)}</span>` : ''}`, n.id)).join('') : '<span class="none">Nothing yet</span>'}</div></div>`;
   }).join('');
+  const preview = caps().graph !== 'full';
   main.innerHTML = `<div class="view">${topbarHtml('Your graph')}<div class="scroll"><div class="col wide">
     <div class="page-h"><h1>${icon('loop', 26)}Your graph</h1><div class="g-controls"><label class="switch${g.paused ? '' : ' on'}" id="learnSwitch"><i></i><span>${g.paused ? 'Learning paused' : 'Learning on'}</span></label><button type="button" class="btn sm" id="gExport">${icon('download', 14)}<span>Export</span></button><button type="button" class="btn sm danger" id="gReset">Reset</button></div></div>
     <p class="page-sub">What Ricorsa has learned about you from ${g.events} conversation${g.events === 1 ? '' : 's'}. It belongs to your account, follows you across devices, and is folded into every question you ask so your intent is read better each time. Weights strengthen with repetition and fade when unused; forget anything with the \u00d7 on a chip.</p>
     ${g.paused ? `<div class="paused-banner">${icon('pause', 16)}<span>Learning is paused. Answers still use what’s here, but new conversations won’t change it.</span></div>` : ''}
     <div class="g-stats"><div class="g-stat"><b>${all.length}</b><span>nodes</span></div><div class="g-stat"><b>${Object.keys(g.edges).length}</b><span>connections</span></div><div class="g-stat"><b>${g.events}</b><span>learning events</span></div><div class="g-stat"><b>${g.intents.length}</b><span>intents recorded</span></div></div>
+    ${preview ? upgradeCard('This is the preview of your graph', `Ricorsa is learning you on every plan. Pro shows the whole graph: the living map, how nodes connect, what you have been trying to do lately, and where each node came from.${all.length ? ` You have ${state.graphSize || all.length} nodes so far.` : ''}`, 'Pro') : ''}
     ${g.intents.length ? `<div class="intents"><h3>Lately you’ve been trying to</h3><ol>${g.intents.slice(0, 5).map(i => `<li>${esc(i.text.replace(/^You(’|')re\s+/i, '').replace(/^You\s+(want|need|are)\s+/i, ''))}<span class="when">${relTime(i.at)}</span></li>`).join('')}</ol></div>` : ''}
-    ${drawn.length ? `<div class="g-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Map of what Ricorsa has learned: ${all.length} nodes">${svg}</svg><div class="g-tip" id="gTip"></div><div class="g-legend">${Object.entries(NODE_TYPES).map(([t, T]) => `<span><i class="sw ${T.shape}" style="background:${T.hex}"></i>${T.label}</span>`).join('')}<span style="margin-left:auto;color:var(--ink-3)">Size = weight · lines = asked about together</span></div></div>`
-      : `<div class="g-empty">${icon('loop', 30)}<div>Nothing learned yet.</div><p>Ask a few questions and come back, each answer adds what it revealed about what you’re working on.</p><p><a href="#/">Ask something</a></p></div>`}
+    ${drawn.length && !preview ? `<div class="g-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Map of what Ricorsa has learned: ${all.length} nodes">${svg}</svg><div class="g-tip" id="gTip"></div><div class="g-legend">${Object.entries(NODE_TYPES).map(([t, T]) => `<span><i class="sw ${T.shape}" style="background:${T.hex}"></i>${T.label}</span>`).join('')}<span style="margin-left:auto;color:var(--ink-3)">Size = weight · lines = asked about together</span></div></div>`
+      : drawn.length ? '' : `<div class="g-empty">${icon('loop', 30)}<div>Nothing learned yet.</div><p>Ask a few questions and come back, each answer adds what it revealed about what you’re working on.</p><p><a href="#/">Ask something</a></p></div>`}
     <div class="g-types">${typeCards}</div>
   </div></div></div>`;
   // interactions
