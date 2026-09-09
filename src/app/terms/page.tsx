@@ -1,5 +1,8 @@
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { viewer } from '@/lib/viewer';
+
+// Rendered per request: the nav reflects the signed-in state, which comes from the session cookie.
+export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Terms' };
 export default async function Terms() {
   const v = await viewer();

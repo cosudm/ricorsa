@@ -2,6 +2,9 @@ import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { viewer } from '@/lib/viewer';
 import { PLANS } from '@/lib/plans';
 
+// Rendered per request: the nav reflects the signed-in state, which comes from the session cookie.
+export const dynamic = 'force-dynamic';
+
 export default async function Landing() {
   const v = await viewer();
   const signup = '/auth/login?screen_hint=signup&returnTo=/app';
