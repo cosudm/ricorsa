@@ -1,0 +1,15 @@
+*.log
+.DS_Store
+.data
+.env
+.env.*.local
+.env.local
+.next
+.open-next
+.vercel
+.wrangler
+node_modules
+out
+worker-configuration.d.ts
+tsconfig.tsbuildinfo
+next-env.d.ts

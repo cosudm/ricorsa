@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ricorsa",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "observability": { "enabled": true },
+  // Custom domains (ricorsa.com, www.ricorsa.com) are attached in the dashboard: Worker, Settings, Domains & Routes.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "ricorsa", "database_id": "47395d3b-09a7-403f-ad59-602ecb4fe1ff", "migrations_dir": "drizzle" }
+  ],
+  // Plain configuration. Secrets (AUTH0_CLIENT_SECRET, AUTH0_SECRET, ANTHROPIC_API_KEY, PAYPAL_CLIENT_SECRET)
+  // are set on the Worker (Settings, Variables and Secrets) and survive deploys.
+  "vars": {
+    "NEXT_PUBLIC_APP_NAME": "Ricorsa",
+    "APP_BASE_URL": "https://ricorsa.com",
+    "AUTH0_DOMAIN": "",
+    "AUTH0_CLIENT_ID": "",
+    "MODEL_QUICK": "claude-haiku-4-5",
+    "MODEL_DEFAULT": "claude-sonnet-5",
+    "MODEL_COMPLEX": "claude-opus-5",
+    "PAYPAL_ENV": "live",
+    "PAYPAL_CLIENT_ID": "",
+    "PAYPAL_PLAN_PRO": "",
+    "PAYPAL_PLAN_TEAM": "",
+    "PAYPAL_WEBHOOK_ID": ""
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "name": "ricorsa",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ricorsa: an answer engine that learns you. Subscription SaaS build.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "cf:types": "wrangler types",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply ricorsa --local",
+    "db:migrate:remote": "wrangler d1 migrations apply ricorsa --remote",
+    "paypal:setup": "tsx scripts/paypal-setup.ts",
+    "paypal:webhook": "tsx scripts/paypal-webhook.ts",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cf:migrate": "wrangler d1 migrations apply ricorsa --remote"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
+    "@auth0/nextjs-auth0": "^4.29.0",
+    "drizzle-orm": "^0.45.2",
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "@opennextjs/cloudflare": "^1.20.6",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "critters": "^0.0.25",
+    "dotenv": "^17.0.0",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.130.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
