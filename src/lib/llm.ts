@@ -166,7 +166,8 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400): P
   } catch (e) { console.warn('quickJson failed', e); return null; }
 }
 
-async function mockStream(opts: { messages: Msg[]; search?: SearchOpts | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
+async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
+  if (opts.system?.[0]?.text.startsWith("You are Ricorsa's builder")) return mockBuild(opts, model);
   const q = opts.messages[opts.messages.length - 1]?.content.split('Question:').pop()?.trim().slice(0, 80) || 'your question';
   const sources: Source[] = opts.search ? mockSources(q) : [];
   if (opts.search) { opts.onStatus?.(`Searching: ${q.slice(0, 60)}`); await new Promise(r => setTimeout(r, 300)); opts.onSources?.(sources); }
@@ -200,6 +201,36 @@ Where do exported files go?
     opts.onText(full.slice(i, i + 24));
   }
   return { text: full, truncated: false, model, sources, usage: { in: 1200, out: 320, cacheRead: 900, cacheWrite: 0, searches: sources.length ? 1 : 0 } };
+}
+
+async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
+  const title = (opts.messages[0]?.content.match(/Idea to build: (.*)/) || [])[1] || 'Your app';
+  const full = `<plan>
+- A small working tracker for "${title}"
+- One screen: add items, mark them done, see a running total
+- Remembers everything in this browser
+</plan>
+<app>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<style>body{font-family:system-ui,sans-serif;margin:0;background:#fbfbf9;color:#1b2228}main{max-width:640px;margin:0 auto;padding:32px 20px}h1{font-size:24px;margin:0 0 6px}p{color:#55606b}form{display:flex;gap:8px;margin:18px 0}input{flex:1;padding:10px 12px;border:1px solid #cfcfc7;border-radius:10px;font:inherit}button{padding:10px 14px;border:0;border-radius:10px;background:#2d5f8a;color:#fff;font:inherit;cursor:pointer}ul{list-style:none;padding:0;margin:0}li{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #e5e5df}li.done span{text-decoration:line-through;color:#8a939c}footer{margin-top:28px;font-size:12px;color:#8a939c}</style></head>
+<body><main><h1>${title}</h1><p>A mock build from the development stub. Add a few items below.</p>
+<form id="f"><input id="t" placeholder="Add something" aria-label="Add an item" required><button type="submit">Add</button></form>
+<ul id="l"></ul><p id="c"></p><footer>Built by Ricorsa from your identity graph</footer></main>
+<script>
+var items=[];try{items=JSON.parse(localStorage.getItem('mock-items')||'[]')}catch(e){}
+function save(){try{localStorage.setItem('mock-items',JSON.stringify(items))}catch(e){}}
+function render(){var l=document.getElementById('l');l.innerHTML='';items.forEach(function(it,i){var li=document.createElement('li');if(it.done)li.className='done';var cb=document.createElement('input');cb.type='checkbox';cb.checked=!!it.done;cb.onchange=function(){it.done=cb.checked;save();render()};var s=document.createElement('span');s.textContent=it.text;li.appendChild(cb);li.appendChild(s);l.appendChild(li)});document.getElementById('c').textContent=items.filter(function(x){return x.done}).length+' of '+items.length+' done'}
+document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var t=document.getElementById('t');items.push({text:t.value,done:false});t.value='';save();render()});
+render();
+</script></body></html>
+</app>`;
+  for (let i = 0; i < full.length; i += 40) {
+    if (opts.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    await new Promise(r => setTimeout(r, 12));
+    opts.onText(full.slice(i, i + 40));
+  }
+  return { text: full, truncated: false, model, sources: [], usage: { in: 900, out: 700, cacheRead: 0, cacheWrite: 0, searches: 0 } };
 }
 
 function mockSources(query: string): Source[] {

@@ -181,7 +181,7 @@ function parseRoute() {
   const h = location.hash.replace(/^#\/?/, '');
   const [name, id] = h.split('/');
   if (!name) return { name: 'home' };
-  if (['thread', 'space'].includes(name) && id) return { name, id };
+  if (['thread', 'space', 'build'].includes(name) && id) return { name, id };
   if (['discover', 'spaces', 'library', 'graph', 'account'].includes(name)) return { name };
   return { name: 'home' };
 }
@@ -1071,17 +1071,21 @@ function renderDiscover() {
     <div class="page-h"><h1>${icon('compass', 26)}Discover</h1><div class="disc-tools">${personal ? `<span class="gen-tag">${icon('loop', 14)}Built from your graph</span>` : ''}<button type="button" class="btn sm" data-gen>${icon('sparkles', 15)}<span>${locked ? 'Generate from my graph' : items ? 'Generate again' : 'Generate from my graph'}</span></button></div></div>
     ${locked ? upgradeCard('Discover builds from your graph on the Team plan', 'Agents, apps, tools, credentials and data products proposed from your own identity graph, each stamped with a provenance id. Below are examples of what it produces.', 'Team') : ''}
     <p class="page-sub">What your identity graph can become. ${nodes >= 3 ? 'These ideas are drawn from the topics, entities, goals and expertise in your graph. Open one to start building it with Ricorsa.' : 'Ask a few questions first and these will be drawn from your own graph; until then, here is what an identity graph can create.'} Every idea carries a cryptographic id tied to the exact state of your graph it came from, so anything built from it can be traced back to its origin.${entry && entry.graphHash ? ` <span class="hash" title="SHA-256 fingerprint of your graph at generation time">${icon('loop', 11)}graph ${esc(shortHash(entry.graphHash))}</span>` : ''}</p>
+    ${buildsRowHtml()}
     <div class="cat-row">${DISCOVER_CATS.map(c => `<button type="button" class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
     <div class="disc-grid" data-grid>${items ? items.map((it, i) => discoverCard(it, i, cat)).join('') : `<div class="g-empty" style="grid-column:1/-1">${icon('loop', 30)}<div>Nothing generated yet for ${esc(cat)}.</div><p>Press “Generate from my graph” and Ricorsa will propose things you could build.</p></div>`}</div>
   </div></div></div>`;
   let seedBase = 0; for (const ch of cat) seedBase = seedBase * 31 + ch.charCodeAt(0);
   $$('canvas.art', main).forEach(cv => drawArt(cv, seedBase * 97 + (+cv.dataset.seed) * 7919, hue));
   $$('[data-cat]', main).forEach(b => b.addEventListener('click', () => { state.discoverCat = b.dataset.cat; if (!state.discoverGen[b.dataset.cat]) fetchDiscover(b.dataset.cat, false); renderDiscover(); }));
+  if (!state.builds) loadBuilds().then(() => { if (state.route.name === 'discover') { const row = $('[data-builds-row]', main); if (row) row.outerHTML = buildsRowHtml(); wireBuildsRow(main); } });
+  wireBuildsRow(main);
   $$('[data-q]', main).forEach(b => b.addEventListener('click', () => {
     const it = items ? items[+b.dataset.idx] : null;
     const origin = it && it.id ? { kind: 'discover', ideaId: it.id, graphHash: it.graphHash, category: cat, title: it.title, at: it.at || Date.now() } : null;
     startThread(b.dataset.q, { mode: 'search', tier: state.settings.tier, focus: 'web', origin });
   }));
+  $$('[data-build]', main).forEach(b => b.addEventListener('click', () => { const it = items ? items[+b.dataset.build] : null; if (it) startBuild(it, cat); }));
   const genBtn = $('[data-gen]', main);
   if (locked) { genBtn.disabled = true; genBtn.title = 'Generating from your graph is part of the Team plan'; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items));
   if (!items && !state.discoverTried[cat]) { state.discoverTried[cat] = true; fetchDiscover(cat, false); }
@@ -1090,7 +1094,8 @@ function renderDiscover() {
 function discoverCard(it, i, cat) {
   const builds = (it.builds || []).slice(0, 4).map(x => `<span class="nchip"><span class="dot circle" style="background:var(--accent)"></span><span>${esc(x)}</span></span>`).join('');
   const hash = it.id ? `<span class="hash" title="Provenance id ${esc(it.id)} · graph ${esc(it.graphHash || '')}">${icon('loop', 11)}${esc(shortHash(it.id))}</span>` : '';
-  return `<button type="button" class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}" data-q="${esc(it.prompt || it.title)}"><canvas class="art" data-seed="${i + 1}" aria-hidden="true"></canvas><div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button>`;
+  const buildTip = caps().discover === 'full' ? 'Build a working version of this, personalised with your graph' : 'Building from Discover is part of the Team plan';
+  return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}"><button type="button" class="disc-open" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Ask Ricorsa about this idea"><canvas class="art" data-seed="${i + 1}" aria-hidden="true"></canvas><div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button><div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Start a thread about this idea">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
 }
 async function fetchDiscover(cat, refresh) {
   const btn = $('[data-gen]'); if (btn) { btn.disabled = true; btn.innerHTML = icon('sparkles', 15) + '<span class="dots">Generating</span>'; }
@@ -1099,6 +1104,90 @@ async function fetchDiscover(cat, refresh) {
     state.discoverGen[cat] = { items: r.items, personal: !!r.personal, graphHash: r.graphHash || null };
   } catch (err) { apiToast(err, 'Could not generate ideas right now'); }
   if (state.route.name === 'discover' && state.discoverCat === cat) renderDiscover();
+}
+
+// ---------- Builds ----------
+async function loadBuilds() { try { const r = await api('/api/builds'); state.builds = r.builds || []; } catch { state.builds = state.builds || []; } return state.builds; }
+function buildsRowHtml() {
+  const list = state.builds || [];
+  if (!list.length) return '<div data-builds-row hidden></div>';
+  return `<div class="builds-row" data-builds-row><div class="tiles-head">${icon('zap', 14)}<span>Your builds</span></div><div class="builds-list">${list.slice(0, 8).map(b => `<a class="build-chip" href="#/build/${esc(b.id)}" title="${esc(b.summary || b.title)}"><span class="k">${esc(b.kind || 'App')}</span><span class="t">${esc(truncate(b.title, 48))}</span><span class="s ${esc(b.status)}">${b.status === 'building' ? 'building' : b.status === 'error' ? 'stopped' : 'ready'}</span></a>`).join('')}</div></div>`;
+}
+function wireBuildsRow() {}
+function startBuild(it, cat, opts = {}) {
+  if (caps().discover !== 'full') { openModal(`<h2>${icon('zap', 20)}Build it</h2><p class="sub">Ricorsa turns a Discover idea into a working app, personalised with your graph, and shows it here as it is written.</p>${upgradeCard('Building is part of the Team plan', 'Team unlocks Discover fully: ideas generated from your own graph, and any of them built into a working app or tool with a provenance id.', 'Team')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
+  const id = 'pending';
+  state.buildLive = { id, title: it.title, kind: it.kind || 'App', status: 'building', plan: '', html: '', raw: '', statusText: 'Starting', lineage: null, ideaId: it.id || null, graphHash: it.graphHash || null, category: cat, spec: it, changes: opts.changes || null, parentId: opts.parentId || null, error: null };
+  go('#/build/live');
+  runBuild(it, cat, opts);
+}
+async function runBuild(it, cat, opts) {
+  const live = state.buildLive;
+  const body = { ideaId: it.id, graphHash: it.graphHash, category: cat, kind: it.kind || 'App', title: it.title, what: it.what || it.title, prompt: it.prompt, builds: it.builds, parentId: opts.parentId, changes: opts.changes };
+  let res;
+  try {
+    res = await fetch('/api/build', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!res.ok) { const err = await res.json().catch(() => ({})); throw Object.assign(new Error(err.error || 'Build failed'), { status: res.status, code: err.code }); }
+  } catch (e) { live.status = 'error'; live.error = e.message; apiToast(e, 'Could not start the build'); paintBuild(); return; }
+  let lastPaint = 0;
+  await readSse(res, (ev, data) => {
+    if (ev === 'meta') { live.id = data.buildId; live.lineage = data.lineage; }
+    else if (ev === 'status') { live.statusText = data.text || ''; paintBuild(); }
+    else if (ev === 'plan') { live.plan = data.text || ''; paintBuild(); }
+    else if (ev === 'delta') { live.raw += data.text || ''; const now = Date.now(); if (now - lastPaint > 250) { lastPaint = now; paintBuild(); } }
+    else if (ev === 'done') { Object.assign(live, data.build, { status: 'done' }); }
+    else if (ev === 'error') { live.status = 'error'; live.error = data.message; }
+  }).catch(e => { live.status = 'error'; live.error = e.message; });
+  if (live.status === 'building') live.status = 'done';
+  paintBuild(true);
+  loadBuilds().then(() => renderSidebar());
+}
+function parseBuildRaw(raw) {
+  const t = raw || '';
+  const pO = t.indexOf('<plan>'), pC = t.indexOf('</plan>'), aO = t.indexOf('<app>'), aC = t.lastIndexOf('</app>');
+  const plan = pO >= 0 ? t.slice(pO + 6, pC > pO ? pC : (aO > pO ? aO : undefined)).trim() : '';
+  let html = aO >= 0 ? t.slice(aO + 5, aC > aO ? aC : undefined) : '';
+  html = html.replace(/^\s*```(?:html)?\s*/i, '').replace(/\s*```\s*$/, '');
+  return { plan, html, htmlDone: aC > aO };
+}
+function renderBuild(id) {
+  const main = $('#main');
+  if (id === 'live' && state.buildLive) { main.innerHTML = `<div class="view">${topbarHtml('Build')}<div class="scroll"><div class="col wide build-col" data-build-root></div></div></div>`; wireTopbar(main); paintBuild(true); return; }
+  main.innerHTML = `<div class="view">${topbarHtml('Build')}<div class="scroll"><div class="col wide build-col" data-build-root><div class="empty">${icon('zap', 24)}<div>Loading the build</div></div></div></div></div>`;
+  wireTopbar(main);
+  api('/api/builds/' + encodeURIComponent(id)).then(r => { state.buildLive = Object.assign({ raw: '', statusText: '' }, r.build); if (state.route.name === 'build') paintBuild(true); }).catch(e => { apiToast(e, 'That build is not available'); go('#/discover'); });
+}
+function paintBuild(final) {
+  const root = $('[data-build-root]'); const b = state.buildLive; if (!root || !b) return;
+  const parsed = b.raw ? parseBuildRaw(b.raw) : { plan: b.plan || '', html: b.html || '', htmlDone: b.status === 'done' };
+  const plan = b.plan || parsed.plan; const html = b.status === 'done' && b.html ? b.html : parsed.html;
+  const building = b.status === 'building';
+  const lines = html ? html.split('\n').length : 0;
+  const planHtml = plan ? `<ul class="build-plan">${plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : '';
+  const prov = b.lineage ? `<span class="pill-hash" title="Build lineage ${esc(b.lineage)}${b.ideaId ? ' · from idea ' + esc(b.ideaId) : ''}">${icon('loop', 12)}${esc(shortHash(b.lineage))}</span>` : '';
+  if (!root.dataset.ready) {
+    root.dataset.ready = '1';
+    root.innerHTML = `<div class="page-h"><h1>${icon('zap', 24)}<span data-b-title></span></h1><div class="g-controls"><button type="button" class="btn sm" data-b-open title="Open the app in its own tab">${icon('external', 14)}<span>Open</span></button><button type="button" class="btn sm" data-b-download title="Save the app as a single HTML file">${icon('download', 14)}<span>Download</span></button><button type="button" class="btn sm" data-b-refine title="Describe a change and Ricorsa rebuilds it">${icon('edit', 14)}<span>Refine</span></button></div></div>
+      <div class="build-meta"><span class="cat-tag" data-b-kind></span><span data-b-prov></span><span class="build-status" data-b-status></span></div>
+      <div class="build-grid"><div class="build-side"><h3>${icon('sparkles', 14)}Plan</h3><div data-b-plan class="muted">Reading your graph and planning</div><h3 style="margin-top:14px">${icon('code', 14)}Source</h3><div class="build-code-meta" data-b-lines></div><pre class="build-code" data-b-code></pre></div><div class="build-stage"><div class="build-frame-wrap"><iframe class="build-frame" data-b-frame sandbox="allow-scripts allow-forms allow-modals allow-popups" title="Your app" referrerpolicy="no-referrer"></iframe><div class="build-overlay" data-b-overlay><div class="spinner"></div><div data-b-overlay-text>Building</div></div></div></div></div>`;
+    $('[data-b-open]', root).addEventListener('click', () => { const cur = state.buildLive; if (!cur || cur.status !== 'done') { toast('Wait for the build to finish', 'bad'); return; } window.open('/api/builds/' + encodeURIComponent(cur.id) + '?raw=1', '_blank', 'noopener'); });
+    $('[data-b-download]', root).addEventListener('click', () => { const cur = state.buildLive; if (!cur || !cur.html) { toast('Nothing to download yet', 'bad'); return; } downloadFile(slugify(cur.title || 'ricorsa-app') + '.html', cur.html, 'text/html'); toast('Saved'); });
+    $('[data-b-refine]', root).addEventListener('click', () => { const cur = state.buildLive; if (!cur || cur.status !== 'done') { toast('Wait for the build to finish', 'bad'); return; } openModal(`<h2>${icon('edit', 20)}Refine this build</h2><p class="sub">Describe what should change. Ricorsa rebuilds it and keeps the rest working.</p><textarea id="refineText" rows="4" style="width:100%" placeholder="For example: add a weekly view, make the totals editable, use my project names"></textarea><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="refineGo">${icon('zap', 14)}Rebuild</button></div>`, { onMount: ov => { $('#refineGo', ov).addEventListener('click', () => { const changes = $('#refineText', ov).value.trim(); if (changes.length < 3) return; closeModal(); startBuild({ id: cur.ideaId, graphHash: cur.graphHash, kind: cur.kind, title: cur.title, what: cur.spec && cur.spec.what ? cur.spec.what : (cur.summary || cur.spec || cur.title), prompt: cur.spec && cur.spec.prompt, builds: cur.spec && cur.spec.builds }, cur.category, { parentId: cur.id, changes }); }); } }); });
+  }
+  $('[data-b-title]', root).textContent = b.title || 'Build';
+  $('[data-b-kind]', root).textContent = b.kind || 'App';
+  $('[data-b-prov]', root).innerHTML = prov;
+  const st = $('[data-b-status]', root);
+  st.textContent = building ? (b.statusText || 'Building') : b.status === 'error' ? (b.error === 'stopped' ? 'Stopped' : 'Stopped: ' + (b.error || 'try again')) : 'Ready';
+  st.className = 'build-status ' + (building ? 'live' : b.status === 'error' ? 'bad' : 'ok');
+  if (plan) $('[data-b-plan]', root).innerHTML = planHtml;
+  $('[data-b-lines]', root).textContent = html ? `${lines} lines${building ? ', still writing' : ''}` : (building ? 'Waiting for the first lines' : '');
+  const code = $('[data-b-code]', root); if (html) { const tail = html.length > 6000 ? html.slice(-6000) : html; code.textContent = tail; code.scrollTop = code.scrollHeight; }
+  const frame = $('[data-b-frame]', root), overlay = $('[data-b-overlay]', root);
+  const now = Date.now();
+  if (html && (final || !b._lastFrame || now - b._lastFrame > 2500)) { b._lastFrame = now; frame.srcdoc = html; }
+  overlay.hidden = !building || !!html;
+  $('[data-b-overlay-text]', root).textContent = b.statusText || 'Building';
 }
 
 // ---------- Spaces ----------
@@ -1315,6 +1404,7 @@ function render() {
   if (r.name === 'home') renderHome();
   else if (r.name === 'thread') renderThread(r.id);
   else if (r.name === 'discover') renderDiscover();
+  else if (r.name === 'build') renderBuild(r.id);
   else if (r.name === 'spaces') renderSpaces();
   else if (r.name === 'space') renderSpace(r.id);
   else if (r.name === 'library') renderLibrary();

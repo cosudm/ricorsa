@@ -147,3 +147,26 @@ export const config = sqliteTable('config', {
   value: text('value', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
   updatedAt: tsNow('updated_at'),
 });
+
+/** Apps and tools built from a Discover idea: a single self-contained HTML document, streamed in as it is written. */
+export type BuildStatus = 'building' | 'done' | 'error';
+export const builds = sqliteTable('builds', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  parentId: text('parent_id'),
+  ideaId: text('idea_id'),
+  graphHash: text('graph_hash'),
+  category: text('category'),
+  kind: text('kind').notNull().default('App'),
+  title: text('title').notNull(),
+  spec: text('spec').notNull(),
+  changes: text('changes'),
+  status: text('status').$type<BuildStatus>().notNull().default('building'),
+  plan: text('plan').notNull().default(''),
+  html: text('html').notNull().default(''),
+  summary: text('summary').notNull().default(''),
+  error: text('error'),
+  lineage: text('lineage'),
+  createdAt: tsNow('created_at'),
+  updatedAt: tsNow('updated_at'),
+}, (t) => [index('builds_user_idx').on(t.userId, t.updatedAt)]);

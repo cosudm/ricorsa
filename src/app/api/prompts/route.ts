@@ -30,7 +30,7 @@ export const GET = handle(async () => {
   if (!graph.events || nodeCount === 0) return json({ items: [], reason: 'new' });
 
   const hash = await graphFingerprint(graph);
-  const key = `${user.id}|prompts`;
+  const key = `${user.id}|prompts:v2`;
   const rows = await db().select().from(schema.discoverCache).where(and(eq(schema.discoverCache.category, key), eq(schema.discoverCache.day, hash.slice(0, 32)))).limit(1);
   if (rows[0]) return json({ items: rows[0].items, graphHash: hash });
 
@@ -57,7 +57,7 @@ async function generate(g: GraphData): Promise<Prompt[] | null> {
     'Recent intents: ' + g.intents.slice(0, 4).map(i => i.text).join(' | '),
   ].join('\n');
   const data = await quickJson<Prompt[]>(
-    `You write the four suggested questions shown on a person's home screen in Ricorsa, an answer engine that learns them through an identity graph. The graph below was learned from their own questions. Write exactly 4 questions they would plausibly ask next, phrased in the first person as they would type them (under 90 characters each, natural, specific to their graph, no generic trivia). Each question must be designed so that answering it reveals a particular kind of node for the graph. The thinnest parts of the graph right now are: ${thin.join(', ')}; aim at least three questions at those. Aspects: topic = ${ASPECT_WORDS.topic}; entity = ${ASPECT_WORDS.entity}; goal = ${ASPECT_WORDS.goal}; expertise = ${ASPECT_WORDS.expertise}; style = ${ASPECT_WORDS.style}. Reply with only a JSON array of 4 objects {"q": the question, "aspect": one of topic|entity|goal|expertise|style, "why": under 60 characters, addressed to them as "you", saying what this adds to their graph}. Valid JSON only.\n\nIdentity graph:\n${summary}`,
+    `You write the four suggested questions shown on a person's home screen in Ricorsa, an answer engine that learns them through an identity graph. The graph below was learned from their own questions. Write exactly 4 requests they would plausibly type into Ricorsa next, in their own voice (first person, under 100 characters each, natural, specific to their graph, no generic trivia). They must be things the person asks Ricorsa, never questions asked of the person: not "What is your experience with X?" but "Give me an expert-level walkthrough of X"; not "Do you want step-by-step answers?" but "Show me, step by step, how to ...". Each request must be designed so that answering it reveals a particular kind of node for the graph: a request that shows their level reveals expertise; one that names what they are trying to achieve reveals a goal; one that names a tool or company reveals an entity; one that asks for a particular format reveals style. The thinnest parts of the graph right now are: ${thin.join(', ')}; aim at least three questions at those. Aspects: topic = ${ASPECT_WORDS.topic}; entity = ${ASPECT_WORDS.entity}; goal = ${ASPECT_WORDS.goal}; expertise = ${ASPECT_WORDS.expertise}; style = ${ASPECT_WORDS.style}. Reply with only a JSON array of 4 objects {"q": the question, "aspect": one of topic|entity|goal|expertise|style, "why": under 60 characters, addressed to them as "you", saying what this adds to their graph}. Valid JSON only.\n\nIdentity graph:\n${summary}`,
     700,
   );
   if (!Array.isArray(data)) return null;
