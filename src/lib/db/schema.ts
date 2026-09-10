@@ -184,7 +184,8 @@ export const connectors = sqliteTable('connectors', {
 /** Apps and tools built from a Discover idea: a single self-contained HTML document, streamed in as it is written. */
 export type BuildStatus = 'building' | 'done' | 'error';
 /** One line of the build conversation, kept on the session's root row. */
-export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; at: number };
+/** A message in a build chat. A plan message may carry `next`: suggested next-step requests for that version. */
+export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; next?: string[]; at: number };
 export const builds = sqliteTable('builds', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

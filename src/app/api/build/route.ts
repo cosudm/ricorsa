@@ -7,7 +7,8 @@ import type { BuildMessage } from '@/lib/db/schema';
 import { loadGraph } from '@/lib/graph';
 import { planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
-import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, isLiveBuild, type BuildSpec } from '@/lib/build';
+import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, type BuildSpec } from '@/lib/build';
+import { auditApp, repairRequest } from '@/lib/build-audit';
 import { describeProviderError } from '@/lib/llm';
 import { recordUsage } from '@/lib/usage';
 import { estimateCostMicros } from '@/lib/plans';
@@ -161,22 +162,59 @@ export async function POST(req: Request) {
             if (Date.now() - lastSave > 5000) { lastSave = Date.now(); const p = parseBuild(raw); void save({ plan: p.plan, html: p.html }); }
           },
         });
-        const p = parseBuild(result.text);
-        await recordUsage(user.id, { questions: 1, tokensIn: result.usage.in, tokensOut: result.usage.out, costMicros: estimateCostMicros('build', result.usage.in, result.usage.out, result.usage.cacheRead) });
+        let p = parseBuild(result.text);
+        const usage = { in: result.usage.in, out: result.usage.out, cacheRead: result.usage.cacheRead };
         console.log('[build]', JSON.stringify({ model: result.model, chars: result.text.length, seconds: Math.round((Date.now() - startedAt) / 1000), thinkingChars, restart, version }));
         if (p.reply && !p.html) {
           // A question: answer in the chat, no new version.
+          await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead) });
           const m = await addMessage({ role: 'assistant', text: truncate(p.reply, 4000), kind: 'reply', buildId: null, version: null });
           send('done', { reply: m, build: null, sessionId });
           return;
         }
         if (!p.html || !/<\/html>|<body|<script|<div/i.test(p.html)) throw new Error('The builder did not return an app');
         await ensureRow();
+        // Review pass: controls nothing handles, screens the navigation names that do not exist, placeholder copy.
+        // Anything found goes back to the builder once, so the version the person gets works throughout.
+        const issues = auditApp(p.html);
+        if (issues.length && !ctl.signal.aborted) {
+          console.log('[build] review', JSON.stringify({ issues: issues.map(i => i.detail).slice(0, 8) }));
+          send('status', { text: `Review found ${issues.length} part${issues.length === 1 ? '' : 's'} to fix` });
+          send('phase', { text: 'repair', issues: issues.map(i => i.detail) });
+          await save({ plan: p.plan, html: p.html });
+          let raw2 = ''; let planSent2 = false; let sawPlan2 = false;
+          try {
+            const fix = await streamAnswer({
+              tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequest(issues)), maxTokens: 16000, signal: ctl.signal, search: null,
+              onText: (delta) => {
+                raw2 += delta;
+                const tail = raw2.slice(-(delta.length + 8));
+                if (!sawPlan2 && tail.includes('<plan>')) sawPlan2 = true;
+                if (!planSent2 && sawPlan2 && tail.includes('</plan>')) { planSent2 = true; send('status', { text: 'Fixing what the review found' }); }
+                send('delta', { text: delta });
+                if (Date.now() - lastSave > 5000) { lastSave = Date.now(); void save({}); }
+              },
+            });
+            usage.in += fix.usage.in; usage.out += fix.usage.out; usage.cacheRead += fix.usage.cacheRead;
+            const p2 = parseBuild(fix.text);
+            if (p2.html && /<\/html>|<body|<script|<div/i.test(p2.html) && p2.html.length > p.html.length * 0.6) {
+              const left = auditApp(p2.html);
+              console.log('[build] repaired', JSON.stringify({ before: issues.length, after: left.length, chars: p2.html.length }));
+              p = { ...p, html: p2.html, plan: p.plan + (p2.plan ? '\n' + p2.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map((l, i) => i === 0 ? `After review: ${l}` : l).join('\n') : ''), next: p2.next.length ? p2.next : p.next };
+            } else console.warn('[build] repair discarded: no complete document came back');
+          } catch (e) {
+            if (ctl.signal.aborted) throw e;
+            console.warn('[build] repair failed, keeping the first version', String((e as Error)?.message || e));
+          }
+          send('phase', { text: 'final' });
+        }
+        await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead) });
         const html = stampHtml(p.html, { buildId: id, ideaId, graphHash, lineage });
         const summary = p.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean)[0] || spec.what;
+        const next = p.next.length ? p.next : nextStepsFallback(spec.kind);
         await save({ status: 'done', plan: p.plan, html, summary });
-        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version });
-        send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, sessionId });
+        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next });
+        send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId });
       } catch (e) {
         const err = e as { name?: string; message?: string };
         const p = parseBuild(raw);

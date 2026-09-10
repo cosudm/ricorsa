@@ -27,10 +27,18 @@ By kind of idea
 - Data and credentials (exports, schemas, datasets, badges): show the schema, the rows, validation, and real export to JSON and CSV through download links built from Blob URLs; badges and claims are signed as above.
 - Content (courses, newsletters, talks, playbooks): an outline editor with sections, drafting aids, word counts, reading time, and export to Markdown and HTML.
 
+Definition of done (check every item before you finish; the version you return is the one the person uses)
+- Every button, link, tab, menu item and form control does exactly what its label says. Nothing is decorative, nothing is disabled without a reason shown next to it, nothing says "coming soon".
+- Every screen the navigation names exists, is reachable, and has content or an empty state that says what to do.
+- Every flow works end to end: create, edit, delete, search or filter, export, settings, undo where it matters. Walk each one through in your head before you write the closing tag.
+- No placeholder copy (lorem ipsum, TODO, sample text that means nothing), no console errors, no dead handlers.
+- Saved data reloads correctly; a change request keeps the person's stored data loading.
+
 Conversation
 - The first message describes the idea. Later messages ask for changes or ask questions about the app.
 - For a change request, return the full updated document; keep everything else working and keep the person's data model stable so their saved data still loads.
 - For a question or a comment that needs no change, answer briefly in the reply form below instead of rebuilding.
+- After every version, suggest what to build next: four short requests the person could send as the next step, each a concrete enhancement to this app (a new screen or feature, a smarter default, an integration to simulate, a design refinement). Phrase each as a request, like "Add a monthly view with totals".
 
 Output format, exactly, with nothing else before, between or after. Either
 <plan>
@@ -40,6 +48,9 @@ Three to six short lines: what the app is (or what changed this time), its main 
 <!doctype html>
 ...the complete HTML document...
 </app>
+<next>
+Four next-step requests, one per line, no numbering
+</next>
 or, for a question that needs no change,
 <reply>
 ...a short plain answer...
@@ -108,7 +119,7 @@ export function buildMessages(spec: BuildSpec, history: BuildTurn[], current: { 
   return out;
 }
 
-export type BuildParse = { plan: string; planDone: boolean; html: string; htmlDone: boolean; reply: string; replyDone: boolean };
+export type BuildParse = { plan: string; planDone: boolean; html: string; htmlDone: boolean; reply: string; replyDone: boolean; next: string[] };
 
 /** Progressive parser for the builder's tagged output. */
 export function parseBuild(raw: string): BuildParse {
@@ -121,14 +132,28 @@ export function parseBuild(raw: string): BuildParse {
   if (aO >= 0) html = t.slice(aO + 5, aC > aO ? aC : undefined);
   html = html.replace(/^\s*```(?:html)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
   const reply = rO >= 0 ? t.slice(rO + 7, rC > rO ? rC : undefined).trim() : '';
-  return { plan, planDone: pC > pO, html, htmlDone: aC > aO, reply, replyDone: rC > rO };
+  // Next steps come after the document (or the reply); only a closed block counts.
+  const nFrom = Math.max(aC, rC, 0);
+  const nO = t.indexOf('<next>', nFrom), nC = nO >= 0 ? t.indexOf('</next>', nO) : -1;
+  const next = nC > nO ? t.slice(nO + 6, nC).split('\n').map(l => l.replace(/^[-*•\d.)\s]+/, '').trim()).filter(l => l.length > 3 && l.length <= 120).slice(0, 4) : [];
+  return { plan, planDone: pC > pO, html, htmlDone: aC > aO, reply, replyDone: rC > rO, next };
 }
 
-/** Stamp the finished document with its provenance so a copy anywhere can be traced back. */
+/** Next steps to offer when the builder gave none: sensible for the kind of app. */
+export function nextStepsFallback(kind: string): string[] {
+  const k = (kind || '').toLowerCase();
+  if (/tool/.test(k)) return ['Add a history of past runs with one-click reuse', 'Add export to CSV and JSON', 'Add keyboard shortcuts for the main actions', 'Make it work well on a phone'];
+  if (/agent/.test(k)) return ['Add an approvals queue for consequential steps', 'Let me edit the rules the agent works from', 'Add a timeline of every run with outcomes', 'Add a settings screen for pace and limits'];
+  if (/dapp|decentral|credential|did/.test(k)) return ['Add a screen to import and verify a credential from JSON', 'Show the key pair and let me rotate it', 'Add a shareable, signed export of my data', 'Add an audit log of every signature'];
+  if (/content|course|newsletter|playbook/.test(k)) return ['Add a reading-time and word-count panel per section', 'Add export to Markdown and HTML', 'Add a checklist of what is still missing', 'Add templates for common sections'];
+  return ['Add a settings screen', 'Add search and filters to the main list', 'Add export and import of my data', 'Make it work well on a phone'];
+}
+
+/** Stamp the finished document with its provenance so a copy anywhere can be traced back. Earlier stamps are replaced. */
 export function stampHtml(html: string, meta: { buildId: string; ideaId?: string | null; graphHash?: string | null; lineage?: string | null }): string {
   const comment = `<!-- Built by Ricorsa · build ${meta.buildId}${meta.ideaId ? ` · idea ${meta.ideaId}` : ''}${meta.graphHash ? ` · graph ${meta.graphHash}` : ''}${meta.lineage ? ` · lineage ${meta.lineage}` : ''} -->`;
   const tag = `<meta name="ricorsa-provenance" content="build=${meta.buildId}${meta.ideaId ? `;idea=${meta.ideaId}` : ''}${meta.graphHash ? `;graph=${meta.graphHash}` : ''}${meta.lineage ? `;lineage=${meta.lineage}` : ''}">`;
-  let out = html;
+  let out = html.replace(/<!--\s*Built by Ricorsa[^>]*-->\s*/g, '').replace(/\s*<meta name="ricorsa-provenance"[^>]*>/g, '');
   if (/<head[^>]*>/i.test(out)) out = out.replace(/<head[^>]*>/i, m => `${m}\n${tag}`);
   else if (/<html[^>]*>/i.test(out)) out = out.replace(/<html[^>]*>/i, m => `${m}\n<head>${tag}</head>`);
   else out = `<!doctype html><html><head>${tag}</head><body>${out}</body></html>`;

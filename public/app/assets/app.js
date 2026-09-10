@@ -64,12 +64,11 @@ function icon(name, size = 18, extra = '') {
   extra = String(extra || '').replace(/\bclass="([^"]*)"/, (_, c) => { cls += ' ' + c; return ''; }).trim();
   return `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${body}</svg>`;
 }
-const SPIRAL = 'M12 4 L13.17 4.18 L14.29 4.52 L15.34 5.01 L16.29 5.63 L17.14 6.38 L17.87 7.23 L18.45 8.16 L18.9 9.15 L19.2 10.19 L19.34 11.24 L19.33 12.28 L19.18 13.31 L18.89 14.28 L18.47 15.2 L17.92 16.03 L17.28 16.77 L16.55 17.4 L15.74 17.91 L14.89 18.29 L14 18.55 L13.09 18.67 L12.2 18.67 L11.32 18.54 L10.49 18.29 L9.71 17.93 L9 17.47 L8.38 16.92 L7.85 16.3 L7.42 15.62 L7.1 14.9 L6.89 14.15 L6.79 13.39 L6.8 12.65 L6.91 11.92 L7.12 11.23 L7.43 10.59 L7.81 10.01 L8.27 9.5 L8.78 9.08 L9.34 8.74 L9.93 8.48 L10.53 8.32 L11.14 8.25 L11.74 8.27 L12.32 8.37 L12.86 8.55 L13.36 8.8 L13.81 9.11 L14.2 9.47 L14.52 9.88 L14.77 10.32 L14.95 10.78 L15.06 11.24 L15.1 11.71 L15.07 12.16 L14.98 12.59 L14.83 12.99 L14.62 13.34 L14.38 13.66 L14.1 13.93';
 // The mark: a spiral converging on its fixed point, recursion arriving somewhere.
-const LOGO_SVG = (size = 18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-  <path d="${SPIRAL}" stroke="#fff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="12" cy="12.4" r="1.7" fill="#E9A57A"/>
-</svg>`;
+const SPIRAL = 'M4355 4776 c-49 -22 -77 -60 -83 -112 -11 -103 55 -154 199 -154 224 0 468 -98 636 -254 216 -200 319 -497 269 -776 -29 -160 -104 -306 -220 -427 -160 -169 -339 -248 -561 -247 -202 1 -340 57 -475 193 -129 130 -180 251 -180 427 0 160 54 288 168 396 182 174 459 185 615 24 113 -115 128 -291 36 -407 -58 -73 -176 -103 -233 -58 -34 27 -33 59 4 111 36 49 39 98 10 146 -50 81 -165 76 -247 -10 -84 -87 -102 -225 -44 -342 124 -251 471 -277 696 -51 277 277 186 742 -180 928 -281 142 -628 81 -866 -153 -415 -409 -294 -1098 242 -1375 163 -84 376 -126 541 -105 377 47 679 251 861 580 141 258 167 598 66 886 -151 434 -538 731 -1017 783 -133 14 -200 13 -237 -3z';
+// The brand mark: the blue square with the spiral (vector, traced from the master logo).
+const LOGO_SVG = (size = 28) => `<svg width="${size}" height="${size}" viewBox="247 149.5 423 423" aria-hidden="true"><defs><linearGradient id="rg${size}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B6BB0"/><stop offset=".55" stop-color="#075AA0"/><stop offset="1" stop-color="#063C7E"/></linearGradient><linearGradient id="rs${size}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#CFE3F8"/></linearGradient></defs><rect x="247" y="149.5" width="423" height="423" rx="100" fill="url(#rg${size})"/><g transform="translate(0,724) scale(0.1,-0.1)"><path d="${SPIRAL}" fill="url(#rs${size})"/></g></svg>`;
+const WORDMARK = (h = 20) => `<img class="wordmark" src="/brand/wordmark.svg" alt="ricorsa" style="height:${h}px" width="${Math.round(h * 3.95)}" height="${h}">`;
 
 // ---------- Utils ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -279,7 +278,8 @@ function renderSidebar() {
   }
 }
 function setupSidebar() {
-  $$('[data-logo]').forEach(el => el.innerHTML = LOGO_SVG(18));
+  $$('[data-logo]').forEach(el => el.innerHTML = LOGO_SVG(30));
+  $$('[data-wordmark]').forEach(el => el.outerHTML = WORDMARK(21));
   $$('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon, 18); });
   $('#collapseBtn').innerHTML = icon('panel', 17);
   $('#kbdHint').textContent = isMac ? '⌘ K' : 'Ctrl K';
@@ -791,7 +791,7 @@ function quotaNotice() {
 function renderHome() {
   const main = $('#main');
   main.innerHTML = `<div class="view">${topbarHtml('')}<div class="scroll"><div class="home">
-    <div class="hero-mark"><span class="logomark" style="width:42px;height:42px;border-radius:12px">${LOGO_SVG(26)}</span><span class="wordmark big">ricorsa</span></div>
+    <div class="hero-mark"><span class="logomark" style="width:48px;height:48px">${LOGO_SVG(48)}</span>${WORDMARK(34).replace('class="wordmark"', 'class="wordmark big"')}</div>
     <div class="tagline">Ask anything. Get a sourced answer, and be understood a little better each time.</div>
     ${learnLine()}
     <div data-notice>${quotaNotice()}</div>
@@ -1205,6 +1205,11 @@ async function runBuildRequest(body) {
     const live = st.live; if (!live) return;
     if (ev === 'meta') { if (!st.sessionId && data.sessionId) { st.sessionId = data.sessionId; if (location.hash === '#/build/live') { history.replaceState(null, '', '#/build/' + data.sessionId); state.route = parseRoute(); } } live.buildId = data.buildId; live.version = data.version; live.lineage = data.lineage; }
     else if (ev === 'status') { live.statusText = data.text || ''; paintStudio(); }
+    else if (ev === 'phase') {
+      // The review found parts that do not work: the builder rewrites the document, streamed from the top again.
+      if (data.text === 'repair') { live.raw = ''; live.html = ''; live.issues = data.issues || []; live.statusText = 'Fixing what the review found'; }
+      paintStudio(true);
+    }
     else if (ev === 'plan') { live.plan = data.text || ''; paintStudio(); }
     else if (ev === 'reply') { live.reply = data.text || ''; paintStudio(); }
     else if (ev === 'delta') { live.raw += data.text || ''; const p = parseBuildRaw(live.raw); if (p.html) live.html = p.html; const now = Date.now(); if (now - lastPaint > 250) { lastPaint = now; paintStudio(); } }
@@ -1292,7 +1297,7 @@ function paintStudio(final) {
   let html = st.messages.map(m => studioMessageHtml(m, st)).join('');
   if (live) {
     if (live.reply) html += `<div class="smsg bot"><div class="bubble">${md(live.reply)}</div></div>`;
-    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: writing the app</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written</div>` : ''}</div></div>`;
+    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing the review findings' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}Review: ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix before this version is done</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written</div>` : ''}</div></div>`;
   }
   msgs.innerHTML = html || `<div class="empty">${icon('zap', 24)}<div>Nothing here yet.</div></div>`;
   $$('[data-show-version]', msgs).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.showVersion)));
@@ -1308,7 +1313,10 @@ function paintStudio(final) {
   if (atBottom || final) msgs.scrollTop = msgs.scrollHeight;
   const hints = $('[data-hints]', root);
   const done = !live && st.current && st.current.status === 'done';
-  hints.innerHTML = done && st.messages.filter(m => m.role === 'user').length < 2 ? ['Add a settings screen', 'Use my real names and numbers', 'Make it work on a phone', 'How does this work?'].map(h => `<button type="button" class="chip" data-hint="${esc(h)}">${esc(h)}</button>`).join('') : '';
+  // Next steps: what the builder suggested for the latest version, always on offer once a version exists.
+  const lastPlan = [...st.messages].reverse().find(m => m.kind === 'plan');
+  const steps = done ? ((lastPlan && lastPlan.next && lastPlan.next.length ? lastPlan.next : nextStepsFor(st.kind)).slice(0, 4)) : [];
+  hints.innerHTML = steps.length ? `<span class="hints-label">${icon('sparkles', 13)}Next steps</span>${steps.map(h => `<button type="button" class="chip" data-hint="${esc(h)}">${esc(h)}</button>`).join('')}` : '';
   $$('[data-hint]', hints).forEach(b => b.addEventListener('click', () => sendBuildMessage(b.dataset.hint)));
   const ta = $('[data-compose]', root); const sendBtn = $('[data-send]', root);
   ta.disabled = !st.sessionId && !live ? false : false;
@@ -1344,6 +1352,13 @@ function paintStudio(final) {
   } else if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; if (frame.dataset.hash !== String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done')) { frame.dataset.hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done'); frame.srcdoc = showHtml; } }
   overlay.hidden = !(live && !live.html && !live.reply);
   $('[data-s-overlay-text]', root).textContent = live ? (live.statusText || 'Building') : '';
+}
+function nextStepsFor(kind) {
+  const k = String(kind || '').toLowerCase();
+  if (/tool/.test(k)) return ['Add a history of past runs with one-click reuse', 'Add export to CSV and JSON', 'Add keyboard shortcuts for the main actions', 'Make it work well on a phone'];
+  if (/agent/.test(k)) return ['Add an approvals queue for consequential steps', 'Let me edit the rules the agent works from', 'Add a timeline of every run with outcomes', 'Add a settings screen for pace and limits'];
+  if (/dapp|decentral|credential|did/.test(k)) return ['Add a screen to import and verify a credential from JSON', 'Show the key pair and let me rotate it', 'Add a shareable, signed export of my data', 'Add an audit log of every signature'];
+  return ['Add a settings screen', 'Add search and filters to the main list', 'Add export and import of my data', 'Make it work well on a phone'];
 }
 function currentVersion() { const st = state.studio; if (!st) return null; return st.versions.find(v => v.version === st.selected && v.status === 'done') || st.current || null; }
 function shownHtml() { const st = state.studio; if (!st) return ''; const v = st.versions.find(x => x.version === st.selected); if (v && v.html) return v.html; if (st.current && (!v || st.current.id === v.id)) return st.current.html || ''; return ''; }
@@ -1736,7 +1751,7 @@ function init() {
     if (e.key === 'Escape') { closePop(); closeModal(); closeDrawer(); return; }
     if (e.key === '/' && !inField) { const ta = $('#main textarea'); if (ta) { e.preventDefault(); ta.focus(); } }
   });
-  $('#main').innerHTML = `<div class="view"><div class="scroll"><div class="home"><div class="hero-mark"><span class="logomark" style="width:42px;height:42px;border-radius:12px">${LOGO_SVG(26)}</span><span class="wordmark big">ricorsa</span></div><div class="tagline"><span class="dots">Loading your library</span></div></div></div></div>`;
+  $('#main').innerHTML = `<div class="view"><div class="scroll"><div class="home"><div class="hero-mark"><span class="logomark" style="width:48px;height:48px">${LOGO_SVG(48)}</span>${WORDMARK(34).replace('class="wordmark"', 'class="wordmark big"')}</div><div class="tagline"><span class="dots">Loading your library</span></div></div></div></div>`;
   bootstrap().then(() => render()).catch(e => {
     if (e && e.status === 401) return;
     $('#main').innerHTML = `<div class="view"><div class="scroll"><div class="home"><div class="notice">${icon('alert', 17)}<div>${esc((e && e.message) || 'Could not load your account.')} <a href="/app">Try again</a></div></div></div></div></div>`;

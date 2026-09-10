@@ -10,7 +10,7 @@ const SHELL = `
   <div class="scrim" id="scrim"></div>
   <nav id="sidebar" aria-label="Main">
     <div class="brand">
-      <a class="brand-link" href="#/" aria-label="Ricorsa home"><span class="logomark" data-logo></span><span class="wordmark">ricorsa</span></a>
+      <a class="brand-link" href="#/" aria-label="Ricorsa home"><span class="logomark" data-logo></span><span data-wordmark></span></a>
       <button class="collapse-btn" id="collapseBtn" aria-label="Collapse sidebar" title="Collapse sidebar"></button>
     </div>
     <button class="new-thread tip" id="newThreadBtn" data-tip="New Thread" title="Start a new question (Ctrl K)" aria-label="New thread"><span data-icon="plus"></span><span class="grow">New Thread</span><kbd id="kbdHint">Ctrl K</kbd></button>

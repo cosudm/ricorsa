@@ -90,8 +90,9 @@
   }
   .brand-link { display: flex; align-items: center; gap: 9px; color: var(--ink); text-decoration: none; }
   .brand-link:hover { text-decoration: none; }
-  .wordmark { font-family: var(--serif); font-style: italic; font-size: 24px; letter-spacing: -.005em; line-height: 1; color: var(--ink); }
-  .logomark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; flex: none; }
+  .wordmark { display: block; height: 21px; width: auto; }
+  .logomark { width: 30px; height: 30px; display: grid; place-items: center; flex: none; }
+  .logomark svg { display: block; width: 100%; height: 100%; }
   .collapse-btn { width: 28px; height: 28px; border-radius: 7px; color: var(--ink-3); display: grid; place-items: center; opacity: 0; transition: opacity .15s; }
   #sidebar:hover .collapse-btn, .collapse-btn:focus-visible { opacity: 1; }
   .collapse-btn:hover { background: var(--surface-2); color: var(--ink); }
@@ -295,7 +296,7 @@
   /* ---------- Home ---------- */
   .home { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 24px 64px; gap: 26px; }
   .home .hero-mark { display: flex; align-items: center; gap: 12px; margin-bottom: 2px; }
-  .home .wordmark.big { font-size: 46px; letter-spacing: -.02em; }
+  .home .wordmark.big { height: 34px; }
   .home .tagline { color: var(--ink-3); font-size: 14px; margin-top: -14px; }
   .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; max-width: 720px; }
   .tile {
@@ -719,7 +720,12 @@
   .smsg-actions { display: flex; gap: 6px; }
   .smsg .bubble p { margin: 0 0 8px; } .smsg .bubble p:last-child { margin: 0; }
   .studio-compose { padding: 8px 12px 12px; border-top: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
-  .studio-hints { display: flex; flex-wrap: wrap; gap: 6px; }
+  .studio-hints { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .studio-hints:empty { display: none; }
+  .hints-label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-3); letter-spacing: .02em; margin-right: 2px; }
+  .build-review { margin: 8px 0 4px; padding: 8px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--ink); font-size: 12.5px; }
+  .build-review .smsg-title { color: var(--warn); margin-bottom: 2px; }
+  .build-review ul { margin: 0; padding-left: 18px; } .build-review li { margin: 2px 0; }
   .studio-hints .chip { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 5px 11px; font-size: 12.5px; color: var(--ink-2); }
   .studio-hints .chip:hover { border-color: var(--accent-line); color: var(--ink); background: var(--accent-soft); }
   .studio-input { display: flex; align-items: flex-end; gap: 8px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 14px; padding: 8px 8px 8px 12px; }
@@ -807,7 +813,7 @@
     .space-grid { grid-template-columns: 1fr 1fr; }
     .tiles { grid-template-columns: 1fr; }
     .home { padding: 24px 16px 48px; }
-    .home .wordmark.big { font-size: 38px; }
+    .home .wordmark.big { height: 28px; }
     .dock { padding: 8px 12px 12px; }
     .field-row { grid-template-columns: 1fr; }
   }
@@ -820,7 +826,7 @@
     .composer-bar .right { margin-left: auto; }
     .composer textarea { font-size: 16px; }
     .home { gap: 20px; padding: 16px 14px 40px; }
-    .home .wordmark.big { font-size: 34px; }
+    .home .wordmark.big { height: 24px; }
     .home .learn-line { font-size: 12.5px; }
     .page-h { flex-direction: column; align-items: flex-start; gap: 10px; }
     .page-h h1 { font-size: 26px; }

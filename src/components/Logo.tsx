@@ -1,19 +1,31 @@
-export const SPIRAL = 'M12 4 L13.17 4.18 L14.29 4.52 L15.34 5.01 L16.29 5.63 L17.14 6.38 L17.87 7.23 L18.45 8.16 L18.9 9.15 L19.2 10.19 L19.34 11.24 L19.33 12.28 L19.18 13.31 L18.89 14.28 L18.47 15.2 L17.92 16.03 L17.28 16.77 L16.55 17.4 L15.74 17.91 L14.89 18.29 L14 18.55 L13.09 18.67 L12.2 18.67 L11.32 18.54 L10.49 18.29 L9.71 17.93 L9 17.47 L8.38 16.92 L7.85 16.3 L7.42 15.62 L7.1 14.9 L6.89 14.15 L6.79 13.39 L6.8 12.65 L6.91 11.92 L7.12 11.23 L7.43 10.59 L7.81 10.01 L8.27 9.5 L8.78 9.08 L9.34 8.74 L9.93 8.48 L10.53 8.32 L11.14 8.25 L11.74 8.27 L12.32 8.37 L12.86 8.55 L13.36 8.8 L13.81 9.11 L14.2 9.47 L14.52 9.88 L14.77 10.32 L14.95 10.78 L15.06 11.24 L15.1 11.71 L15.07 12.16 L14.98 12.59 L14.83 12.99 L14.62 13.34 L14.38 13.66 L14.1 13.93';
+/**
+ * The Ricorsa brand: a blue square with the spiral, and the wordmark. Both are vector (traced from the
+ * master logo), so they stay crisp at any size. The files under /public/brand are the same art for
+ * places that need a URL (share images, the sign-in page, app icons).
+ */
+export const SPIRAL = 'M4355 4776 c-49 -22 -77 -60 -83 -112 -11 -103 55 -154 199 -154 224 0 468 -98 636 -254 216 -200 319 -497 269 -776 -29 -160 -104 -306 -220 -427 -160 -169 -339 -248 -561 -247 -202 1 -340 57 -475 193 -129 130 -180 251 -180 427 0 160 54 288 168 396 182 174 459 185 615 24 113 -115 128 -291 36 -407 -58 -73 -176 -103 -233 -58 -34 27 -33 59 4 111 36 49 39 98 10 146 -50 81 -165 76 -247 -10 -84 -87 -102 -225 -44 -342 124 -251 471 -277 696 -51 277 277 186 742 -180 928 -281 142 -628 81 -866 -153 -415 -409 -294 -1098 242 -1375 163 -84 376 -126 541 -105 377 47 679 251 861 580 141 258 167 598 66 886 -151 434 -538 731 -1017 783 -133 14 -200 13 -237 -3z';
 
-export function Mark({ size = 18 }: { size?: number }) {
+/** The square mark with the spiral. */
+export function Mark({ size = 28 }: { size?: number }) {
+  const id = 'rg' + size;
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d={SPIRAL} stroke="#fff" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="12" cy="12.4" r="1.7" fill="#E9A57A" />
+    <svg width={size} height={size} viewBox="247 149.5 423 423" aria-hidden="true">
+      <defs>
+        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#0B6BB0" /><stop offset=".55" stopColor="#075AA0" /><stop offset="1" stopColor="#063C7E" /></linearGradient>
+        <linearGradient id={id + 's'} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#FFFFFF" /><stop offset="1" stopColor="#CFE3F8" /></linearGradient>
+      </defs>
+      <rect x="247" y="149.5" width="423" height="423" rx="100" fill={`url(#${id})`} />
+      <g transform="translate(0,724) scale(0.1,-0.1)"><path d={SPIRAL} fill={`url(#${id}s)`} /></g>
     </svg>
   );
 }
 
-export function Brand({ size = 28 }: { size?: number }) {
+/** Mark and wordmark side by side, linking home. `size` is the mark's height; the wordmark scales with it. */
+export function Brand({ size = 30 }: { size?: number }) {
   return (
     <a className="brand" href="/" aria-label="Ricorsa home">
-      <span className="logomark" style={{ width: size, height: size, borderRadius: size * 0.29 }}><Mark size={Math.round(size * 0.64)} /></span>
-      <span className="wordmark" style={{ fontSize: size * 0.86 }}>ricorsa</span>
+      <span className="logomark" style={{ width: size, height: size }}><Mark size={size} /></span>
+      <img className="wordmark" src="/brand/wordmark.svg" alt="ricorsa" style={{ height: Math.round(size * 0.72) }} width={Math.round(size * 0.72 * 3.95)} height={Math.round(size * 0.72)} />
     </a>
   );
 }
