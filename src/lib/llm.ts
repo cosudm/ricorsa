@@ -21,6 +21,11 @@ const CANDIDATES: Record<Tier, string[]> = {
  * Fast thinks little, Best a moderate amount, Reasoning as much as it can. Override with REASONING_QUICK,
  * REASONING_DEFAULT and REASONING_COMPLEX; set one to "off" to send nothing.
  */
+/** Thinking models (Kimi K3 and the K2 thinking variants) accept only the default temperature; leave it out for them. */
+function temperatureFor(model: string, wanted: number | undefined): number | undefined {
+  if (/k3|thinking|reason/i.test(model)) return undefined;
+  return wanted ?? 0.6;
+}
 function reasoningFor(tier: Tier, model: string): string | null {
   const env = tier === 'quick' ? process.env.REASONING_QUICK : tier === 'complex' ? process.env.REASONING_COMPLEX : process.env.REASONING_DEFAULT;
   const v = env || (tier === 'quick' ? 'low' : tier === 'complex' ? 'max' : 'medium');
@@ -179,17 +184,19 @@ export async function streamAnswer(opts: {
   const toolCalls: ToolCall[] = [];
   let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
 
-  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let noPartial = false;
+  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let noPartial = false; let temperature = temperatureFor(model, opts.temperature);
   for (;;) {
     let res: ChatOut;
     try {
-      res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature: opts.temperature ?? 0.6, reasoning, signal: opts.signal,
+      res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature, reasoning, signal: opts.signal,
         onText: (d) => { out += d; opts.onText(d); } });
     } catch (e) {
+      // A temperature this model does not take: send none and try again.
+      if (e instanceof ProviderRequestError && e.status === 400 && temperature !== undefined && /temperature/i.test(e.message)) { console.warn('[provider] temperature not accepted by', model); temperature = undefined; continue; }
       // An id this account cannot use: refresh the list and try the next candidate once.
       if (!retriedModel && e instanceof ProviderRequestError && e.status === 404 && /model/i.test(e.message)) {
         retriedModel = true; await availableModels(true); const next = await resolveModel(opts.tier, [model]);
-        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { model = next; reasoning = reasoningFor(opts.tier, model); continue; }
+        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { model = next; reasoning = reasoningFor(opts.tier, model); temperature = temperatureFor(model, opts.temperature); continue; }
       }
       // A parameter this model does not take: drop it and try again.
       if (e instanceof ProviderRequestError && e.status === 400 && reasoning && /reasoning/i.test(e.message)) { console.warn('[provider] reasoning_effort not accepted by', model); reasoning = null; continue; }
@@ -240,8 +247,9 @@ export async function streamAnswer(opts: {
 type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number } };
 
 /** One streamed chat completion. Parses the SSE stream, collects text, tool calls and usage. */
-async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature: number; reasoning?: string | null; signal?: AbortSignal; onText: (d: string) => void }): Promise<ChatOut> {
-  const body: Record<string, unknown> = { model: o.model, messages: o.messages, max_tokens: o.maxTokens, temperature: o.temperature, stream: true, stream_options: { include_usage: true } };
+async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature?: number; reasoning?: string | null; signal?: AbortSignal; onText: (d: string) => void }): Promise<ChatOut> {
+  const body: Record<string, unknown> = { model: o.model, messages: o.messages, max_tokens: o.maxTokens, stream: true, stream_options: { include_usage: true } };
+  if (o.temperature !== undefined) body.temperature = o.temperature;
   if (o.tools?.length) { body.tools = o.tools; body.tool_choice = 'auto'; }
   if (o.reasoning) body.reasoning_effort = o.reasoning;
   const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body), signal: o.signal });
@@ -289,7 +297,11 @@ async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens
 export async function quickJson<T = unknown>(prompt: string, maxTokens = 400): Promise<T | null> {
   if (mockMode()) return null;
   try {
-    const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify({ model: await resolveModel('quick'), max_tokens: maxTokens, temperature: 0.4, messages: [{ role: 'system', content: 'Reply with valid JSON only: no prose, no markdown fences.' }, { role: 'user', content: prompt }] }) });
+    const model = await resolveModel('quick');
+    const body: Record<string, unknown> = { model, max_tokens: maxTokens, messages: [{ role: 'system', content: 'Reply with valid JSON only: no prose, no markdown fences.' }, { role: 'user', content: prompt }] };
+    const temp = temperatureFor(model, 0.4); if (temp !== undefined) body.temperature = temp;
+    const effort = reasoningFor('quick', model); if (effort) body.reasoning_effort = effort;
+    const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body) });
     if (!res.ok) { const raw = await res.text().catch(() => ''); let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* */ } throw new ProviderRequestError(res.status, (parsed as { error?: { message?: string } })?.error?.message || raw.slice(0, 200) || `HTTP ${res.status}`, parsed); }
     const j = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
     const text = j.choices?.[0]?.message?.content || '';
