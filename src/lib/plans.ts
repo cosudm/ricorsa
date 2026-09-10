@@ -86,9 +86,9 @@ export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, p
 
 /** Rough per-answer cost estimate in micro-dollars, for the usage table. Adjust to current list prices. */
 export const PRICE_PER_MTOK_USD: Record<string, { in: number; out: number; cacheRead: number }> = {
-  quick: { in: 1.15, out: 8, cacheRead: 0.15 },    // Kimi K2 turbo
-  default: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K2
-  complex: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K2 thinking
+  quick: { in: 0.6, out: 2.5, cacheRead: 0.15 },   // Kimi K3, low effort (list prices; adjust when Moonshot publishes K3 rates)
+  default: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K3, medium effort
+  complex: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K3, max effort
 };
 /** Web search (Brave) is billed per query on top of tokens once past the free allowance. */
 export const WEB_SEARCH_USD = 0.005;

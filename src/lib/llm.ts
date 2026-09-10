@@ -9,13 +9,24 @@ import { callMcpTool } from './mcp';
 
 export type Tier = 'quick' | 'default' | 'complex';
 
-const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k2-turbo-preview', default: 'kimi-k2-0905-preview', complex: 'kimi-k2-thinking' };
+const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k3', default: 'kimi-k3', complex: 'kimi-k3' };
 /** Model ids to try for each tier, best first. The configured MODEL_* id always comes first. */
 const CANDIDATES: Record<Tier, string[]> = {
-  quick: ['kimi-k2-turbo-preview', 'kimi-k2.5-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-8k'],
-  default: ['kimi-k2-0905-preview', 'kimi-k2.5', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'kimi-latest', 'moonshot-v1-32k'],
-  complex: ['kimi-k2-thinking', 'kimi-k2-thinking-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-128k'],
+  quick: ['kimi-k3-turbo', 'kimi-k3', 'kimi-k2-turbo-preview', 'kimi-k2.5-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-8k'],
+  default: ['kimi-k3', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'kimi-latest', 'moonshot-v1-32k'],
+  complex: ['kimi-k3', 'kimi-k2-thinking', 'kimi-k2-thinking-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-128k'],
 };
+/**
+ * Thinking effort per tier for models that take `reasoning_effort` (Kimi K3 and the thinking models):
+ * Fast thinks little, Best a moderate amount, Reasoning as much as it can. Override with REASONING_QUICK,
+ * REASONING_DEFAULT and REASONING_COMPLEX; set one to "off" to send nothing.
+ */
+function reasoningFor(tier: Tier, model: string): string | null {
+  const env = tier === 'quick' ? process.env.REASONING_QUICK : tier === 'complex' ? process.env.REASONING_COMPLEX : process.env.REASONING_DEFAULT;
+  const v = env || (tier === 'quick' ? 'low' : tier === 'complex' ? 'max' : 'medium');
+  if (v === 'off' || v === 'none') return null;
+  return /k3|thinking|reason/i.test(model) || process.env.REASONING_ALWAYS === '1' ? v : null;
+}
 function configured(tier: Tier): string {
   if (tier === 'quick') return process.env.MODEL_QUICK || DEFAULT_MODELS.quick;
   if (tier === 'complex') return process.env.MODEL_COMPLEX || DEFAULT_MODELS.complex;
@@ -168,17 +179,24 @@ export async function streamAnswer(opts: {
   const toolCalls: ToolCall[] = [];
   let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
 
-  let retriedModel = false;
+  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let noPartial = false;
   for (;;) {
     let res: ChatOut;
     try {
-      res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature: opts.temperature ?? 0.6, signal: opts.signal,
+      res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature: opts.temperature ?? 0.6, reasoning, signal: opts.signal,
         onText: (d) => { out += d; opts.onText(d); } });
     } catch (e) {
       // An id this account cannot use: refresh the list and try the next candidate once.
       if (!retriedModel && e instanceof ProviderRequestError && e.status === 404 && /model/i.test(e.message)) {
         retriedModel = true; await availableModels(true); const next = await resolveModel(opts.tier, [model]);
-        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { model = next; continue; }
+        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { model = next; reasoning = reasoningFor(opts.tier, model); continue; }
+      }
+      // A parameter this model does not take: drop it and try again.
+      if (e instanceof ProviderRequestError && e.status === 400 && reasoning && /reasoning/i.test(e.message)) { console.warn('[provider] reasoning_effort not accepted by', model); reasoning = null; continue; }
+      if (e instanceof ProviderRequestError && e.status === 400 && !noPartial && /partial/i.test(e.message)) {
+        noPartial = true;
+        for (const m of convo) if (m.role === 'assistant' && m.partial) { delete m.partial; convo.push({ role: 'user', content: 'Continue exactly where you left off, without repeating anything.' }); }
+        continue;
       }
       throw e;
     }
@@ -222,9 +240,10 @@ export async function streamAnswer(opts: {
 type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number } };
 
 /** One streamed chat completion. Parses the SSE stream, collects text, tool calls and usage. */
-async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature: number; signal?: AbortSignal; onText: (d: string) => void }): Promise<ChatOut> {
+async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature: number; reasoning?: string | null; signal?: AbortSignal; onText: (d: string) => void }): Promise<ChatOut> {
   const body: Record<string, unknown> = { model: o.model, messages: o.messages, max_tokens: o.maxTokens, temperature: o.temperature, stream: true, stream_options: { include_usage: true } };
   if (o.tools?.length) { body.tools = o.tools; body.tool_choice = 'auto'; }
+  if (o.reasoning) body.reasoning_effort = o.reasoning;
   const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body), signal: o.signal });
   if (!res.ok) {
     const raw = await res.text().catch(() => '');

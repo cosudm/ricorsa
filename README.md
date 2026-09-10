@@ -63,7 +63,7 @@ You need `AUTH0_DOMAIN` (no `https://`), `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET
 
 ### 3. Models (Kimi) and search (Brave)
 
-`KIMI_API_KEY` from platform.moonshot.ai (API keys) and `BRAVE_API_KEY` from brave.com/search/api. Model ids default to `kimi-k2-0905-preview` for Best, `kimi-k2-turbo-preview` for Fast and `kimi-k2-thinking` for Reasoning; override with `MODEL_DEFAULT`, `MODEL_QUICK`, `MODEL_COMPLEX`, and point `KIMI_BASE_URL` elsewhere for any OpenAI-compatible endpoint. Searches are metered per answer and priced into the cost estimate (`WEB_SEARCH_USD` in `src/lib/plans.ts`).
+`KIMI_API_KEY` from platform.moonshot.ai (API keys) and `BRAVE_API_KEY` from brave.com/search/api. Model ids default to `kimi-k3` for every tier, with thinking effort low for Fast, medium for Best and max for Reasoning (`REASONING_QUICK`, `REASONING_DEFAULT`, `REASONING_COMPLEX`); override the ids with `MODEL_DEFAULT`, `MODEL_QUICK`, `MODEL_COMPLEX`. Ricorsa checks the account's model list and falls back to the best available Kimi model when a configured id is missing. Point `KIMI_BASE_URL` elsewhere for any OpenAI-compatible endpoint. Searches are metered per answer and priced into the cost estimate (`WEB_SEARCH_USD` in `src/lib/plans.ts`).
 
 The stable instruction prefix is marked for prompt caching, and follow-ups cache the conversation prefix, which is where most of the input tokens are.
 
