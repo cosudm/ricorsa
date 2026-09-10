@@ -1,51 +1,60 @@
-import Anthropic from '@anthropic-ai/sdk';
+/**
+ * The model layer. Ricorsa runs on Kimi (Moonshot AI) through its OpenAI-compatible API: streamed
+ * chat completions, function calling for connector tools, and partial-mode continuation when an answer
+ * runs past the output limit. Web retrieval happens before the call (src/lib/search.ts) and the sources
+ * are handed to the model as numbered context; connectors are called by Ricorsa itself through MCP.
+ */
 import type { Source } from './search';
+import { callMcpTool } from './mcp';
 
 export type Tier = 'quick' | 'default' | 'complex';
 
+const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k2-turbo-preview', default: 'kimi-k2-0905-preview', complex: 'kimi-k2-thinking' };
 export function modelFor(tier: Tier): string {
-  if (tier === 'quick') return process.env.MODEL_QUICK || 'claude-haiku-4-5';
-  if (tier === 'complex') return process.env.MODEL_COMPLEX || 'claude-opus-5';
-  return process.env.MODEL_DEFAULT || 'claude-sonnet-5';
+  if (tier === 'quick') return process.env.MODEL_QUICK || DEFAULT_MODELS.quick;
+  if (tier === 'complex') return process.env.MODEL_COMPLEX || DEFAULT_MODELS.complex;
+  return process.env.MODEL_DEFAULT || DEFAULT_MODELS.default;
 }
+export const PROVIDER_NAME = 'Kimi';
 
 export function mockMode(): boolean {
   return process.env.NODE_ENV !== 'production' && process.env.DEV_MOCK_LLM === '1';
 }
 
-let _client: Anthropic | null = null;
-function client(): Anthropic {
-  if (_client) return _client;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-  _client = new Anthropic({ apiKey });
-  return _client;
+function apiBase(): string { return (process.env.KIMI_BASE_URL || 'https://api.moonshot.ai/v1').replace(/\/$/, ''); }
+function apiKey(): string {
+  const k = process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY;
+  if (!k) throw Object.assign(new Error('KIMI_API_KEY is not set'), { status: 401 });
+  return k;
 }
-
-/** Web search server-tool versions, newest first; an unknown version falls back to the next one. */
-const SEARCH_TOOL_VERSIONS = [process.env.WEB_SEARCH_TOOL || 'web_search_20260318', 'web_search_20260209', 'web_search_20250305'];
 
 export type ProviderErrorCode = 'provider_billing' | 'provider_auth' | 'rate_limited' | 'overloaded' | 'prompt_too_large' | 'invalid_request' | 'upstream_error';
 export type ProviderError = { code: ProviderErrorCode; status: number | null; type: string; message: string; forAdmin: string; forUser: string };
 
+/** A failed provider call, carrying the HTTP status and the body the provider sent. */
+export class ProviderRequestError extends Error {
+  constructor(public status: number, message: string, public body?: unknown, public type = '') { super(message); }
+}
+
 /**
- * Read what the model provider actually said. The SDK error carries the HTTP status and the JSON body;
- * the body's message is the useful part (out of credit, bad key, rate limit, overloaded), so surface it.
+ * Read what the model provider actually said. Moonshot answers in the OpenAI error shape
+ * ({ error: { message, type, code } }) with a status: 401 bad key, 403 no balance or quota, 404 unknown
+ * model, 429 rate limit, 5xx overloaded. Surface the message, and give the person something true to read.
  */
 export function describeProviderError(e: unknown): ProviderError {
-  const err = e as { status?: number; message?: string; error?: { error?: { type?: string; message?: string }; type?: string; message?: string } };
+  const err = e as { status?: number; message?: string; type?: string; body?: unknown; error?: { message?: string; type?: string } };
   const status = typeof err?.status === 'number' ? err.status : null;
-  const body = err?.error?.error || err?.error || {};
-  const type = String(body?.type || '');
-  const message = String(body?.message || err?.message || e || '').slice(0, 400);
+  const body = (err?.body || {}) as { error?: { message?: string; type?: string; code?: string } };
+  const type = String(err?.type || body?.error?.type || err?.error?.type || '');
+  const message = String(body?.error?.message || err?.error?.message || err?.message || e || '').slice(0, 400);
   const m = message.toLowerCase();
   let code: ProviderErrorCode = 'upstream_error';
-  if (/credit balance|purchase credits|spend limit|billing|plans & billing/.test(m)) code = 'provider_billing';
-  else if (status === 401 || status === 403 || type === 'authentication_error' || type === 'permission_error') code = 'provider_auth';
-  else if (status === 429 || type === 'rate_limit_error') code = 'rate_limited';
-  else if (status === 529 || status === 503 || type === 'overloaded_error') code = 'overloaded';
-  else if (status === 400 && /prompt is too long|too many tokens|context length/.test(m)) code = 'prompt_too_large';
-  else if (status === 400 || type === 'invalid_request_error') code = 'invalid_request';
+  if (/balance|insufficient|quota|billing|recharge|top up|credit/.test(m) || (status === 403 && /quota|balance/.test(type))) code = 'provider_billing';
+  else if (status === 401 || status === 403 || /invalid api key|authentication|unauthorized/.test(m)) code = 'provider_auth';
+  else if (status === 429 || /rate limit|too many requests|concurrency/.test(m)) code = 'rate_limited';
+  else if (status === 503 || status === 502 || status === 529 || /overloaded|server busy|engine overloaded/.test(m)) code = 'overloaded';
+  else if (status === 400 && /context length|too long|maximum context|max_tokens|token limit/.test(m)) code = 'prompt_too_large';
+  else if (status === 400 || status === 404 || status === 422) code = 'invalid_request';
   const forUser = {
     provider_billing: 'Ricorsa cannot reach its AI provider right now because the account behind it needs attention. The site owner has been notified; please try again later.',
     provider_auth: 'Ricorsa cannot reach its AI provider right now because its access key was rejected. The site owner has been notified; please try again later.',
@@ -59,40 +68,58 @@ export function describeProviderError(e: unknown): ProviderError {
   return { code, status, type, message, forAdmin, forUser };
 }
 
-/** True when a 400 is about the web search tool itself (unknown version) rather than about the account or the request. */
-function isToolVersionRejection(e: unknown): boolean {
-  const p = describeProviderError(e);
-  return p.status === 400 && /web_search|tools\.\d|tool type|tool.*(version|not supported|unsupported|invalid)/i.test(p.message);
-}
-
 export type SystemBlock = { text: string; cache?: boolean };
 export type Msg = { role: 'user' | 'assistant'; content: string };
 export type SearchOpts = { maxUses: number; allowedDomains?: string[] };
+export type ToolCall = { server: string; name: string; error?: boolean };
+/** A connector offered to the model as tools; Ricorsa calls the MCP server when the model asks. */
+export type McpServerSpec = { name: string; label: string; url: string; token: string | null; allowedTools: string[] | null; tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> };
 export type StreamResult = {
   text: string; truncated: boolean; model: string; sources: Source[];
   usage: { in: number; out: number; cacheRead: number; cacheWrite: number; searches: number };
-  /** Connector tools the model called (server name, tool, whether the call failed). */
   tools: ToolCall[];
 };
-export type ToolCall = { server: string; name: string; error?: boolean };
-/** A connector handed to the model through the provider's MCP connector. */
-export type McpServerSpec = { name: string; label: string; url: string; token: string | null; allowedTools: string[] | null };
-const MCP_BETA = 'mcp-client-2025-04-04';
 
-function domainOf(url: string): string { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } }
-function normUrl(url: string): string { return url.replace(/#.*$/, '').replace(/\/$/, ''); }
+type ChatMessage = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>; tool_call_id?: string; name?: string; partial?: boolean };
+type FunctionTool = { type: 'function'; function: { name: string; description?: string; parameters: Record<string, unknown> } };
+
+const MAX_TOOL_ROUNDS = 6;
+const MAX_CONTINUATIONS = 3;
+
+/** Function names the API accepts: letters, digits, underscore, dash, at most 64 characters. */
+function fnName(server: string, tool: string, taken: Set<string>): string {
+  let base = `${server}__${tool}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 60) || 'tool';
+  let out = base, n = 2;
+  while (taken.has(out)) out = `${base.slice(0, 57)}_${n++}`;
+  taken.add(out); return out;
+}
+
+function toolsFor(mcp: McpServerSpec[] | undefined): { tools: FunctionTool[]; lookup: Map<string, { spec: McpServerSpec; tool: string }> } {
+  const tools: FunctionTool[] = []; const lookup = new Map<string, { spec: McpServerSpec; tool: string }>(); const taken = new Set<string>();
+  for (const spec of mcp || []) {
+    for (const t of spec.tools || []) {
+      if (spec.allowedTools && !spec.allowedTools.includes(t.name)) continue;
+      const name = fnName(spec.name, t.name, taken);
+      lookup.set(name, { spec, tool: t.name });
+      const params = t.inputSchema && typeof t.inputSchema === 'object' && t.inputSchema.type ? t.inputSchema : { type: 'object', properties: {} };
+      tools.push({ type: 'function', function: { name, description: `${spec.label}: ${t.description || t.name}`.slice(0, 1000), parameters: params } });
+      if (tools.length >= 96) break;
+    }
+  }
+  return { tools, lookup };
+}
 
 /**
- * Stream a completion. `onText` receives each delta of the answer text. With `search` set, the model
- * gets Anthropic's web search tool: results arrive as numbered sources (through `onSources`) while the
- * model is still working, and every citation the model attaches to a span is turned into a bracketed
- * marker `[n]` in the text stream, so the client renders it like any other citation.
- * The stable system block is marked for prompt caching so the instruction prefix is billed at the cache-read rate.
+ * Stream a completion. `onText` receives each delta of the answer text. With `mcp` set, the connectors'
+ * tools are offered to the model and called on its behalf (results go back to the model, the loop continues
+ * until it answers). When the output limit cuts an answer short, the text so far is handed back in partial
+ * mode and the model carries on where it stopped.
  */
 export async function streamAnswer(opts: {
   tier: Tier; system: SystemBlock[]; messages: Msg[]; maxTokens: number; signal?: AbortSignal;
   search?: SearchOpts | null;
   mcp?: McpServerSpec[] | null;
+  temperature?: number;
   onText: (delta: string) => void;
   onSources?: (sources: Source[]) => void;
   onStatus?: (text: string) => void;
@@ -100,136 +127,109 @@ export async function streamAnswer(opts: {
 }): Promise<StreamResult> {
   const model = modelFor(opts.tier);
   if (mockMode()) return mockStream(opts, model);
-  const system = opts.system.map(b => b.cache ? ({ type: 'text' as const, text: b.text, cache_control: { type: 'ephemeral' as const } }) : ({ type: 'text' as const, text: b.text }));
-  const messages = opts.messages.map((m, i) => ({
-    role: m.role,
-    content: i === opts.messages.length - 2 && opts.messages.length >= 4
-      ? [{ type: 'text' as const, text: m.content, cache_control: { type: 'ephemeral' as const } }]  // cache the conversation prefix for follow-ups
-      : m.content,
-  }));
-
-  let lastErr: unknown = null;
-  for (const version of opts.search ? SEARCH_TOOL_VERSIONS : ['']) {
-    const tools = opts.search
-      ? [{ type: version, name: 'web_search', max_uses: opts.search.maxUses, ...(opts.search.allowedDomains?.length ? { allowed_domains: opts.search.allowedDomains } : {}) }]
-      : undefined;
-    try {
-      return await runStream({ model, system, messages, maxTokens: opts.maxTokens, tools: tools as never, mcp: opts.mcp?.length ? opts.mcp : undefined, signal: opts.signal, onText: opts.onText, onSources: opts.onSources, onStatus: opts.onStatus, onTool: opts.onTool });
-    } catch (e) {
-      lastErr = e;
-      // An unsupported tool version is rejected before anything streams; try the previous version.
-      if (opts.search && isToolVersionRejection(e) && version !== SEARCH_TOOL_VERSIONS[SEARCH_TOOL_VERSIONS.length - 1]) { console.warn('web search tool version rejected, falling back', version); continue; }
-      const p = describeProviderError(e);
-      console.error('[provider] request failed', JSON.stringify({ code: p.code, status: p.status, type: p.type, message: p.message, model }));
-      throw e;
-    }
-  }
-  throw lastErr;
-}
-
-async function runStream(o: {
-  model: string; system: unknown; messages: unknown; maxTokens: number; tools?: unknown; mcp?: McpServerSpec[]; signal?: AbortSignal;
-  onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; onTool?: (c: ToolCall) => void;
-}): Promise<StreamResult> {
-  let out = '';
-  const sources: Source[] = [];
-  const toolCalls: ToolCall[] = [];
-  const labelOf = new Map((o.mcp || []).map(m => [m.name, m.label]));
-  const mcpServers = o.mcp?.map(m => ({ type: 'url' as const, url: m.url, name: m.name, ...(m.token ? { authorization_token: m.token } : {}), ...(m.allowedTools ? { tool_configuration: { enabled: true, allowed_tools: m.allowedTools } } : {}) }));
-  const byUrl = new Map<string, number>();
-  const emit = (t: string) => { out += t; o.onText(t); };
-  const sourceFor = (url: string, title: string | null, snippet?: string): number => {
-    const k = normUrl(url);
-    let n = byUrl.get(k);
-    if (!n) { n = sources.length + 1; byUrl.set(k, n); sources.push({ n, title: (title || domainOf(url) || url).slice(0, 140), domain: domainOf(url), url, snippet: snippet ? snippet.replace(/\s+/g, ' ').slice(0, 300) : undefined }); }
-    else if (snippet && !sources[n - 1].snippet) sources[n - 1].snippet = snippet.replace(/\s+/g, ' ').slice(0, 300);
-    return n;
-  };
-
+  const system = opts.system.map(b => b.text).join('\n\n');
+  const convo: ChatMessage[] = [{ role: 'system', content: system }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
+  const { tools, lookup } = toolsFor(opts.mcp || undefined);
+  const labelOf = new Map((opts.mcp || []).map(m => [m.name, m.label]));
   const usage = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0, searches: 0 };
-  const messages = [...(o.messages as Array<{ role: string; content: unknown }>)];
-  let truncated = false;
-  // The server tool loop can pause a long turn (stop_reason "pause_turn"); continue it a few times.
-  for (let round = 0; round < 4; round++) {
-    const params = { model: o.model, max_tokens: o.maxTokens, system: o.system as never, messages: messages as never, ...(o.tools ? { tools: o.tools as never } : {}) };
-    // With connectors, the request goes through the beta endpoint that knows how to call MCP servers.
-    type AnyStream = { on: (event: 'streamEvent', listener: (ev: { type: string; index: number; content_block?: unknown; delta?: unknown }) => void) => unknown; finalMessage: () => Promise<{ usage: unknown; content: Array<{ type: string }>; stop_reason: string | null }> };
-    const stream: AnyStream = (mcpServers?.length
-      ? client().beta.messages.stream({ ...params, mcp_servers: mcpServers, betas: [MCP_BETA] } as never, { signal: o.signal })
-      : client().messages.stream(params, { signal: o.signal })) as unknown as AnyStream;
-    const marked = new Map<number, Set<number>>();   // content block index -> source numbers already marked in it
-    const toolInput = new Map<number, string>();
+  const toolCalls: ToolCall[] = [];
+  let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
 
-    stream.on('streamEvent', (ev) => {
-      if (ev.type === 'content_block_start') {
-        const b = ev.content_block as { type: string; content?: unknown };
-        if (b.type === 'web_search_tool_result') {
-          const content = b.content;
-          if (Array.isArray(content)) {
-            let added = false;
-            for (const r of content as Array<{ type: string; url?: string; title?: string }>) {
-              if (r.type !== 'web_search_result' || !r.url || !/^https?:\/\//.test(r.url)) continue;
-              const before = sources.length; sourceFor(r.url, r.title || null); if (sources.length > before) added = true;
-            }
-            console.log('[search] results', content.length, 'sources', sources.length);
-            if (added) o.onSources?.(sources.map(s => ({ ...s })));
-          } else if (content && typeof content === 'object' && (content as { type?: string }).type === 'web_search_tool_result_error') {
-            console.log('[search] error', (content as { error_code?: string }).error_code);
-          }
-        } else if (b.type === 'server_tool_use') { toolInput.set(ev.index, ''); }
-        else if (b.type === 'mcp_tool_use') {
-          const m = b as unknown as { server_name?: string; name?: string };
-          const call: ToolCall = { server: String(m.server_name || ''), name: String(m.name || '') };
-          toolCalls.push(call); o.onTool?.(call);
-          o.onStatus?.(`Using ${labelOf.get(call.server) || call.server}: ${call.name.replace(/_/g, ' ')}`);
-          console.log('[mcp] tool use', call.server, call.name);
-        } else if (b.type === 'mcp_tool_result') {
-          const m = b as unknown as { is_error?: boolean };
-          const last = [...toolCalls].reverse().find(c => c.error === undefined);
-          if (last) { last.error = !!m.is_error; o.onTool?.(last); }
-          if (m.is_error) console.warn('[mcp] tool result error', last?.server, last?.name);
+  for (;;) {
+    const res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature: opts.temperature ?? 0.6, signal: opts.signal,
+      onText: (d) => { out += d; opts.onText(d); } });
+    usage.in += res.usage.in; usage.out += res.usage.out; usage.cacheRead += res.usage.cacheRead;
+    console.log('[answer]', JSON.stringify({ model, finish: res.finish, tools: res.toolCalls.length, chars: out.length, in: res.usage.in, out: res.usage.out }));
+
+    if (res.finish === 'tool_calls' && res.toolCalls.length && rounds < MAX_TOOL_ROUNDS) {
+      rounds++;
+      convo.push({ role: 'assistant', content: res.text || null, tool_calls: res.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })) });
+      for (const c of res.toolCalls) {
+        const hit = lookup.get(c.name);
+        const call: ToolCall = { server: hit ? hit.spec.name : c.name, name: hit ? hit.tool : c.name };
+        toolCalls.push(call); opts.onTool?.(call);
+        opts.onStatus?.(`Using ${hit ? labelOf.get(hit.spec.name) || hit.spec.name : c.name}: ${call.name.replace(/_/g, ' ')}`);
+        let args: Record<string, unknown> = {}; try { args = c.arguments ? JSON.parse(c.arguments) : {}; } catch { args = {}; }
+        let text: string; let isError = false;
+        if (!hit) { text = 'Unknown tool'; isError = true; }
+        else {
+          try { const r = await callMcpTool(hit.spec.url, hit.spec.token, hit.tool, args, { signal: opts.signal }); text = r.text; isError = r.isError; }
+          catch (e) { text = `The connector could not be reached: ${String((e as Error)?.message || e)}`; isError = true; }
         }
-      } else if (ev.type === 'content_block_delta') {
-        const d = ev.delta as { type: string; text?: string; partial_json?: string; citation?: { type: string; url?: string; title?: string | null; cited_text?: string } };
-        if (d.type === 'text_delta' && d.text) emit(d.text);
-        else if (d.type === 'input_json_delta') toolInput.set(ev.index, (toolInput.get(ev.index) || '') + (d.partial_json || ''));
-        else if (d.type === 'citations_delta' && d.citation && d.citation.type === 'web_search_result_location' && d.citation.url) {
-          const n = sourceFor(d.citation.url, d.citation.title || null, d.citation.cited_text);
-          const set = marked.get(ev.index) || new Set<number>();
-          if (!set.has(n)) { set.add(n); marked.set(ev.index, set); emit(`[${n}]`); }
-        }
-      } else if (ev.type === 'content_block_stop' && toolInput.has(ev.index)) {
-        try { const q = (JSON.parse(toolInput.get(ev.index) || '{}') as { query?: string }).query; if (q) o.onStatus?.(`Searching: ${String(q).slice(0, 80)}`); } catch { /* partial json */ }
-        toolInput.delete(ev.index);
+        call.error = isError; opts.onTool?.(call);
+        console.log('[mcp] tool', call.server, call.name, isError ? 'error' : 'ok', text.length);
+        convo.push({ role: 'tool', tool_call_id: c.id, name: c.name, content: isError ? `ERROR: ${text}` : text });
       }
-    });
-
-    const final = await stream.finalMessage();
-    const u = final.usage as unknown as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; server_tool_use?: { web_search_requests?: number } };
-    usage.in += u.input_tokens || 0; usage.out += u.output_tokens || 0; usage.cacheRead += u.cache_read_input_tokens || 0; usage.cacheWrite += u.cache_creation_input_tokens || 0; usage.searches += u.server_tool_use?.web_search_requests || 0;
-    const cited = final.content.filter(c => c.type === 'text' && Array.isArray((c as { citations?: unknown[] }).citations) && ((c as { citations?: unknown[] }).citations || []).length).length;
-    console.log('[answer]', JSON.stringify({ round, stop: final.stop_reason, searches: u.server_tool_use?.web_search_requests || 0, sources: sources.length, citedBlocks: cited, markers: (out.match(/\[\d{1,2}\]/g) || []).length, chars: out.length, model: o.model }));
-    if (final.stop_reason === 'pause_turn' && round < 3) { messages.push({ role: 'assistant', content: final.content }); continue; }
-    if (final.stop_reason === 'tool_use') { truncated = false; break; }  // a client tool we did not offer; stop cleanly
-    if (final.stop_reason === 'max_tokens' && round < 3 && out.trim().length > 0 && !/<\/learned>\s*$/.test(out)) {
-      // Ran out of room mid-answer: hand the text back as a prefill and let the model carry on where it stopped.
-      const last = messages[messages.length - 1];
-      if (last && last.role === 'assistant') messages.pop();
-      messages.push({ role: 'assistant', content: out.replace(/\s+$/, '') });
       continue;
     }
-    truncated = final.stop_reason === 'max_tokens';
+    if (res.finish === 'length' && continuations < MAX_CONTINUATIONS && out.trim().length > 0 && !/<\/learned>\s*$|<\/app>\s*$|<\/reply>\s*$/.test(out)) {
+      // Ran out of room mid-answer: hand the text back as a partial assistant message and let the model carry on.
+      continuations++;
+      const last = convo[convo.length - 1];
+      if (last.role === 'assistant' && last.partial) last.content = out; else convo.push({ role: 'assistant', content: out, partial: true });
+      continue;
+    }
+    truncated = res.finish === 'length';
     break;
   }
-  return { text: out, truncated, model: o.model, sources, usage, tools: toolCalls };
+  return { text: out, truncated, model, sources: [], usage, tools: toolCalls };
+}
+
+type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number } };
+
+/** One streamed chat completion. Parses the SSE stream, collects text, tool calls and usage. */
+async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature: number; signal?: AbortSignal; onText: (d: string) => void }): Promise<ChatOut> {
+  const body: Record<string, unknown> = { model: o.model, messages: o.messages, max_tokens: o.maxTokens, temperature: o.temperature, stream: true, stream_options: { include_usage: true } };
+  if (o.tools?.length) { body.tools = o.tools; body.tool_choice = 'auto'; }
+  const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body), signal: o.signal });
+  if (!res.ok) {
+    const raw = await res.text().catch(() => '');
+    let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* not json */ }
+    const msg = (parsed as { error?: { message?: string } })?.error?.message || raw.slice(0, 300) || `HTTP ${res.status}`;
+    throw new ProviderRequestError(res.status, msg, parsed, String((parsed as { error?: { type?: string } })?.error?.type || ''));
+  }
+  if (!res.body) throw new ProviderRequestError(502, 'Empty response from the model provider');
+  const reader = res.body.getReader(); const dec = new TextDecoder();
+  let buf = ''; let text = ''; let finish = 'stop';
+  const calls = new Map<number, { id: string; name: string; arguments: string }>();
+  const usage = { in: 0, out: 0, cacheRead: 0 };
+  const handle = (data: string) => {
+    if (data === '[DONE]') return;
+    let j: { choices?: Array<{ delta?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }>; usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } };
+    try { j = JSON.parse(data); } catch { return; }
+    const ch = j.choices?.[0];
+    if (ch?.delta?.content) { text += ch.delta.content; o.onText(ch.delta.content); }
+    for (const tc of ch?.delta?.tool_calls || []) {
+      const idx = tc.index ?? 0; const cur = calls.get(idx) || { id: '', name: '', arguments: '' };
+      if (tc.id) cur.id = tc.id; if (tc.function?.name) cur.name += tc.function.name; if (tc.function?.arguments) cur.arguments += tc.function.arguments;
+      calls.set(idx, cur);
+    }
+    if (ch?.finish_reason) finish = ch.finish_reason;
+    if (j.usage) { usage.in = j.usage.prompt_tokens || usage.in; usage.out = j.usage.completion_tokens || usage.out; usage.cacheRead = j.usage.prompt_tokens_details?.cached_tokens || j.usage.cached_tokens || usage.cacheRead; }
+  };
+  for (;;) {
+    const { value, done } = await reader.read(); if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).replace(/\r$/, ''); buf = buf.slice(i + 1);
+      if (line.startsWith('data:')) handle(line.slice(5).trim());
+    }
+  }
+  if (buf.startsWith('data:')) handle(buf.slice(5).trim());
+  const toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c], k) => ({ id: c.id || `call_${k}`, name: c.name, arguments: c.arguments }));
+  if (toolCalls.length && finish !== 'tool_calls') finish = 'tool_calls';
+  return { text, finish, toolCalls, usage };
 }
 
 /** Small structured call (query planning, rewrites, Discover ideas). Returns parsed JSON or null. */
 export async function quickJson<T = unknown>(prompt: string, maxTokens = 400): Promise<T | null> {
   if (mockMode()) return null;
   try {
-    const res = await client().messages.create({ model: modelFor('quick'), max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] });
-    const text = res.content.filter(c => c.type === 'text').map(c => (c as { text: string }).text).join('');
+    const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify({ model: modelFor('quick'), max_tokens: maxTokens, temperature: 0.4, messages: [{ role: 'system', content: 'Reply with valid JSON only: no prose, no markdown fences.' }, { role: 'user', content: prompt }] }) });
+    if (!res.ok) { const raw = await res.text().catch(() => ''); let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* */ } throw new ProviderRequestError(res.status, (parsed as { error?: { message?: string } })?.error?.message || raw.slice(0, 200) || `HTTP ${res.status}`, parsed); }
+    const j = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const text = j.choices?.[0]?.message?.content || '';
     const a = text.indexOf('['), b = text.lastIndexOf(']'); const oa = text.indexOf('{'), ob = text.lastIndexOf('}');
     const slice = a >= 0 && (oa < 0 || a < oa) ? text.slice(a, b + 1) : text.slice(oa, ob + 1);
     return JSON.parse(slice) as T;
@@ -251,8 +251,8 @@ This is a mock answer for "${q}", streamed by the local development stub so the 
 
 | Piece | Real mode | Mock mode |
 |---|---|---|
-| Retrieval | Anthropic web search | canned results |
-| Model | Claude | this text |
+| Retrieval | Brave Search | canned results |
+| Model | Kimi K2 | this text |
 | Graph | D1 | D1 |
 </answer>
 <related>
@@ -312,7 +312,7 @@ render();
   return { text: full, truncated: false, model, sources: [], usage: { in: 900, out: 700, cacheRead: 0, cacheWrite: 0, searches: 0 }, tools: [] };
 }
 
-function mockSources(query: string): Source[] {
+export function mockSources(query: string): Source[] {
   const base = [
     ['Rayleigh scattering', 'en.wikipedia.org', 'https://en.wikipedia.org/wiki/Rayleigh_scattering', 'Rayleigh scattering is the scattering of light by particles much smaller than the wavelength of the light, and it is proportional to the inverse fourth power of the wavelength.'],
     ['Why Is the Sky Blue?', 'spaceplace.nasa.gov', 'https://spaceplace.nasa.gov/blue-sky/en/', 'Blue light is scattered in all directions by the tiny molecules of air in Earth\'s atmosphere.'],

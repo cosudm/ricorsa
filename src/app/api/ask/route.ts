@@ -4,7 +4,7 @@ import { currentUser } from '@/lib/session';
 import { fail, readJson, HttpError } from '@/lib/http';
 import { assertQuota, recordUsage } from '@/lib/usage';
 import { createThread, getThreadOwned, makeTurn, saveTurns } from '@/lib/threads';
-import { searchPlan, type Source } from '@/lib/search';
+import { searchPlan, planQueries, retrieve, readPages, sourcesBlock, type Source } from '@/lib/search';
 import { loadGraph, saveGraph, mergeLearned, graphPromptBlock } from '@/lib/graph';
 import { buildMessages, dynamicSystem, systemBlocks } from '@/lib/prompt';
 import { streamAnswer, describeProviderError } from '@/lib/llm';
@@ -87,35 +87,47 @@ export async function POST(req: Request) {
       try {
         send('meta', { threadId: th.id, turnId: turn.id, title: th.title });
 
-        // 1. Retrieval happens inside the model call (Anthropic web search); decide how much is allowed.
+        // 1. Retrieval: Ricorsa searches the web itself and numbers what it finds; the model reads and cites it.
         const search = searchPlan(turn.mode, turn.focus);
         let sources: Source[] = [];
+        let searches = 0;
         send('status', { text: search ? 'Searching the web' : 'Writing' });
         send('sources', []);
+        if (search) {
+          try {
+            const queries = await planQueries(turn.q, turn.mode, turn.focus, history.slice(-3).map(h => h.q));
+            for (const q of queries.slice(0, 2)) send('status', { text: `Searching: ${q.replace(/\s*\(site:[^)]*\)/, '').slice(0, 80)}` });
+            const r = await retrieve(queries.slice(0, search.maxUses), turn.mode === 'research' ? 6 : 8, ctl.signal);
+            sources = r.sources; searches = r.searches;
+            turn.sources = sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url }));
+            send('sources', turn.sources);
+            if (turn.mode === 'research' && sources.length) { send('status', { text: 'Reading the top pages' }); await readPages(sources, 5, ctl.signal); }
+          } catch (e) { console.warn('[search] retrieval failed', String((e as Error)?.message || e)); }
+        }
 
-        // 2. Context: profile + space
+        // 2. Context: profile + space + connectors
         const graph = await loadGraph(user.id);
         const profile = graphPromptBlock(graph);
         let space = null;
         if (th.spaceId) { const rows = await db().select().from(schema.spaces).where(and(eq(schema.spaces.id, th.spaceId), eq(schema.spaces.userId, user.id))).limit(1); space = rows[0] || null; }
-        // Connected apps: enabled connectors become tools for this answer (Pro and Team; admins always).
         let mcp: Awaited<ReturnType<typeof connectorsForModel>> = [];
         try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors); } catch (e) { console.warn('connectors unavailable', e); }
         const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp) }));
-        const messages = buildMessages(history, turn.q);
+        const messages = buildMessages(history, turn.q, sourcesBlock(sources));
         turn.tools = [];
 
-        // 3. Generation: the model searches, reads, and writes; sources and citations stream out as they appear
+        // 3. Generation: the model reads the sources, calls connector tools when it needs them, and writes
         let wroteText = false;
+        send('status', { text: turn.mode === 'research' ? 'Working through the sources' : 'Writing' });
         const result = await streamAnswer({
           tier: turn.tier, system, messages, signal: ctl.signal, search,
-          mcp: mcp.map(m => ({ name: m.name, label: m.label, url: m.url, token: m.token, allowedTools: m.allowedTools })),
+          mcp: mcp.map(m => ({ name: m.name, label: m.label, url: m.url, token: m.token, allowedTools: m.allowedTools, tools: m.tools })),
           maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' ? 6000 : 4000),
           onStatus: (text) => { if (!wroteText) send('status', { text }); },
-          onTool: (call) => { const label = mcp.find(m => m.name === call.server)?.label || call.server; const i = (turn.tools || []).findIndex(t => t.server === call.server && t.name === call.name && t.error === undefined); const rec = { server: label, name: call.name, error: call.error }; if (i >= 0) turn.tools![i] = rec; else turn.tools = [...(turn.tools || []), rec]; send('tools', turn.tools); },
-          onSources: (list) => { sources = list; turn.sources = list.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url })); send('sources', turn.sources); },
-          onText: (delta) => { if (!wroteText) { wroteText = true; send('status', { text: turn.mode === 'research' ? 'Working through the sources' : 'Writing' }); } raw += delta; send('delta', { text: delta }); },
+          onTool: (call) => { const label = mcp.find(m => m.name === call.server)?.label || call.server; const i = (turn.tools || []).findIndex(t => t.server === label && t.name === call.name && t.error === undefined); const rec = { server: label, name: call.name, error: call.error }; if (i >= 0) turn.tools![i] = rec; else if (!(turn.tools || []).some(t => t.server === label && t.name === call.name && t.error === call.error)) turn.tools = [...(turn.tools || []), rec]; send('tools', turn.tools); },
+          onText: (delta) => { if (!wroteText) { wroteText = true; send('status', { text: turn.mode === 'research' ? 'Writing the report' : 'Writing' }); } raw += delta; send('delta', { text: delta }); },
         });
+        result.sources = sources; result.usage.searches = searches;
         raw = result.text;
         sources = result.sources;
         turn.sources = sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url }));

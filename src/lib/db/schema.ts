@@ -156,7 +156,7 @@ export const config = sqliteTable('config', {
  */
 export type ConnectorAuth = 'none' | 'bearer' | 'oauth';
 export type ConnectorStatus = 'new' | 'ok' | 'error' | 'needs_auth';
-export type ConnectorTool = { name: string; description?: string };
+export type ConnectorTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
 /** Encrypted at rest. Bearer: { token }. OAuth: tokens plus what is needed to refresh them. */
 export type ConnectorSecret = { token?: string; accessToken?: string; refreshToken?: string; expiresAt?: number; tokenEndpoint?: string; clientId?: string; clientSecret?: string; scope?: string; resource?: string };
 /** An OAuth sign-in that has started and not yet come back. */

@@ -86,12 +86,12 @@ export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, p
 
 /** Rough per-answer cost estimate in micro-dollars, for the usage table. Adjust to current list prices. */
 export const PRICE_PER_MTOK_USD: Record<string, { in: number; out: number; cacheRead: number }> = {
-  quick: { in: 1, out: 5, cacheRead: 0.1 },
-  default: { in: 3, out: 15, cacheRead: 0.3 },
-  complex: { in: 5, out: 25, cacheRead: 0.5 },
+  quick: { in: 1.15, out: 8, cacheRead: 0.15 },    // Kimi K2 turbo
+  default: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K2
+  complex: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K2 thinking
 };
-/** Anthropic web search is billed per search on top of tokens. */
-export const WEB_SEARCH_USD = 0.01;
+/** Web search (Brave) is billed per query on top of tokens once past the free allowance. */
+export const WEB_SEARCH_USD = 0.005;
 
 export function estimateCostMicros(tier: string, tokensIn: number, tokensOut: number, cacheRead = 0, searches = 0): number {
   const p = PRICE_PER_MTOK_USD[tier] || PRICE_PER_MTOK_USD.default;

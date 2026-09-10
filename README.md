@@ -9,7 +9,7 @@ An answer engine that learns you. Live web citations, a recursive learning loop 
 | Landing, pricing, account, legal pages | `src/app/*` | Server-rendered React, same visual system as the app |
 | The app (Home, threads, Discover, Spaces, Library, Graph) | `src/app/app/page.tsx` + `public/app/assets/` | Vanilla JS client talking to `/api/*` over JSON and server-sent events |
 | Answer pipeline | `src/app/api/ask/route.ts` | Search, prompt, stream, parse, learn, meter |
-| Retrieval | `src/lib/llm.ts`, `src/lib/search.ts` | Anthropic web search runs inside the model call; results become numbered sources and citations become `[n]` markers |
+| Retrieval | `src/lib/search.ts`, `src/lib/llm.ts` | Brave Search runs before the model call; results become numbered sources the model cites with `[n]` markers |
 | Prompting and parsing | `src/lib/prompt.ts`, `src/lib/parse.ts` | Cached instruction prefix, tagged output blocks |
 | Identity graph | `src/lib/graph.ts` | Merge, decay, prune, prompt block, forget, reset |
 | Plans and quotas | `src/lib/plans.ts`, `src/lib/usage.ts` | Edit prices and limits here |
@@ -46,7 +46,7 @@ To use real models and live web search locally, add `ANTHROPIC_API_KEY` and remo
 
 ## Production setup, in order
 
-Everything runs in one Cloudflare account plus three outside services: Auth0 (sign-in), Anthropic (models and web search) and PayPal (billing).
+Everything runs in one Cloudflare account plus four outside services: Auth0 (sign-in), Moonshot AI (Kimi models), Brave Search (live web results) and PayPal (billing).
 
 ### 1. Cloudflare
 
@@ -61,9 +61,9 @@ Create a Regular Web Application in Auth0. Set:
 
 You need `AUTH0_DOMAIN` (no `https://`), `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `AUTH0_SECRET` (`openssl rand -hex 32`) and `APP_BASE_URL=https://ricorsa.com`. Turn on the social connections you want (Google, Microsoft) in the Auth0 dashboard; the app links to `/auth/login?screen_hint=signup` for sign-up and `/auth/login` for sign-in. Until these are set, the marketing pages work and the app pages answer with a short "being set up" notice.
 
-### 3. Models and search (Anthropic)
+### 3. Models (Kimi) and search (Brave)
 
-`ANTHROPIC_API_KEY` from the Anthropic Console. Model ids default to Sonnet for Best, Haiku for Fast, Opus for Reasoning; override with `MODEL_DEFAULT`, `MODEL_QUICK`, `MODEL_COMPLEX`. Live web search uses Anthropic's web search server tool, so there is no separate search provider or key; searches are metered per answer and priced into the cost estimate (`WEB_SEARCH_USD` in `src/lib/plans.ts`).
+`KIMI_API_KEY` from platform.moonshot.ai (API keys) and `BRAVE_API_KEY` from brave.com/search/api. Model ids default to `kimi-k2-0905-preview` for Best, `kimi-k2-turbo-preview` for Fast and `kimi-k2-thinking` for Reasoning; override with `MODEL_DEFAULT`, `MODEL_QUICK`, `MODEL_COMPLEX`, and point `KIMI_BASE_URL` elsewhere for any OpenAI-compatible endpoint. Searches are metered per answer and priced into the cost estimate (`WEB_SEARCH_USD` in `src/lib/plans.ts`).
 
 The stable instruction prefix is marked for prompt caching, and follow-ups cache the conversation prefix, which is where most of the input tokens are.
 
@@ -98,7 +98,7 @@ Nodes carry an optional `geo` anchor (a GeoJSON point, line or polygon) so the s
 
 ## Answers and citations
 
-Each answer is one model call with Anthropic's web search tool attached (up to 3 searches for a normal question, 8 in Research mode, none for Writing focus). As the model searches, every result page becomes a numbered source and is pushed to the browser before the answer text starts. When the model draws on a page, the API attaches a citation to that span; `src/lib/llm.ts` turns each citation into a `[n]` marker in the text stream, so the client renders it as a chip the same way it always has. Earlier answers are fed back into follow-ups with the markers stripped, so the model never learns to write reference numbers itself.
+Each answer starts with retrieval: one Brave query for a normal question (none for Writing focus), four to six planned queries plus a read of the top pages in Research mode. The merged, numbered results are pushed to the browser before the model starts and handed to the model as context after the question; it cites them with `[n]` markers that the client renders as chips. Connectors are offered to the model as functions; when it calls one, Ricorsa calls the MCP server and returns the result, until the model answers. Answers that hit the output limit continue in partial mode. Earlier answers are fed back into follow-ups with the markers stripped.
 
 ## Provenance
 
@@ -106,7 +106,7 @@ Everything created from a graph carries a cryptographic id. When Discover genera
 
 ## Security notes
 
-- The browser never talks to PayPal or Anthropic directly, and never holds a key.
+- The browser never talks to PayPal, Moonshot AI or Brave directly, and never holds a key.
 - Subscriptions are only ever applied from PayPal's own subscription object, never from what the browser claims.
 - Every API route resolves the signed-in user first; threads, Spaces and graphs are always filtered by owner.
 - Security headers are set in `next.config.ts`. Put Cloudflare's WAF and Turnstile in front of `/auth/login` if free-tier abuse shows up.
