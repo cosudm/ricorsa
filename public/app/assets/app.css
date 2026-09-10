@@ -266,10 +266,17 @@
   .send:disabled { background: var(--line-strong); }
   .send.stop { background: var(--ink); }
 
-  .attach-row { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 0 8px; }
-  .attach-thumb { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); }
-  .attach-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .attach-thumb button { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%; background: rgba(27,34,40,.75); color: #fff; display: grid; place-items: center; }
+  .attach-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 0 8px; }
+  .attach-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 12.5px; color: var(--ink); }
+  .attach-chip .name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .attach-chip .meta { color: var(--ink-3); font-size: 11.5px; }
+  .attach-chip.error { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }
+  .attach-chip.uploading { color: var(--ink-2); }
+  .attach-chip button { width: 18px; height: 18px; border-radius: 50%; color: var(--ink-3); display: grid; place-items: center; }
+  .attach-chip button:hover { background: var(--surface-2); color: var(--ink); }
+  .spinner.tiny { width: 12px; height: 12px; border-width: 2px; margin: 0; }
+  .composer.dropping { outline: 2px dashed var(--accent-line); outline-offset: 2px; }
+  .pill.file { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* ---------- Popover menus ---------- */
   .pop {

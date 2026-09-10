@@ -62,7 +62,10 @@ export type Turn = {
   tools?: { server: string; name: string; error?: boolean }[];
   /** Provenance hash for this turn: chained from the thread's origin and the previous turn. */
   lineage?: string;
+  /** Files the person attached to this question (the extracted text lives in the attachments table). */
+  attachments?: AttachmentMeta[];
 };
+export type AttachmentMeta = { id: string; name: string; type: string; size: number; chars: number };
 
 /** Where a thread came from. Discover-born threads carry the idea's hash id and the graph fingerprint it was drawn from. */
 export type ThreadOrigin = { kind: 'discover' | 'ask'; ideaId?: string; graphHash?: string; category?: string; title?: string; at: number; subject?: string };
@@ -186,6 +189,23 @@ export type BuildStatus = 'building' | 'done' | 'error';
 /** One line of the build conversation, kept on the session's root row. */
 /** A message in a build chat. A plan message may carry `next`: suggested next-step requests for that version. */
 export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; next?: string[]; at: number };
+/**
+ * Files attached to questions. Only the extracted text is kept (the upload itself is converted and discarded),
+ * tied to the thread it was used in; a row with no thread is a pending upload that expires.
+ */
+export const attachments = sqliteTable('attachments', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  threadId: text('thread_id'),
+  name: text('name').notNull(),
+  type: text('type').notNull().default(''),
+  size: integer('size').notNull().default(0),
+  text: text('text').notNull().default(''),
+  chars: integer('chars').notNull().default(0),
+  via: text('via').notNull().default('direct'),
+  createdAt: tsNow('created_at'),
+}, (t) => [index('attachments_user_idx').on(t.userId, t.createdAt), index('attachments_thread_idx').on(t.threadId)]);
+
 export const builds = sqliteTable('builds', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

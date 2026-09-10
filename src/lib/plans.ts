@@ -5,7 +5,8 @@
  */
 export type PlanKey = 'free' | 'pro' | 'team';
 
-export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; connectors: number };
+/** `files`: how many files a question can carry and how large each may be. */
+export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; connectors: number; files: { perQuestion: number; maxMb: number } };
 
 export type Plan = {
   key: PlanKey;
@@ -27,21 +28,21 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'free',
     name: 'Free',
     priceUsd: 0,
-    caps: { graph: 'preview', discover: 'locked', connectors: 0 },
+    caps: { graph: 'preview', discover: 'locked', connectors: 0, files: { perQuestion: 2, maxMb: 10 } },
     questionsPerDay: 10,
     questionsPerMonth: 150,
     researchPerMonth: 0,
     tiers: ['quick', 'default'],
     spaces: 1,
     blurb: 'Try it and let the graph start learning you.',
-    features: ['10 questions a day', 'Live web citations', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
+    features: ['10 questions a day', 'Live web citations', 'Attach files to a question: PDFs, documents, spreadsheets, images', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
   },
   pro: {
     key: 'pro',
     name: 'Pro',
     priceUsd: 20,
     paypalPlanEnv: 'PAYPAL_PLAN_PRO',
-    caps: { graph: 'full', discover: 'locked', connectors: 3 },
+    caps: { graph: 'full', discover: 'locked', connectors: 3, files: { perQuestion: 5, maxMb: 25 } },
     questionsPerDay: 300,
     questionsPerMonth: 1500,
     researchPerMonth: 40,
@@ -55,7 +56,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     name: 'Team',
     priceUsd: 49,
     paypalPlanEnv: 'PAYPAL_PLAN_TEAM',
-    caps: { graph: 'full', discover: 'full', connectors: 25 },
+    caps: { graph: 'full', discover: 'full', connectors: 25, files: { perQuestion: 10, maxMb: 40 } },
     questionsPerDay: 1000,
     questionsPerMonth: 5000,
     researchPerMonth: 150,

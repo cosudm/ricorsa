@@ -29,5 +29,7 @@ export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const user = await currentUser(); const { id } = await ctx.params;
   const t = await getThreadOwned(user.id, id);
   await db().delete(schema.threads).where(eq(schema.threads.id, t.id));
+  // The text of any file attached to this thread goes with it.
+  await db().delete(schema.attachments).where(eq(schema.attachments.threadId, t.id));
   return json({ ok: true });
 });

@@ -44,10 +44,11 @@ const FOCUS_TEXT: Record<string, string> = {
   code: 'Focus: Code. Prefer complete, runnable code in fenced blocks with a language tag, explain briefly, and prefer official documentation among the results.',
 };
 
-export function dynamicSystem(opts: { mode: 'search' | 'research'; focus: string; length: string | null; profile: string; space?: { name: string; description: string; instructions: string } | null; connectors?: string }): string {
+export function dynamicSystem(opts: { mode: 'search' | 'research'; focus: string; length: string | null; profile: string; space?: { name: string; description: string; instructions: string } | null; connectors?: string; files?: string[] }): string {
   const L: string[] = [];
   if (opts.profile) L.push(opts.profile);
   if (opts.connectors) L.push(opts.connectors);
+  if (opts.files?.length) L.push(`The person attached ${opts.files.length} file${opts.files.length === 1 ? '' : 's'} to this question (${opts.files.join(', ')}); their text is in the message. Work from the files first: quote or reference the specific passages, figures or rows that support each point, name the file they come from, and keep web sources for context the files do not give. If the files do not contain what was asked, say so before answering from elsewhere. For a review, be concrete: what is strong, what is missing or wrong, and what to change, in that order.`);
   const f = FOCUS_TEXT[opts.focus] || ''; if (f) L.push(f);
   if (opts.mode === 'research') {
     L.push('Mode: Research. Several searches were run from different angles and the top pages were read for you. Write an in-depth report: open with a 2 to 3 sentence summary of the answer, then 4 to 7 sections with ## headings covering background, how it works, key figures and evidence, trade-offs or competing views, and practical implications; finish with a "## Bottom line" section. Aim for 700 to 1200 words and draw on as many of the sources as are relevant, citing as you go.');
@@ -63,7 +64,7 @@ export function dynamicSystem(opts: { mode: 'search' | 'research'; focus: string
 }
 
 /** Build the message list: prior turns as plain Q/A, then the new question with the retrieved sources after it. */
-export function buildMessages(history: Turn[], question: string, sourcesBlock = ''): Msg[] {
+export function buildMessages(history: Turn[], question: string, sourcesBlock = '', filesBlock = ''): Msg[] {
   const msgs: Msg[] = [];
   let budget = 40000; // characters of history to keep, newest first
   const kept: Turn[] = [];
@@ -77,7 +78,7 @@ export function buildMessages(history: Turn[], question: string, sourcesBlock = 
     // Earlier answers carry [n] markers that were attached from citations; strip them so the model does not start writing its own.
     msgs.push({ role: 'assistant', content: (t.answer || '').replace(/\[\d{1,2}(?:\s*[,\-–]\s*\d{1,2})*\]/g, '').trim() || '(no answer was produced)' });
   }
-  msgs.push({ role: 'user', content: `Question: ${question}${sourcesBlock ? `\n\n${sourcesBlock}` : ''}` });
+  msgs.push({ role: 'user', content: `${filesBlock ? `${filesBlock}\n\n` : ''}Question: ${question}${sourcesBlock ? `\n\n${sourcesBlock}` : ''}` });
   return msgs;
 }
 

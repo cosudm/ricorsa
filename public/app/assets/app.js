@@ -44,6 +44,7 @@ const ICONS = {
   sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
   code: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/>',
   eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/>',
+  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   compare: '<path d="M9 3v18M15 3v18"/><path d="M3 8h6M15 8h6M3 16h6M15 16h6"/>',
   lightbulb: '<path d="M9 18h6M10 21h4"/><path d="M8.5 14.5A6 6 0 1 1 15.5 14.5c-.6.6-1 1.5-1 2.5h-5c0-1-.4-1.9-1-2.5z"/>',
   map: '<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/>',
@@ -137,6 +138,8 @@ async function bootstrap() {
   state.threads = me.threads; state.spaces = me.spaces; state.graph = me.graph; state.graphSize = me.graphSize || 0;
   state.settings = Object.assign({}, DEFAULT_SETTINGS, me.user.settings || {});
   state.ready = true;
+  // What the picker accepts and how many files a question may carry on this plan (fetched once, off the critical path).
+  api('/api/files').then(r => { state.fileLimits = { accept: r.accept || [], perQuestion: r.perQuestion || 1, maxMb: r.maxMb || 10 }; }).catch(() => {});
 }
 async function refreshGraph() { try { const r = await api('/api/graph'); state.graph = r.graph; } catch {} }
 function persistSettings() { api('/api/me', { method: 'PATCH', body: state.settings }).catch(() => {}); }
@@ -563,7 +566,7 @@ function applyParsed(turn) {
   if (p.learned) turn.learned = p.learned;
 }
 function makeTurn(q, o) {
-  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.tier || 'default', focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '' };
+  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.tier || 'default', focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '', attachments: o.attachments || [] };
 }
 /** Read an SSE response body and dispatch events. Resolves when the stream ends. */
 async function readSse(res, onEvent) {
@@ -583,12 +586,12 @@ async function readSse(res, onEvent) {
   }
 }
 async function runTurn(thread, turn, { rewrite } = {}) {
-  turn.status = 'running'; turn.error = null; turn.raw = ''; turn.answer = ''; turn.related = []; turn.sources = []; turn.tools = []; turn.truncated = false; turn.tierApplied = null; turn.learned = null; turn.learnedMerged = false; turn.statusText = 'Searching the web';
+  turn.status = 'running'; turn.error = null; turn.raw = ''; turn.answer = ''; turn.related = []; turn.sources = []; turn.tools = []; turn.truncated = false; turn.tierApplied = null; turn.learned = null; turn.learnedMerged = false; turn.statusText = (!rewrite && turn.attachments && turn.attachments.length) ? 'Reading ' + (turn.attachments.length === 1 ? turn.attachments[0].name : turn.attachments.length + ' files') : 'Searching the web';
   liveRender(thread, turn);
   const ctl = new AbortController();
   state.runs.set(thread.id, ctl);
   liveRender(thread, turn);
-  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, tier: turn.tier, focus: turn.focus, length: turn.length || state.settings.length };
+  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, tier: turn.tier, focus: turn.focus, length: turn.length || state.settings.length, attachments: (turn.attachments || []).map(a => a.id).filter(Boolean) };
   try {
     const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
     if (res.status === 401) { location.href = '/auth/login?returnTo=' + encodeURIComponent('/app#/thread/' + thread.id); return; }
@@ -669,7 +672,7 @@ function learnedSummary(L) {
 
 // ---------- Composer ----------
 function createComposer(o) {
-  const c = { mode: o.mode || state.settings.mode, tier: o.tier || state.settings.tier, focus: o.focus || state.settings.focus, images: [] };
+  const c = { mode: o.mode || state.settings.mode, tier: o.tier || state.settings.tier, focus: o.focus || state.settings.focus, files: [] };
   const el = document.createElement('div');
   el.className = 'composer ' + (o.variant === 'compact' ? 'compact' : 'hero');
   el.innerHTML = `
@@ -682,7 +685,7 @@ function createComposer(o) {
         </div>
       </div>
       <div class="right">
-        <button type="button" class="icon-btn" data-attach-btn aria-label="Attach image" title="Attach image" hidden>${icon('paperclip', 17)}</button>
+        <button type="button" class="icon-btn" data-attach-btn aria-label="Attach files" title="Attach files for the answer to read: PDF, Word, Excel, PowerPoint, text, code, images">${icon('paperclip', 17)}</button>
         <button type="button" class="chip-btn" data-tier aria-haspopup="menu" aria-expanded="false" title="Model: which model answers"></button>
         <button type="button" class="chip-btn" data-focus aria-haspopup="menu" aria-expanded="false" title="Focus: what kind of answer you want"></button>
         <button type="button" class="send" data-send aria-label="Ask" title="Send (Enter)" disabled>${icon('arrowRight', 18)}</button>
@@ -696,25 +699,46 @@ function createComposer(o) {
     $('[data-focus]', el).title = `Focus: ${FOCI[c.focus].label}. ${FOCI[c.focus].desc}. Click to change.`;
     $('[data-focus]', el).innerHTML = icon(FOCI[c.focus].icon, 15) + (c.focus !== 'web' ? `<span class="lbl">${FOCI[c.focus].label}</span>` : '') + icon('chevron', 13, 'class="caret"');
   };
-  const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; if (o.variant === 'compact') el.classList.toggle('multiline', ta.scrollHeight > 44 || c.images.length > 0); };
+  const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; if (o.variant === 'compact') el.classList.toggle('multiline', ta.scrollHeight > 44 || c.files.length > 0); };
   const running = () => o.threadId && state.runs.has(o.threadId);
   const paintSend = () => {
     if (running()) { send.disabled = false; send.classList.add('stop'); send.innerHTML = icon('stop', 16); send.setAttribute('aria-label', 'Stop'); }
-    else { send.classList.remove('stop'); send.innerHTML = icon('arrowRight', 18); send.setAttribute('aria-label', 'Ask'); send.disabled = !ta.value.trim() || !state.ready; }
+    else { send.classList.remove('stop'); send.innerHTML = icon('arrowRight', 18); send.setAttribute('aria-label', 'Ask'); const busy = c.files.some(f => f.status === 'uploading'); send.disabled = !ta.value.trim() || !state.ready || busy; send.title = busy ? 'Waiting for the files to finish uploading' : 'Send (Enter)'; }
   };
+  // Files travel ahead of the question: each one is uploaded and read as soon as it is picked, so sending is instant.
+  const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
   const paintAttach = () => {
-    const can = !!(state.limits && state.limits.images);
-    attachBtn.hidden = !can;
-    attachRow.hidden = !c.images.length;
-    attachRow.innerHTML = c.images.map((f, i) => `<div class="attach-thumb"><img alt="${esc(f.name)}" src="${f._url}"><button type="button" data-rm="${i}" aria-label="Remove">${icon('x', 11)}</button></div>`).join('');
-    $$('[data-rm]', attachRow).forEach(b => b.addEventListener('click', () => { const i = +b.dataset.rm; URL.revokeObjectURL(c.images[i]._url); c.images.splice(i, 1); paintAttach(); autosize(); }));
+    attachRow.hidden = !c.files.length;
+    attachRow.innerHTML = c.files.map((f, i) => `<div class="attach-chip ${esc(f.status)}" title="${esc(f.status === 'error' ? (f.error || 'Could not read this file') : f.status === 'uploading' ? 'Reading the file' : `${fmtSize(f.size)} · ${(f.chars || 0).toLocaleString('en-US')} characters read`)}">${f.status === 'uploading' ? '<span class="spinner tiny"></span>' : icon(f.status === 'error' ? 'alert' : 'file', 13)}<span class="name">${esc(f.name)}</span><span class="meta">${f.status === 'uploading' ? 'reading' : f.status === 'error' ? 'failed' : fmtSize(f.size)}</span><button type="button" data-rm="${i}" aria-label="Remove ${esc(f.name)}">${icon('x', 11)}</button></div>`).join('');
+    $$('[data-rm]', attachRow).forEach(b => b.addEventListener('click', () => { const i = +b.dataset.rm; const f = c.files[i]; if (f && f.id) api('/api/files/' + encodeURIComponent(f.id), { method: 'DELETE' }).catch(() => {}); c.files.splice(i, 1); paintAttach(); autosize(); paintSend(); }));
+  };
+  const addFiles = async (list) => {
+    const lim = state.fileLimits || { perQuestion: 2, maxMb: 10, accept: [] };
+    for (const file of Array.from(list || [])) {
+      if (c.files.length >= lim.perQuestion) { toast(`Up to ${lim.perQuestion} file${lim.perQuestion > 1 ? 's' : ''} per question on your plan`, 'bad'); break; }
+      if (file.size > lim.maxMb * 1048576) { toast(`${file.name} is over ${lim.maxMb} MB`, 'bad'); continue; }
+      const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+      if (lim.accept.length && !lim.accept.includes(ext)) { toast(`${file.name}: that file type is not supported`, 'bad'); continue; }
+      const item = { name: file.name, size: file.size, type: file.type, status: 'uploading', id: null, chars: 0, error: null };
+      c.files.push(item); paintAttach(); autosize(); paintSend();
+      try {
+        const fd = new FormData(); fd.append('file', file, file.name);
+        const res = await fetch('/api/files', { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw Object.assign(new Error(data.error || 'Could not read the file'), { code: data.code });
+        Object.assign(item, { id: data.file.id, chars: data.file.chars, status: 'ready' });
+      } catch (e) { item.status = 'error'; item.error = (e && e.message) || 'Could not read the file'; toast(item.error, 'bad'); }
+      paintAttach(); paintSend();
+    }
   };
   const submit = () => {
     if (running()) { stopRun(o.threadId); return; }
     const text = ta.value.trim(); if (!text) return;
-    const images = c.images.slice(); c.images.forEach(f => URL.revokeObjectURL(f._url)); c.images = [];
+    if (c.files.some(f => f.status === 'uploading')) { toast('One moment, a file is still being read', 'bad'); return; }
+    const attachments = c.files.filter(f => f.status === 'ready' && f.id).map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, chars: f.chars }));
+    c.files = [];
     ta.value = ''; autosize(); paintAttach(); paintSend(); closePop();
-    o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, images, imageCount: images.length });
+    o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, attachments });
   };
   ta.addEventListener('input', () => { autosize(); paintSend(); if (o.onInput) o.onInput(ta.value); });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
@@ -733,14 +757,15 @@ function createComposer(o) {
     });
   });
   attachBtn.addEventListener('click', () => {
-    const inp = $('#fileInput'); inp.accept = (state.limits && state.limits.images && state.limits.images.mediaTypes.join(',')) || 'image/*';
-    inp.onchange = () => {
-      const max = (state.limits && state.limits.images && state.limits.images.maxCount) || 1;
-      for (const f of Array.from(inp.files || [])) { if (c.images.length >= max) { toast(`Up to ${max} image${max > 1 ? 's' : ''} per question`, 'bad'); break; } f._url = URL.createObjectURL(f); c.images.push(f); }
-      inp.value = ''; paintAttach(); autosize(); ta.focus();
-    };
+    const inp = $('#fileInput'); inp.accept = (state.fileLimits && state.fileLimits.accept.length ? state.fileLimits.accept.join(',') : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,image/*');
+    inp.onchange = () => { addFiles(inp.files); inp.value = ''; ta.focus(); };
     inp.click();
   });
+  // Drop files onto the composer, or paste them.
+  el.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); el.classList.add('dropping'); } });
+  el.addEventListener('dragleave', () => el.classList.remove('dropping'));
+  el.addEventListener('drop', e => { el.classList.remove('dropping'); if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+  ta.addEventListener('paste', e => { const files = e.clipboardData && e.clipboardData.files; if (files && files.length) { e.preventDefault(); addFiles(files); } });
   if (o.initial) { ta.value = o.initial; }
   paintChips(); paintAttach(); paintSend();
   requestAnimationFrame(autosize);
@@ -801,7 +826,7 @@ function renderHome() {
   const comp = createComposer({
     variant: 'hero', initial: state.composerDraft,
     onInput: v => { state.composerDraft = v; },
-    onSubmit: ({ text, mode, tier, focus, images, imageCount }) => { state.composerDraft = ''; startThread(text, { mode, tier, focus, images, imageCount }); }
+    onSubmit: ({ text, mode, tier, focus, attachments }) => { state.composerDraft = ''; startThread(text, { mode, tier, focus, attachments }); }
   });
   $('[data-composer]', main).appendChild(comp);
   const wireTiles = () => $$('[data-tile]', main).forEach(b => b.addEventListener('click', () => comp._composer.set(state.prompts[+b.dataset.tile].q)));
@@ -848,7 +873,7 @@ function renderThread(id) {
   thread.turns.forEach(t => { const sec = $(`[data-turn="${t.id}"]`, main); paintTurn(sec, thread, t); wireTurn(sec, thread, t); });
   const last = thread.turns[thread.turns.length - 1];
   const comp = createComposer({ variant: 'compact', placeholder: 'Ask a follow-up', threadId: thread.id, mode: last ? last.mode : undefined, tier: last ? last.tier : undefined, focus: last ? last.focus : undefined,
-    onSubmit: ({ text, mode, tier, focus, images, imageCount }) => followUp(thread, text, { mode, tier, focus, images, imageCount }) });
+    onSubmit: ({ text, mode, tier, focus, attachments }) => followUp(thread, text, { mode, tier, focus, attachments }) });
   $('[data-dock]', main).appendChild(comp);
   $('[data-share]', main).addEventListener('click', async () => { const ok = await copyText(threadMarkdown(thread)); toast(ok ? 'Copied the thread as Markdown' : 'Could not copy', ok ? 'ok' : 'bad'); });
   $('[data-more]', main).addEventListener('click', e => threadMenu(e.currentTarget, thread));
@@ -936,7 +961,7 @@ function paintTurn(sec, thread, t) {
   const mode = MODES[t.mode] || MODES.search; const pills = [`<span class="pill ${esc(t.mode)}">${icon(mode.icon, 12)}${mode.label}</span>`];
   if (t.focus && t.focus !== 'web' && FOCI[t.focus]) pills.push(`<span class="pill">${icon(FOCI[t.focus].icon, 12)}${FOCI[t.focus].label}</span>`);
   if (space) pills.push(`<span class="pill space">${esc(space.emoji)} ${esc(space.name)}</span>`);
-  if (t.imageCount) pills.push(`<span class="pill">${icon('paperclip', 12)}${t.imageCount} image${t.imageCount > 1 ? 's' : ''}</span>`);
+  for (const a of (t.attachments || [])) pills.push(`<span class="pill file" title="${esc(a.name)} · ${esc(String(a.chars || 0))} characters read">${icon('file', 12)}${esc(a.name.length > 34 ? a.name.slice(0, 31) + '…' : a.name)}</span>`);
   if (thread.origin && thread.origin.kind === 'discover' && thread.origin.ideaId) pills.push(`<span class="pill hashpill" title="Started from a Discover idea. Idea id ${esc(thread.origin.ideaId)} · graph ${esc(thread.origin.graphHash || '')}">${icon('compass', 12)}From Discover · ${esc(shortHash(thread.origin.ideaId))}</span>`);
   if (t.lineage) pills.push(`<span class="pill hashpill" title="Lineage hash ${esc(t.lineage)}">${icon('loop', 12)}${esc(shortHash(t.lineage))}</span>`);
   pills.push(`<span>${relTime(t.createdAt)}</span>`);
@@ -974,7 +999,7 @@ function paintTurn(sec, thread, t) {
     const byServer = {}; for (const c of t.tools) (byServer[c.server] = byServer[c.server] || []).push(c);
     noteHtml += `<div class="answer-note tools-note">${icon('plug', 14)}<span>${running ? 'Using' : 'Used'} your connectors: ${Object.entries(byServer).map(([srv, calls]) => `<b>${esc(srv)}</b> (${calls.map(c => esc(c.name.replace(/_/g, ' ')) + (c.error ? ' ✕' : '')).join(', ')})`).join(' · ')}</span></div>`;
   }
-  if (t.status === 'done') noteHtml += `<div class="answer-note">${icon('info', 14)}Sources were retrieved from the web when you asked. Ricorsa can still misread them, so verify important details.</div>`;
+  if (t.status === 'done') { const files = (t.attachments || []).length, web = (t.sources || []).length; noteHtml += `<div class="answer-note">${icon('info', 14)}${files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.</div>`; }
   note.innerHTML = noteHtml;
 
   const actions = $('[data-actions]', sec);
@@ -1427,7 +1452,7 @@ function renderSpace(id) {
     <div class="sec-h" style="margin-bottom:6px">${icon('library', 17)}Threads in this Space</div>
     ${threads.length ? `<div class="list">${threads.map(t => threadRow(t)).join('')}</div>` : `<div class="empty">${icon('library', 28)}<div>Nothing here yet, ask the first question above.</div></div>`}
   </div></div></div>`;
-  const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, tier, focus, images, imageCount }) => startThread(text, { mode, tier, focus, images, imageCount, spaceId: s.id }) });
+  const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, tier, focus, attachments }) => startThread(text, { mode, tier, focus, attachments, spaceId: s.id }) });
   $('[data-composer]', main).appendChild(comp);
   $('[data-edit]', main).addEventListener('click', () => spaceModal(s));
   wireRows(main);

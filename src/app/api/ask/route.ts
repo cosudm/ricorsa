@@ -15,6 +15,7 @@ import type { Turn } from '@/lib/db/schema';
 import { chain } from '@/lib/hash';
 import { connectorsForModel, connectorsPromptBlock } from '@/lib/connectors';
 import { planFor } from '@/lib/plans';
+import { loadAttachments, claimAttachments, filesBlock, metaOf } from '@/lib/files';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -28,6 +29,8 @@ const Body = z.object({
   length: z.enum(['concise', 'balanced', 'detailed']).nullable().optional(),
   spaceId: z.string().nullable().optional(),
   rewrite: z.object({ turnId: z.string(), how: z.enum(['again', 'concise', 'detailed', 'complex', 'research']) }).optional(),
+  /** Ids of files uploaded through /api/files for this question. */
+  attachments: z.array(z.string().max(60)).max(20).optional(),
 });
 
 /**
@@ -61,6 +64,12 @@ export async function POST(req: Request) {
       else { thread = await createThread(user.id, body.question, body.spaceId || null); }
       turns = [...thread.turns]; history = turns.slice();
       turn = makeTurn(body.question, body);
+      if (body.attachments?.length) {
+        // Files uploaded for this question: only the person's own, only pending or already on this thread, within the plan's count.
+        const cap = user.admin ? 20 : planFor(user.plan).caps.files.perQuestion;
+        const rows = (await loadAttachments(user.id, body.attachments, thread.id)).slice(0, cap);
+        if (rows.length) { await claimAttachments(rows.map(r => r.id), thread.id); turn.attachments = rows.map(metaOf); }
+      }
       const prev = history.length ? history[history.length - 1].lineage : (thread.origin?.ideaId || thread.id);
       turn.lineage = await chain(prev, { threadId: thread.id, turnId: turn.id, question: turn.q, mode: turn.mode, at: turn.createdAt });
       turns.push(turn);
@@ -87,11 +96,21 @@ export async function POST(req: Request) {
       try {
         send('meta', { threadId: th.id, turnId: turn.id, title: th.title });
 
+        // 0. Attached files: this question's and, for follow-ups, earlier ones on the thread (newest first), within the budget.
+        const attIds = [...(turn.attachments || []).map(a => a.id), ...history.slice().reverse().flatMap(h => (h.attachments || []).map(a => a.id))].filter((v, i, a) => a.indexOf(v) === i);
+        const attRows = attIds.length ? await loadAttachments(user.id, attIds, th.id) : [];
+        const currentIds = new Set((turn.attachments || []).map(a => a.id));
+        const attached = attIds.map(id => attRows.find(r => r.id === id)).filter((r): r is NonNullable<typeof r> => !!r).map(r => ({ name: r.name, text: r.text, chars: r.chars, current: currentIds.has(r.id) }));
+        const fileText = filesBlock(attached);
+        // With files on the question, the web is only searched when the person asks for it (or in Research mode).
+        const wantsWeb = /\b(search|web|online|internet|latest|current|recent|news|look up|compare (?:with|to|against) (?:the )?(?:web|market|industry|others))\b/i.test(turn.q);
+        const filesFirst = !!(turn.attachments && turn.attachments.length) && turn.mode !== 'research' && !wantsWeb;
+
         // 1. Retrieval: Ricorsa searches the web itself and numbers what it finds; the model reads and cites it.
-        const search = searchPlan(turn.mode, turn.focus);
+        const search = filesFirst ? null : searchPlan(turn.mode, turn.focus);
         let sources: Source[] = [];
         let searches = 0;
-        send('status', { text: search ? 'Searching the web' : 'Writing' });
+        send('status', { text: filesFirst ? `Reading ${attached.length === 1 ? attached[0].name : `${attached.length} files`}` : search ? 'Searching the web' : 'Writing' });
         send('sources', []);
         if (search) {
           try {
@@ -112,17 +131,17 @@ export async function POST(req: Request) {
         if (th.spaceId) { const rows = await db().select().from(schema.spaces).where(and(eq(schema.spaces.id, th.spaceId), eq(schema.spaces.userId, user.id))).limit(1); space = rows[0] || null; }
         let mcp: Awaited<ReturnType<typeof connectorsForModel>> = [];
         try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors); } catch (e) { console.warn('connectors unavailable', e); }
-        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp) }));
-        const messages = buildMessages(history, turn.q, sourcesBlock(sources));
+        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp), files: attached.map(a => a.name) }));
+        const messages = buildMessages(history, turn.q, sourcesBlock(sources), fileText);
         turn.tools = [];
 
         // 3. Generation: the model reads the sources, calls connector tools when it needs them, and writes
         let wroteText = false;
-        send('status', { text: turn.mode === 'research' ? 'Working through the sources' : 'Writing' });
+        send('status', { text: turn.mode === 'research' ? 'Working through the sources' : attached.length ? 'Reading the files and writing' : 'Writing' });
         const result = await streamAnswer({
           tier: turn.tier, system, messages, signal: ctl.signal, search,
           mcp: mcp.map(m => ({ name: m.name, label: m.label, url: m.url, token: m.token, allowedTools: m.allowedTools, tools: m.tools })),
-          maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' ? 6000 : 4000),
+          maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' || attached.length ? 6000 : 4000),
           onStatus: (text) => { if (!wroteText) send('status', { text }); },
           onTool: (call) => { const label = mcp.find(m => m.name === call.server)?.label || call.server; const i = (turn.tools || []).findIndex(t => t.server === label && t.name === call.name && t.error === undefined); const rec = { server: label, name: call.name, error: call.error }; if (i >= 0) turn.tools![i] = rec; else if (!(turn.tools || []).some(t => t.server === label && t.name === call.name && t.error === call.error)) turn.tools = [...(turn.tools || []), rec]; send('tools', turn.tools); },
           onText: (delta) => { if (!wroteText) { wroteText = true; send('status', { text: turn.mode === 'research' ? 'Writing the report' : 'Writing' }); } raw += delta; send('delta', { text: delta }); },
