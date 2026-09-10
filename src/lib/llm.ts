@@ -10,12 +10,45 @@ import { callMcpTool } from './mcp';
 export type Tier = 'quick' | 'default' | 'complex';
 
 const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k2-turbo-preview', default: 'kimi-k2-0905-preview', complex: 'kimi-k2-thinking' };
-export function modelFor(tier: Tier): string {
+/** Model ids to try for each tier, best first. The configured MODEL_* id always comes first. */
+const CANDIDATES: Record<Tier, string[]> = {
+  quick: ['kimi-k2-turbo-preview', 'kimi-k2.5-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-8k'],
+  default: ['kimi-k2-0905-preview', 'kimi-k2.5', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'kimi-latest', 'moonshot-v1-32k'],
+  complex: ['kimi-k2-thinking', 'kimi-k2-thinking-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-128k'],
+};
+function configured(tier: Tier): string {
   if (tier === 'quick') return process.env.MODEL_QUICK || DEFAULT_MODELS.quick;
   if (tier === 'complex') return process.env.MODEL_COMPLEX || DEFAULT_MODELS.complex;
   return process.env.MODEL_DEFAULT || DEFAULT_MODELS.default;
 }
+/** The configured id for a tier (what the settings say); `resolveModel` checks it against what the account can actually use. */
+export function modelFor(tier: Tier): string { return configured(tier); }
 export const PROVIDER_NAME = 'Kimi';
+
+let modelList: { ids: string[]; at: number } | null = null;
+/** The model ids the provider account can use, cached for ten minutes. Empty when the list cannot be fetched. */
+export async function availableModels(force = false): Promise<string[]> {
+  if (!force && modelList && Date.now() - modelList.at < 600_000) return modelList.ids;
+  try {
+    const res = await fetch(`${apiBase()}/models`, { headers: { Authorization: `Bearer ${apiKey()}` } });
+    if (!res.ok) { console.warn('[provider] models list', res.status); return modelList?.ids || []; }
+    const j = await res.json() as { data?: Array<{ id?: string }> };
+    const ids = (j.data || []).map(m => String(m.id || '')).filter(Boolean);
+    modelList = { ids, at: Date.now() };
+    return ids;
+  } catch (e) { console.warn('[provider] models list failed', String((e as Error)?.message || e)); return modelList?.ids || []; }
+}
+/** The best model this account can use for a tier: the configured id when available, otherwise the next known one. */
+export async function resolveModel(tier: Tier, exclude: string[] = []): Promise<string> {
+  const want = [configured(tier), ...CANDIDATES[tier]].filter((v, i, a) => a.indexOf(v) === i && !exclude.includes(v));
+  const ids = await availableModels();
+  if (!ids.length) return want[0];
+  const hit = want.find(w => ids.includes(w));
+  if (hit) return hit;
+  // Nothing from the list: take any kimi model the account has, newest-looking first.
+  const kimi = ids.filter(id => /kimi/i.test(id) && !exclude.includes(id)).sort().reverse();
+  return kimi[0] || ids.find(id => !exclude.includes(id)) || want[0];
+}
 
 export function mockMode(): boolean {
   return process.env.NODE_ENV !== 'production' && process.env.DEV_MOCK_LLM === '1';
@@ -125,8 +158,8 @@ export async function streamAnswer(opts: {
   onStatus?: (text: string) => void;
   onTool?: (call: ToolCall) => void;
 }): Promise<StreamResult> {
-  const model = modelFor(opts.tier);
-  if (mockMode()) return mockStream(opts, model);
+  if (mockMode()) return mockStream(opts, modelFor(opts.tier));
+  let model = await resolveModel(opts.tier);
   const system = opts.system.map(b => b.text).join('\n\n');
   const convo: ChatMessage[] = [{ role: 'system', content: system }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
   const { tools, lookup } = toolsFor(opts.mcp || undefined);
@@ -135,9 +168,20 @@ export async function streamAnswer(opts: {
   const toolCalls: ToolCall[] = [];
   let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
 
+  let retriedModel = false;
   for (;;) {
-    const res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature: opts.temperature ?? 0.6, signal: opts.signal,
-      onText: (d) => { out += d; opts.onText(d); } });
+    let res: ChatOut;
+    try {
+      res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature: opts.temperature ?? 0.6, signal: opts.signal,
+        onText: (d) => { out += d; opts.onText(d); } });
+    } catch (e) {
+      // An id this account cannot use: refresh the list and try the next candidate once.
+      if (!retriedModel && e instanceof ProviderRequestError && e.status === 404 && /model/i.test(e.message)) {
+        retriedModel = true; await availableModels(true); const next = await resolveModel(opts.tier, [model]);
+        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { model = next; continue; }
+      }
+      throw e;
+    }
     usage.in += res.usage.in; usage.out += res.usage.out; usage.cacheRead += res.usage.cacheRead;
     console.log('[answer]', JSON.stringify({ model, finish: res.finish, tools: res.toolCalls.length, chars: out.length, in: res.usage.in, out: res.usage.out }));
 
@@ -226,7 +270,7 @@ async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens
 export async function quickJson<T = unknown>(prompt: string, maxTokens = 400): Promise<T | null> {
   if (mockMode()) return null;
   try {
-    const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify({ model: modelFor('quick'), max_tokens: maxTokens, temperature: 0.4, messages: [{ role: 'system', content: 'Reply with valid JSON only: no prose, no markdown fences.' }, { role: 'user', content: prompt }] }) });
+    const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify({ model: await resolveModel('quick'), max_tokens: maxTokens, temperature: 0.4, messages: [{ role: 'system', content: 'Reply with valid JSON only: no prose, no markdown fences.' }, { role: 'user', content: prompt }] }) });
     if (!res.ok) { const raw = await res.text().catch(() => ''); let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* */ } throw new ProviderRequestError(res.status, (parsed as { error?: { message?: string } })?.error?.message || raw.slice(0, 200) || `HTTP ${res.status}`, parsed); }
     const j = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
     const text = j.choices?.[0]?.message?.content || '';
