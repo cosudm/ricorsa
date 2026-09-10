@@ -15,6 +15,8 @@ import { estimateCostMicros } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
+/** Thinking is always on for the code models and counts against max_tokens; a whole app plus its thinking needs room. */
+const BUILD_MAX_TOKENS = 32000;
 
 const Body = z.object({
   // Start a session from an idea
@@ -142,7 +144,7 @@ export async function POST(req: Request) {
         // costs O(n) CPU rather than O(n^2). The full parse runs once for the plan and every few seconds for a save.
         let sawPlan = false, sawApp = false, sawReply = false, replyStreaming = false;
         const result = await streamAnswer({
-          tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: 16000, signal: ctl.signal, search: null,
+          tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
           onThinking: (delta) => { thinkingChars += delta.length; },
           onText: (delta) => {
             if (!wroteText) { wroteText = true; send('status', { text: 'Writing the plan' }); }
@@ -185,7 +187,7 @@ export async function POST(req: Request) {
           let raw2 = ''; let planSent2 = false; let sawPlan2 = false;
           try {
             const fix = await streamAnswer({
-              tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequest(issues)), maxTokens: 16000, signal: ctl.signal, search: null,
+              tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequest(issues)), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
               onText: (delta) => {
                 raw2 += delta;
                 const tail = raw2.slice(-(delta.length + 8));

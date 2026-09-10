@@ -25,9 +25,9 @@ const CANDIDATES: Record<Tier, string[]> = {
  * builder writes first is its thinking). Override with REASONING_QUICK, REASONING_DEFAULT,
  * REASONING_COMPLEX and REASONING_BUILD; set one to "off" to send nothing.
  */
-/** Thinking models (Kimi K3 and the K2 thinking variants) accept only the default temperature; leave it out for them. */
+/** Thinking models (Kimi K3, K2.6, K2.7 code and the K2 thinking variants) accept only the default temperature; leave it out for them. */
 function temperatureFor(model: string, wanted: number | undefined): number | undefined {
-  if (/k3|thinking|reason/i.test(model)) return undefined;
+  if (/k3|k2\.[6-9]|k2-?thinking|thinking|reason/i.test(model)) return undefined;
   return wanted ?? 0.6;
 }
 function reasoningFor(tier: Tier, model: string): string | null {
@@ -191,15 +191,17 @@ export async function streamAnswer(opts: {
   const toolCalls: ToolCall[] = [];
   let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
 
-  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let noPartial = false; let temperature = temperatureFor(model, opts.temperature);
+  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let noPartial = false; let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens;
   for (;;) {
     let res: ChatOut;
     try {
-      res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature, reasoning, signal: opts.signal,
+      res = await chatStream({ model, messages: convo, maxTokens, tools: tools.length ? tools : undefined, temperature, reasoning, signal: opts.signal,
         onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking });
     } catch (e) {
       // A temperature this model does not take: send none and try again.
       if (e instanceof ProviderRequestError && e.status === 400 && temperature !== undefined && /temperature/i.test(e.message)) { console.warn('[provider] temperature not accepted by', model); temperature = undefined; continue; }
+      // An output budget above what this model allows: come down to the documented floor for thinking models and try again.
+      if (e instanceof ProviderRequestError && e.status === 400 && maxTokens > 16000 && /max_tokens/i.test(e.message)) { console.warn('[provider] max_tokens', maxTokens, 'not accepted by', model); maxTokens = 16000; continue; }
       // An id this account cannot use: refresh the list and try the next candidate once.
       if (!retriedModel && e instanceof ProviderRequestError && e.status === 404 && /model/i.test(e.message)) {
         retriedModel = true; await availableModels(true); const next = await resolveModel(opts.tier, [model]);
