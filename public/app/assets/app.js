@@ -709,32 +709,42 @@ function createComposer(o) {
   const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
   const paintAttach = () => {
     attachRow.hidden = !c.files.length;
-    attachRow.innerHTML = c.files.map((f, i) => `<div class="attach-chip ${esc(f.status)}" title="${esc(f.status === 'error' ? (f.error || 'Could not read this file') : f.status === 'uploading' ? 'Reading the file' : `${fmtSize(f.size)} · ${(f.chars || 0).toLocaleString('en-US')} characters read`)}">${f.status === 'uploading' ? '<span class="spinner tiny"></span>' : icon(f.status === 'error' ? 'alert' : 'file', 13)}<span class="name">${esc(f.name)}</span><span class="meta">${f.status === 'uploading' ? 'reading' : f.status === 'error' ? 'failed' : fmtSize(f.size)}</span><button type="button" data-rm="${i}" aria-label="Remove ${esc(f.name)}">${icon('x', 11)}</button></div>`).join('');
+    const reason = f => { const m = String(f.error || 'could not be read'); return m.length > 44 ? m.slice(0, 42) + '…' : m; };
+    attachRow.innerHTML = c.files.map((f, i) => `<div class="attach-chip ${esc(f.status)}" title="${esc(f.status === 'error' ? (f.error || 'Could not read this file') : f.status === 'uploading' ? 'Reading the file' : `${fmtSize(f.size)} · ${(f.chars || 0).toLocaleString('en-US')} characters read`)}">${f.status === 'uploading' ? '<span class="spinner tiny"></span>' : icon(f.status === 'error' ? 'alert' : 'file', 13)}<span class="name">${esc(f.name)}</span><span class="meta">${f.status === 'uploading' ? 'reading' : f.status === 'error' ? esc(reason(f)) : fmtSize(f.size)}</span>${f.status === 'error' && f.file ? `<button type="button" class="retry" data-retry="${i}" title="Try reading this file again">${icon('refresh', 11)}Retry</button>` : ''}<button type="button" data-rm="${i}" aria-label="Remove ${esc(f.name)}">${icon('x', 11)}</button></div>`).join('');
     $$('[data-rm]', attachRow).forEach(b => b.addEventListener('click', () => { const i = +b.dataset.rm; const f = c.files[i]; if (f && f.id) api('/api/files/' + encodeURIComponent(f.id), { method: 'DELETE' }).catch(() => {}); c.files.splice(i, 1); paintAttach(); autosize(); paintSend(); }));
+    $$('[data-retry]', attachRow).forEach(b => b.addEventListener('click', () => { const f = c.files[+b.dataset.retry]; if (f && f.file) uploadItem(f); }));
+  };
+  // Upload one picked file and read it; the chip shows the outcome, and a failed one can be retried.
+  const uploadItem = async (item) => {
+    item.status = 'uploading'; item.error = null; paintAttach(); paintSend();
+    try {
+      const fd = new FormData(); fd.append('file', item.file, item.file.name);
+      const res = await fetch('/api/files', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw Object.assign(new Error(data.error || (res.status === 413 ? 'Too large for your plan' : res.status >= 500 ? 'The file reader is busy; try again' : 'Could not read the file')), { code: data.code });
+      Object.assign(item, { id: data.file.id, chars: data.file.chars, status: 'ready' });
+    } catch (e) { item.status = 'error'; item.error = (e && e.message) || 'Could not read the file'; toast(`${item.name}: ${item.error}`, 'bad'); }
+    paintAttach(); paintSend();
   };
   const addFiles = async (list) => {
     const lim = state.fileLimits || { perQuestion: 2, maxMb: 10, accept: [] };
+    const jobs = [];
     for (const file of Array.from(list || [])) {
       if (c.files.length >= lim.perQuestion) { toast(`Up to ${lim.perQuestion} file${lim.perQuestion > 1 ? 's' : ''} per question on your plan`, 'bad'); break; }
       if (file.size > lim.maxMb * 1048576) { toast(`${file.name} is over ${lim.maxMb} MB`, 'bad'); continue; }
       const ext = (file.name.match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
       if (lim.accept.length && !lim.accept.includes(ext)) { toast(`${file.name}: that file type is not supported`, 'bad'); continue; }
-      const item = { name: file.name, size: file.size, type: file.type, status: 'uploading', id: null, chars: 0, error: null };
-      c.files.push(item); paintAttach(); autosize(); paintSend();
-      try {
-        const fd = new FormData(); fd.append('file', file, file.name);
-        const res = await fetch('/api/files', { method: 'POST', body: fd });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw Object.assign(new Error(data.error || 'Could not read the file'), { code: data.code });
-        Object.assign(item, { id: data.file.id, chars: data.file.chars, status: 'ready' });
-      } catch (e) { item.status = 'error'; item.error = (e && e.message) || 'Could not read the file'; toast(item.error, 'bad'); }
-      paintAttach(); paintSend();
+      const item = { name: file.name, size: file.size, type: file.type, status: 'uploading', id: null, chars: 0, error: null, file };
+      c.files.push(item); jobs.push(item);
     }
+    paintAttach(); autosize(); paintSend();
+    for (const item of jobs) await uploadItem(item);
   };
   const submit = () => {
     if (running()) { stopRun(o.threadId); return; }
     const text = ta.value.trim(); if (!text) return;
     if (c.files.some(f => f.status === 'uploading')) { toast('One moment, a file is still being read', 'bad'); return; }
+    if (c.files.some(f => f.status === 'error')) { toast('A file could not be read. Retry it or remove it before sending.', 'bad'); return; }
     const attachments = c.files.filter(f => f.status === 'ready' && f.id).map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, chars: f.chars }));
     c.files = [];
     ta.value = ''; autosize(); paintAttach(); paintSend(); closePop();

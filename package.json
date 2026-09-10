@@ -23,9 +23,11 @@
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.29.0",
     "drizzle-orm": "^0.45.2",
+    "fflate": "^0.8.3",
     "next": "^16.3.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "unpdf": "^1.8.1",
     "zod": "^4.5.4"
   },
   "devDependencies": {
