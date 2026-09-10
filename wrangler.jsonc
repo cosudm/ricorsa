@@ -6,6 +6,9 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
   "observability": { "enabled": true },
+  // Workers Paid: a build streams a whole app for minutes, and Research reads several pages. The free plan's 10 ms
+  // CPU cap kills both; this raises the cap per request (the plan allows up to 300000).
+  "limits": { "cpu_ms": 120000 },
   // Custom domains (ricorsa.com, www.ricorsa.com) are attached in the dashboard: Worker, Settings, Domains & Routes.
   "d1_databases": [
     { "binding": "DB", "database_name": "ricorsa", "database_id": "47395d3b-09a7-403f-ad59-602ecb4fe1ff", "migrations_dir": "drizzle" }
@@ -21,6 +24,8 @@
     "MODEL_QUICK": "kimi-k3",
     "MODEL_DEFAULT": "kimi-k3",
     "MODEL_COMPLEX": "kimi-k3",
+    // The Build studio writes whole apps: the code model at high speed finishes in a fraction of K3's time.
+    "MODEL_BUILD": "kimi-k2.7-code-highspeed",
     "KIMI_BASE_URL": "https://api.moonshot.ai/v1",
     "PAYPAL_ENV": "live",
     "ADMIN_EMAILS": "chrismiguez78@gmail.com,cmiguez@smeprotech.com,admin@smepro.app,support@smeprotech.com",

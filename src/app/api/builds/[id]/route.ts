@@ -1,7 +1,8 @@
-import { and, eq, or, asc } from 'drizzle-orm';
+import { and, eq, or, asc, inArray } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, fail } from '@/lib/http';
 import { db, schema } from '@/lib/db';
+import { isStaleBuild, INTERRUPTED } from '@/lib/build';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,6 +30,12 @@ export const GET = handle(async (req: Request, ctx: { params: Promise<{ id: stri
   const root = b.rootId ? await owned(user.id, b.rootId) : b;
   if (!root) return fail(404, 'Build not found', 'not_found');
   const versions = await db().select().from(schema.builds).where(and(eq(schema.builds.userId, user.id), or(eq(schema.builds.id, rootId), eq(schema.builds.rootId, rootId)))).orderBy(asc(schema.builds.version));
+  // A version whose stream died without saying so is settled as interrupted, so the studio can offer to start again.
+  const stale = versions.filter(isStaleBuild).map(v => v.id);
+  if (stale.length) {
+    for (const v of versions) if (stale.includes(v.id)) { v.status = 'error'; v.error = INTERRUPTED; }
+    try { await db().update(schema.builds).set({ status: 'error', error: INTERRUPTED }).where(inArray(schema.builds.id, stale)); } catch (e) { console.warn('could not settle stale builds', e); }
+  }
   const wanted = url.searchParams.get('version');
   const pick = wanted ? versions.find(v => String(v.version) === wanted) : (b.rootId ? b : null);
   const current = pick || [...versions].reverse().find(v => v.status === 'done' && v.html) || versions[versions.length - 1];

@@ -89,6 +89,7 @@ export const PRICE_PER_MTOK_USD: Record<string, { in: number; out: number; cache
   quick: { in: 0.6, out: 2.5, cacheRead: 0.15 },   // Kimi K3, low effort (list prices; adjust when Moonshot publishes K3 rates)
   default: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K3, medium effort
   complex: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K3, max effort
+  build: { in: 0.6, out: 2.5, cacheRead: 0.15 },   // Kimi K2.7 code (high speed) for the Build studio
 };
 /** Web search (Brave) is billed per query on top of tokens once past the free allowance. */
 export const WEB_SEARCH_USD = 0.005;

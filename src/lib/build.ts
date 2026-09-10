@@ -15,7 +15,7 @@ What you produce
 - One complete, self-contained HTML document: inline <style> and <script>, no external scripts, stylesheets, fonts, images or network calls of any kind (no fetch, no XMLHttpRequest, no WebSocket, no CDN, no iframes). Everything must work offline inside a sandboxed frame. Blob URLs and data: URLs created in the page are fine (for downloads and generated images); WebCrypto (crypto.subtle) is fine.
 - Real functionality, not a mockup: working state, interactions, validation, keyboard support, and persistence in localStorage (wrap every localStorage access in try/catch and work without it). Seed the app with sensible starter data that fits the person, so it is useful the moment it opens. Every button does something. Every screen in the navigation exists.
 - Personal to the person: use what the identity graph says about their topics, entities, goals, expertise and style to decide defaults, examples, vocabulary and depth. Never show the graph itself or mention that a profile exists.
-- Design: clean, light theme, system font stack, generous spacing, responsive down to 360px wide, accessible (labels, focus states, contrast), no dark background. Put a small footer line "Built by Ricorsa from your identity graph" at the bottom.
+- Design: clean and light. Always a white or off-white page background with dark text; never a dark theme or dark panels as the base, whatever the subject, unless the person explicitly asks for dark. System font stack, generous spacing, responsive down to 360px wide, accessible (labels, focus states, contrast). Put a small footer line "Built by Ricorsa from your identity graph" at the bottom.
 - Robustness: no console errors, no unhandled exceptions, no alert/confirm/prompt dialogs, no eval. Keep the whole document under about 1100 lines.
 - If the idea needs a backend or a live service, build the fully working client-side part: the workspace, the logic, the data model, and realistic simulations with sample data. Label simulated parts plainly in the UI ("Demo data", "Simulated wallet") without breaking the flow.
 
@@ -62,7 +62,26 @@ export function buildSystem(graph: GraphData): SystemBlock[] {
 export type BuildSpec = { title: string; kind: string; what: string; prompt?: string; category?: string; builds?: string[] };
 export type BuildTurn = { role: 'user' | 'assistant'; text: string };
 
-/** The message list for a build session: the idea, then the conversation so far, then the current document and the new request. */
+/**
+ * A version row counts as being written right now while its status is "building" and it has been touched
+ * within this window; the build stream touches its row regularly. Older "building" rows were interrupted
+ * (a dropped connection, a killed worker) and are treated as failed.
+ */
+export const LIVE_WINDOW_MS = 120_000;
+export function isLiveBuild(row: { status: string; updatedAt: Date | number | string }): boolean {
+  return row.status === 'building' && Date.now() - new Date(row.updatedAt).getTime() < LIVE_WINDOW_MS;
+}
+/** A "building" row nobody has touched for a while: the stream that was writing it is gone. */
+export function isStaleBuild(row: { status: string; updatedAt: Date | number | string }): boolean {
+  return row.status === 'building' && !isLiveBuild(row);
+}
+export const INTERRUPTED = 'interrupted';
+
+/**
+ * The message list for a build session: the idea, then the conversation so far, then the current document and
+ * the new request. With no finished document yet (a first version being started again), the person's notes
+ * so far are folded into the idea so the first version already takes them into account.
+ */
 export function buildMessages(spec: BuildSpec, history: BuildTurn[], current: { html: string } | null, request: string | null): Msg[] {
   const idea = [
     `Idea to build: ${spec.title}`,
@@ -71,8 +90,14 @@ export function buildMessages(spec: BuildSpec, history: BuildTurn[], current: { 
     spec.builds?.length ? `Draws on these parts of the graph: ${spec.builds.join(', ')}` : '',
     spec.prompt ? `The person's first question about it: ${spec.prompt}` : '',
   ].filter(Boolean).join('\n');
+  if (!current) {
+    const first = history.find(t => t.role === 'user');
+    const notes = [...history.filter(t => t.role === 'user' && t !== first).map(t => t.text), request || ''].map(n => n.trim()).filter(Boolean);
+    const extra = notes.length ? `\n\nThe person added these notes before the first version was finished; follow them from the start:\n${notes.map(n => `- ${n}`).join('\n')}` : '';
+    return [{ role: 'user', content: `${idea}${extra}\n\nBuild it now.` }];
+  }
   const msgs: Msg[] = [{ role: 'user', content: `${idea}\n\nBuild it now.` }];
-  if (!current || !request) return msgs;
+  if (!request) return msgs;
   // Earlier turns as plain text (plans and replies only; the documents themselves are not repeated).
   msgs.push({ role: 'assistant', content: '<plan>\n(built)\n</plan>' });
   for (const t of history.slice(-8)) msgs.push({ role: t.role, content: t.role === 'assistant' ? `<reply>\n${t.text}\n</reply>` : t.text });

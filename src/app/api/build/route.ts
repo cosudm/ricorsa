@@ -7,7 +7,7 @@ import type { BuildMessage } from '@/lib/db/schema';
 import { loadGraph } from '@/lib/graph';
 import { planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
-import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, type BuildSpec } from '@/lib/build';
+import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, isLiveBuild, type BuildSpec } from '@/lib/build';
 import { describeProviderError } from '@/lib/llm';
 import { recordUsage } from '@/lib/usage';
 import { estimateCostMicros } from '@/lib/plans';
@@ -25,16 +25,19 @@ const Body = z.object({
   what: z.string().trim().min(3).max(600).optional(),
   prompt: z.string().max(600).optional(),
   builds: z.array(z.string().max(80)).max(6).optional(),
-  // Or continue one: a message in the build chat
+  // Or continue one: a message in the build chat, or a restart of a first version that never finished
   sessionId: z.string().max(60).optional(),
   message: z.string().trim().min(1).max(3000).optional(),
+  restart: z.boolean().optional(),
 });
 
 /**
  * POST /api/build  — the build chat (Team plan). Streams server-sent events:
  *   meta → status → plan → delta* → done | reply → done | error
  * A new idea starts a session (version 1). A message in an existing session either produces the next
- * version (plan + app, streamed) or a plain reply when it was only a question.
+ * version (plan + app, streamed) or a plain reply when it was only a question. When no version has
+ * finished yet (the first one failed or was interrupted), a message or a restart writes the first version
+ * again with the person's notes folded in, instead of asking for a change to nothing.
  */
 export async function POST(req: Request) {
   let user; try { user = await currentUser(); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Sign-in check failed'); }
@@ -51,15 +54,18 @@ export async function POST(req: Request) {
   let latest: typeof schema.builds.$inferSelect | null = null;
   let spec: BuildSpec;
   let request: string | null = null;
+  let restart = false;
   if (b.sessionId) {
     const r = (await d.select().from(schema.builds).where(and(eq(schema.builds.id, b.sessionId), eq(schema.builds.userId, user.id))).limit(1))[0];
     if (!r) return fail(404, 'That build is not yours', 'not_found');
     root = r.rootId ? (await d.select().from(schema.builds).where(and(eq(schema.builds.id, r.rootId), eq(schema.builds.userId, user.id))).limit(1))[0] || r : r;
-    if (!b.message) return fail(400, 'Say what should change, or ask a question', 'invalid_request');
-    request = b.message;
+    if (!b.message && !b.restart) return fail(400, 'Say what should change, or ask a question', 'invalid_request');
+    request = b.message || null;
     const versions = await d.select().from(schema.builds).where(and(eq(schema.builds.userId, user.id), or(eq(schema.builds.id, root.id), eq(schema.builds.rootId, root.id)))).orderBy(desc(schema.builds.version));
+    if (versions.some(isLiveBuild)) return fail(409, 'A version is being written right now. Wait for it to finish, or stop it, then send this.', 'busy');
     latest = versions.find(v => v.status === 'done' && v.html) || null;
-    if (!latest) return fail(409, 'There is no finished version to change yet. Wait for the build to finish, or start again.', 'not_ready');
+    // Nothing finished yet: write the first version again, with the notes so far folded in.
+    if (!latest) restart = true;
     const specStored = (() => { try { return JSON.parse(root.spec) as BuildSpec; } catch { return null; } })();
     spec = specStored && specStored.title ? specStored : { title: root.title, kind: root.kind, what: root.spec, category: root.category || undefined };
   } else {
@@ -70,10 +76,11 @@ export async function POST(req: Request) {
   const graph = await loadGraph(user.id);
   const graphHash = (root ? root.graphHash : b.graphHash) || await graphFingerprint(graph);
   const ideaId = root ? root.ideaId : (b.ideaId || null);
-  const rootId = root ? root.id : null;
+  const rootId = root && !restart ? root.id : null;
   const version = latest ? (latest.version || 1) + 1 : 1;
-  const id = root ? uid() : uid();
-  const lineage = await chain(latest ? latest.id : (ideaId || graphHash), { buildId: id, ideaId, graphHash, title: spec.title, version, at: Date.now() });
+  // A restart writes into the session's own row again (version 1); a change gets a new version row.
+  const id = root && restart ? root.id : uid();
+  const lineage = root && restart ? (root.lineage || await chain(ideaId || graphHash, { buildId: id, ideaId, graphHash, title: spec.title, version, at: Date.now() })) : await chain(latest ? latest.id : (ideaId || graphHash), { buildId: id, ideaId, graphHash, title: spec.title, version, at: Date.now() });
 
   const history = ((root?.messages || []) as BuildMessage[]).filter(m => m.kind !== 'error').map(m => ({ role: m.role, text: m.text }));
   const msgId = uid();
@@ -82,6 +89,10 @@ export async function POST(req: Request) {
     const messages = [...(root.messages || []), { id: msgId, role: 'user' as const, text: request, kind: 'request' as const, at: Date.now() }];
     await d.update(schema.builds).set({ messages, updatedAt: new Date() }).where(eq(schema.builds.id, root.id));
     root.messages = messages;
+  }
+  if (root && restart) {
+    // Clear the failed first attempt and mark the row as being written, so the studio shows it live.
+    await d.update(schema.builds).set({ status: 'building', error: null, plan: '', html: '', summary: '', version: 1, updatedAt: new Date() }).where(eq(schema.builds.id, root.id));
   }
   if (!root) {
     // A new session: the root row holds the idea (as JSON) and the conversation.
@@ -95,8 +106,9 @@ export async function POST(req: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: string, data: unknown) => { try { controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch {} };
-      let raw = ''; let planSent = false; let rowMade = !root; let lastSave = Date.now();
+      let raw = ''; let planSent = false; let rowMade = !root || restart; let lastSave = Date.now();
       const sessionId = root ? root.id : id;
+      const startedAt = Date.now();
       const save = async (patch: Partial<typeof schema.builds.$inferInsert>) => { if (!rowMade) return; try { await d.update(schema.builds).set({ ...patch, updatedAt: new Date() }).where(eq(schema.builds.id, id)); } catch (e) { console.error('build save failed', e); } };
       const addMessage = async (m: Omit<BuildMessage, 'id' | 'at'>) => {
         const msg: BuildMessage = { id: uid(), at: Date.now(), ...m };
@@ -111,15 +123,28 @@ export async function POST(req: Request) {
         rowMade = true;
         await d.insert(schema.builds).values({ id, userId: user.id, parentId: latest!.id, rootId, version, ideaId, graphHash, category: spec.category || null, kind: spec.kind, title: spec.title, spec: JSON.stringify(spec), changes: request, status: 'building', lineage, messages: [] });
       };
+      // While the model is still thinking nothing streams, so a heartbeat keeps the studio informed and the
+      // row's timestamp fresh (a row untouched for a while is treated as interrupted).
+      let thinkingChars = 0; let lastTouch = Date.now(); let wroteText = false;
+      const progress = () => {
+        if (wroteText) return;
+        const s = Math.round((Date.now() - startedAt) / 1000);
+        const words = Math.round(thinkingChars / 5.5);
+        send('status', { text: `${restart ? 'Starting again' : latest ? 'Working out the change' : 'Planning the app'}${words > 0 ? ` · ${words.toLocaleString('en-US')} words of thinking` : ''} · ${s}s` });
+        if (Date.now() - lastTouch > 20000) { lastTouch = Date.now(); void save({}); }
+      };
+      const heartbeat = setInterval(progress, 5000);
       try {
-        send('meta', { sessionId, buildId: id, version, lineage, request: request || null });
-        send('status', { text: root ? 'Reading the current version' : 'Reading your graph' });
+        send('meta', { sessionId, buildId: id, version, lineage, request: request || null, restart });
+        send('status', { text: restart ? 'Starting again from the idea' : root ? 'Reading the current version' : 'Reading your graph' });
         // Only the tail of the stream is inspected per token (tags are short), so a 50 KB document
         // costs O(n) CPU rather than O(n^2). The full parse runs once for the plan and every few seconds for a save.
         let sawPlan = false, sawApp = false, sawReply = false, replyStreaming = false;
         const result = await streamAnswer({
-          tier: 'default', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: 16000, signal: ctl.signal, search: null,
+          tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: 16000, signal: ctl.signal, search: null,
+          onThinking: (delta) => { thinkingChars += delta.length; },
           onText: (delta) => {
+            if (!wroteText) { wroteText = true; send('status', { text: 'Writing the plan' }); }
             raw += delta;
             const tail = raw.slice(-(delta.length + 8));
             if (!sawPlan && tail.includes('<plan>')) sawPlan = true;
@@ -137,7 +162,8 @@ export async function POST(req: Request) {
           },
         });
         const p = parseBuild(result.text);
-        await recordUsage(user.id, { questions: 1, tokensIn: result.usage.in, tokensOut: result.usage.out, costMicros: estimateCostMicros('default', result.usage.in, result.usage.out, result.usage.cacheRead) });
+        await recordUsage(user.id, { questions: 1, tokensIn: result.usage.in, tokensOut: result.usage.out, costMicros: estimateCostMicros('build', result.usage.in, result.usage.out, result.usage.cacheRead) });
+        console.log('[build]', JSON.stringify({ model: result.model, chars: result.text.length, seconds: Math.round((Date.now() - startedAt) / 1000), thinkingChars, restart, version }));
         if (p.reply && !p.html) {
           // A question: answer in the chat, no new version.
           const m = await addMessage({ role: 'assistant', text: truncate(p.reply, 4000), kind: 'reply', buildId: null, version: null });
@@ -164,6 +190,7 @@ export async function POST(req: Request) {
           send('error', { code: why.code, message: text, messageRecord: m, sessionId });
         }
       } finally {
+        clearInterval(heartbeat);
         try { controller.close(); } catch {}
       }
     },

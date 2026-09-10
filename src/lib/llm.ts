@@ -7,19 +7,23 @@
 import type { Source } from './search';
 import { callMcpTool } from './mcp';
 
-export type Tier = 'quick' | 'default' | 'complex';
+/** quick: planning and small structured calls · default: answers · complex: Reasoning answers · build: writing apps in the Build studio. */
+export type Tier = 'quick' | 'default' | 'complex' | 'build';
 
-const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k3', default: 'kimi-k3', complex: 'kimi-k3' };
+const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k3', default: 'kimi-k3', complex: 'kimi-k3', build: 'kimi-k2.7-code-highspeed' };
 /** Model ids to try for each tier, best first. The configured MODEL_* id always comes first. */
 const CANDIDATES: Record<Tier, string[]> = {
   quick: ['kimi-k3-turbo', 'kimi-k3', 'kimi-k2-turbo-preview', 'kimi-k2.5-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-8k'],
   default: ['kimi-k3', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'kimi-latest', 'moonshot-v1-32k'],
   complex: ['kimi-k3', 'kimi-k2-thinking', 'kimi-k2-thinking-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-128k'],
+  // Apps are long documents: the code models write them several times faster than K3 with thinking.
+  build: ['kimi-k2.7-code-highspeed', 'kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
 };
 /**
  * Thinking effort per tier for models that take `reasoning_effort` (Kimi K3 and the thinking models):
- * Fast thinks little, Best a moderate amount, Reasoning as much as it can. Override with REASONING_QUICK,
- * REASONING_DEFAULT and REASONING_COMPLEX; set one to "off" to send nothing.
+ * Fast thinks little, Best a moderate amount, Reasoning as much as it can, builds a little (the plan the
+ * builder writes first is its thinking). Override with REASONING_QUICK, REASONING_DEFAULT,
+ * REASONING_COMPLEX and REASONING_BUILD; set one to "off" to send nothing.
  */
 /** Thinking models (Kimi K3 and the K2 thinking variants) accept only the default temperature; leave it out for them. */
 function temperatureFor(model: string, wanted: number | undefined): number | undefined {
@@ -27,14 +31,15 @@ function temperatureFor(model: string, wanted: number | undefined): number | und
   return wanted ?? 0.6;
 }
 function reasoningFor(tier: Tier, model: string): string | null {
-  const env = tier === 'quick' ? process.env.REASONING_QUICK : tier === 'complex' ? process.env.REASONING_COMPLEX : process.env.REASONING_DEFAULT;
-  const v = env || (tier === 'quick' ? 'low' : tier === 'complex' ? 'max' : 'medium');
+  const env = tier === 'quick' ? process.env.REASONING_QUICK : tier === 'complex' ? process.env.REASONING_COMPLEX : tier === 'build' ? process.env.REASONING_BUILD : process.env.REASONING_DEFAULT;
+  const v = env || (tier === 'quick' ? 'low' : tier === 'complex' ? 'max' : tier === 'build' ? 'low' : 'medium');
   if (v === 'off' || v === 'none') return null;
   return /k3|thinking|reason/i.test(model) || process.env.REASONING_ALWAYS === '1' ? v : null;
 }
 function configured(tier: Tier): string {
   if (tier === 'quick') return process.env.MODEL_QUICK || DEFAULT_MODELS.quick;
   if (tier === 'complex') return process.env.MODEL_COMPLEX || DEFAULT_MODELS.complex;
+  if (tier === 'build') return process.env.MODEL_BUILD || DEFAULT_MODELS.build;
   return process.env.MODEL_DEFAULT || DEFAULT_MODELS.default;
 }
 /** The configured id for a tier (what the settings say); `resolveModel` checks it against what the account can actually use. */
@@ -170,6 +175,8 @@ export async function streamAnswer(opts: {
   mcp?: McpServerSpec[] | null;
   temperature?: number;
   onText: (delta: string) => void;
+  /** Each piece of the model's reasoning as it thinks (models that stream it); for progress, never shown as the answer. */
+  onThinking?: (delta: string) => void;
   onSources?: (sources: Source[]) => void;
   onStatus?: (text: string) => void;
   onTool?: (call: ToolCall) => void;
@@ -189,7 +196,7 @@ export async function streamAnswer(opts: {
     let res: ChatOut;
     try {
       res = await chatStream({ model, messages: convo, maxTokens: opts.maxTokens, tools: tools.length ? tools : undefined, temperature, reasoning, signal: opts.signal,
-        onText: (d) => { out += d; opts.onText(d); } });
+        onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking });
     } catch (e) {
       // A temperature this model does not take: send none and try again.
       if (e instanceof ProviderRequestError && e.status === 400 && temperature !== undefined && /temperature/i.test(e.message)) { console.warn('[provider] temperature not accepted by', model); temperature = undefined; continue; }
@@ -247,7 +254,7 @@ export async function streamAnswer(opts: {
 type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number } };
 
 /** One streamed chat completion. Parses the SSE stream, collects text, tool calls and usage. */
-async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature?: number; reasoning?: string | null; signal?: AbortSignal; onText: (d: string) => void }): Promise<ChatOut> {
+async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature?: number; reasoning?: string | null; signal?: AbortSignal; onText: (d: string) => void; onThinking?: (d: string) => void }): Promise<ChatOut> {
   const body: Record<string, unknown> = { model: o.model, messages: o.messages, max_tokens: o.maxTokens, stream: true, stream_options: { include_usage: true } };
   if (o.temperature !== undefined) body.temperature = o.temperature;
   if (o.tools?.length) { body.tools = o.tools; body.tool_choice = 'auto'; }
@@ -269,6 +276,7 @@ async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens
     let j: { choices?: Array<{ delta?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }>; usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } };
     try { j = JSON.parse(data); } catch { return; }
     const ch = j.choices?.[0];
+    if (ch?.delta?.reasoning_content && o.onThinking) o.onThinking(ch.delta.reasoning_content);
     if (ch?.delta?.content) { text += ch.delta.content; o.onText(ch.delta.content); }
     for (const tc of ch?.delta?.tool_calls || []) {
       const idx = tc.index ?? 0; const cur = calls.get(idx) || { id: '', name: '', arguments: '' };

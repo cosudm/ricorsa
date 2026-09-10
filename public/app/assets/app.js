@@ -43,6 +43,7 @@ const ICONS = {
   pen: '<path d="M4 20l4-1 11-11a2 2 0 0 0-3-3L5 16z"/>',
   sigma: '<path d="M18 5H6l6 7-6 7h12"/>',
   code: '<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/>',
+  eye: '<path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="3"/>',
   compare: '<path d="M9 3v18M15 3v18"/><path d="M3 8h6M15 8h6M3 16h6M15 16h6"/>',
   lightbulb: '<path d="M9 18h6M10 21h4"/><path d="M8.5 14.5A6 6 0 1 1 15.5 14.5c-.6.6-1 1.5-1 2.5h-5c0-1-.4-1.9-1-2.5z"/>',
   map: '<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/>',
@@ -1170,7 +1171,7 @@ function wireBuildsRow() {}
 // A build is a conversation. The first message is the idea; each later message either produces the
 // next version (streamed into the app pane as it is written) or gets a plain answer when it was a question.
 function newStudio(it, cat) {
-  return { sessionId: null, title: it.title, kind: it.kind || 'App', category: cat || null, ideaId: it.id || null, graphHash: it.graphHash || null, spec: it, messages: [], versions: [], current: null, selected: null, live: null, tab: 'chat', error: null };
+  return { sessionId: null, title: it.title, kind: it.kind || 'App', category: cat || null, ideaId: it.id || null, graphHash: it.graphHash || null, spec: it, messages: [], versions: [], current: null, selected: null, live: null, tab: 'chat', view: 'preview', error: null };
 }
 function startBuild(it, cat) {
   if (caps().discover !== 'full') { openModal(`<h2>${icon('zap', 20)}Build it</h2><p class="sub">Ricorsa turns a Discover idea into a working app, personalised with your graph, and keeps building it with you in a chat.</p>${upgradeCard('Building is part of the Team plan', 'Team unlocks Discover fully: ideas generated from your own graph, and any of them built into a working app, tool, agent or dApp you can keep shaping in conversation.', 'Team')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
@@ -1218,7 +1219,7 @@ async function runBuildRequest(body) {
       st.live = null;
     }
     else if (ev === 'error') { st.messages.push(data.messageRecord || { id: 'e' + Date.now(), role: 'assistant', text: data.message || 'The build was interrupted', kind: 'error', at: Date.now() }); st.error = data.code || 'upstream_error'; st.live = null; }
-  }).catch(e => { if (st.live) { st.messages.push({ id: 'e' + Date.now(), role: 'assistant', text: e && e.name === 'AbortError' ? 'Stopped.' : (e.message || 'The build was interrupted'), kind: 'error', at: Date.now() }); st.live = null; } });
+  }).catch(e => { if (st.live) { const stopped = e && e.name === 'AbortError'; st.messages.push({ id: 'e' + Date.now(), role: 'assistant', text: stopped ? 'Stopped before this version was finished.' : (e.message || 'The build was interrupted'), kind: 'error', at: Date.now() }); st.error = stopped ? 'stopped' : 'upstream_error'; st.live = null; } });
   if (st.live) st.live = null;
   paintStudio(true);
   loadBuilds().then(() => { if (state.route.name === 'discover') render(); });
@@ -1240,7 +1241,13 @@ function renderBuild(id) {
   wireStudioShell(main);
   api('/api/builds/' + encodeURIComponent(id)).then(r => {
     const s = r.session; const spec = s.spec && typeof s.spec === 'object' ? s.spec : { title: s.title, kind: s.kind, what: '' };
-    state.studio = { sessionId: s.id, title: s.title, kind: s.kind, category: s.category, ideaId: s.ideaId, graphHash: s.graphHash, spec, messages: s.messages || [], versions: (r.versions || []).map(v => Object.assign({}, v, { html: r.current && r.current.id === v.id ? r.current.html : null })), current: r.current ? Object.assign({}, r.current) : null, selected: r.current ? r.current.version : null, live: null, tab: 'chat', error: null };
+    const versions = (r.versions || []).map(v => Object.assign({}, v, { html: r.current && r.current.id === v.id ? r.current.html : null }));
+    const messages = (s.messages || []).slice();
+    const finished = versions.some(v => v.status === 'done');
+    const last = messages[messages.length - 1];
+    // A first version that never finished (interrupted, or stopped) gets a plain way to start again.
+    if (!finished && !(last && last.kind === 'error')) messages.push({ id: 'interrupted', role: 'assistant', text: versions.some(v => v.status === 'building') ? 'The first version is still being written, or was interrupted. If nothing appears, start again.' : 'The first version was interrupted before it finished. Start again, or add a note first and it will be built in.', kind: 'error', at: Date.now() });
+    state.studio = { sessionId: s.id, title: s.title, kind: s.kind, category: s.category, ideaId: s.ideaId, graphHash: s.graphHash, spec, messages, versions, current: r.current && r.current.status === 'done' ? Object.assign({}, r.current) : null, selected: r.current && r.current.status === 'done' ? r.current.version : null, live: null, tab: 'chat', view: 'preview', error: null };
     if (state.route.name === 'build') { $('#main').innerHTML = `<div class="view">${studioTopbar()}<div class="studio" data-studio></div></div>`; wireStudioShell($('#main')); paintStudio(true); }
   }).catch(e => { apiToast(e, 'That build is not available'); go('#/discover'); });
 }
@@ -1268,7 +1275,8 @@ function paintStudio(final) {
   if (!root.dataset.ready) {
     root.dataset.ready = '1';
     root.innerHTML = `<section class="studio-chat"><div class="studio-msgs" data-msgs></div><div class="studio-compose"><div class="studio-hints" data-hints></div><div class="studio-input"><textarea data-compose rows="2" placeholder="Ask for a change, add a screen, or ask how it works"></textarea><button type="button" class="send-btn" data-send aria-label="Send">${icon('arrowUp', 18)}</button></div></div></section>
-      <section class="studio-app"><div class="studio-bar"><span class="cat-tag" data-s-kind></span><div class="versions" data-versions></div><span class="build-status" data-s-status></span><span class="spacer"></span><button type="button" class="btn sm" data-s-open title="Open the app in its own tab">${icon('external', 14)}<span>Open</span></button><button type="button" class="btn sm" data-s-download title="Save the app as a single HTML file">${icon('download', 14)}<span>Download</span></button><button type="button" class="btn sm" data-s-copy title="Copy the app's source">${icon('copy', 14)}<span>Copy code</span></button></div><div class="studio-frame-wrap"><iframe class="studio-frame" data-s-frame sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" title="Your app" referrerpolicy="no-referrer"></iframe><div class="build-overlay" data-s-overlay><div class="spinner"></div><div data-s-overlay-text>Building</div></div></div></section>`;
+      <section class="studio-app"><div class="studio-bar"><span class="cat-tag" data-s-kind></span><div class="versions" data-versions></div><span class="build-status" data-s-status></span><span class="spacer"></span><div class="seg studio-view" role="radiogroup" aria-label="View" data-s-view><button type="button" class="on" data-view="preview" role="radio" aria-checked="true">${icon('eye', 14)}<span>Preview</span></button><button type="button" data-view="code" role="radio" aria-checked="false">${icon('code', 14)}<span>Code</span></button></div><button type="button" class="btn sm" data-s-open title="Open the app in its own tab">${icon('external', 14)}<span>Open</span></button><button type="button" class="btn sm" data-s-download title="Save the app as a single HTML file">${icon('download', 14)}<span>Download</span></button><button type="button" class="btn sm" data-s-copy title="Copy the app's source">${icon('copy', 14)}<span>Copy</span></button></div><div class="studio-frame-wrap"><iframe class="studio-frame" data-s-frame sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" title="Your app" referrerpolicy="no-referrer"></iframe><div class="studio-code" data-s-code hidden><div class="studio-code-meta" data-s-code-meta></div><pre data-s-code-text></pre></div><div class="build-overlay" data-s-overlay><div class="spinner"></div><div data-s-overlay-text>Building</div></div></div></section>`;
+    $$('[data-s-view] [data-view]', root).forEach(b => b.addEventListener('click', () => { if (state.studio) state.studio.view = b.dataset.view; paintStudio(true); }));
     const ta = $('[data-compose]', root);
     const send = () => { const t = ta.value.trim(); if (!t) return; ta.value = ''; sendBuildMessage(t); };
     $('[data-send]', root).addEventListener('click', () => { if (state.studio && state.studio.live) stopBuild(); else send(); });
@@ -1288,7 +1296,15 @@ function paintStudio(final) {
   }
   msgs.innerHTML = html || `<div class="empty">${icon('zap', 24)}<div>Nothing here yet.</div></div>`;
   $$('[data-show-version]', msgs).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.showVersion)));
-  $$('[data-retry-build]', msgs).forEach(b => b.addEventListener('click', () => { const lastReq = [...st.messages].reverse().find(m => m.role === 'user'); if (!st.sessionId) { runBuildRequest({ ideaId: st.ideaId, graphHash: st.graphHash, category: st.category, kind: st.kind, title: st.title, what: st.spec && st.spec.what || st.title, prompt: st.spec && st.spec.prompt, builds: st.spec && st.spec.builds }); } else if (lastReq) { runBuildRequest({ sessionId: st.sessionId, message: lastReq.text }); } }));
+  $$('[data-retry-build]', msgs).forEach(b => b.addEventListener('click', () => {
+    if (st.live) return;
+    const finished = st.versions.some(v => v.status === 'done');
+    const lastReq = [...st.messages].reverse().find(m => m.role === 'user');
+    if (!st.sessionId) runBuildRequest({ ideaId: st.ideaId, graphHash: st.graphHash, category: st.category, kind: st.kind, title: st.title, what: st.spec && st.spec.what || st.title, prompt: st.spec && st.spec.prompt, builds: st.spec && st.spec.builds });
+    // Nothing finished yet: write the first version again (the notes so far are folded in). Otherwise retry the last change.
+    else if (!finished) runBuildRequest({ sessionId: st.sessionId, restart: true });
+    else if (lastReq) runBuildRequest({ sessionId: st.sessionId, message: lastReq.text });
+  }));
   if (atBottom || final) msgs.scrollTop = msgs.scrollHeight;
   const hints = $('[data-hints]', root);
   const done = !live && st.current && st.current.status === 'done';
@@ -1310,7 +1326,22 @@ function paintStudio(final) {
   const frame = $('[data-s-frame]', root), overlay = $('[data-s-overlay]', root);
   const showHtml = live && live.html ? live.html : shownHtml();
   const now = Date.now();
-  if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; if (frame.dataset.hash !== String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done')) { frame.dataset.hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done'); frame.srcdoc = showHtml; } }
+  // Preview or Code. Code shows the document as it is written, line by line; Preview runs it.
+  const view = st.view === 'code' ? 'code' : 'preview';
+  $$('[data-s-view] [data-view]', root).forEach(b => { const on = b.dataset.view === view; b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false'); });
+  const codeWrap = $('[data-s-code]', root), codeText = $('[data-s-code-text]', root), codeMeta = $('[data-s-code-meta]', root);
+  codeWrap.hidden = view !== 'code';
+  frame.hidden = view === 'code';
+  if (view === 'code') {
+    if (codeText.dataset.len !== String(showHtml.length)) {
+      codeText.dataset.len = String(showHtml.length);
+      codeText.textContent = showHtml;
+      // Follow the writing while a version streams; leave the reader alone once it is finished.
+      if (live) codeWrap.scrollTop = codeWrap.scrollHeight;
+    }
+    const lines = showHtml ? showHtml.split('\n').length : 0;
+    codeMeta.textContent = showHtml ? `${lines.toLocaleString('en-US')} lines · ${(showHtml.length / 1024).toFixed(1)} KB${live ? ' · writing' : (st.selected ? ` · v${st.selected}` : '')}` : '';
+  } else if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; if (frame.dataset.hash !== String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done')) { frame.dataset.hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done'); frame.srcdoc = showHtml; } }
   overlay.hidden = !(live && !live.html && !live.reply);
   $('[data-s-overlay-text]', root).textContent = live ? (live.statusText || 'Building') : '';
 }
