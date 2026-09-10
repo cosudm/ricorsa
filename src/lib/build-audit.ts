@@ -27,7 +27,9 @@ export function auditApp(html: string): AuditIssue[] {
   const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]).join('\n');
   const markup = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ');
   // With event delegation the handler for a control is not tied to its own attributes; nothing can be judged then.
-  const delegated = /(?:document|body|window|\brootEl\b|\bapp\b|\bmain\b)\s*\.addEventListener\s*\(\s*['"]click['"]/.test(scripts) && /\.closest\s*\(|\.target\b|\.matches\s*\(/.test(scripts);
+  const delegated = (/(?:document|body|window|\brootEl\b|\bapp\b|\bmain\b)\s*\.addEventListener\s*\(\s*['"]click['"]/.test(scripts) && /\.closest\s*\(|\.target\b|\.matches\s*\(/.test(scripts))
+    // ...or every control is wired in one sweep (querySelectorAll('button') and the like).
+    || /querySelectorAll\s*\(\s*['"`][^'"`]*\b(?:button|a)\b[^'"`]*['"`]\s*\)|getElementsByTagName\s*\(\s*['"](?:button|a)['"]\s*\)/i.test(scripts);
   const idsInMarkup = new Set([...markup.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]));
   // Screens are containers (section, div, main...) carrying a data-screen style attribute; the controls that point at them do not count.
   const screensInMarkup = new Set([...markup.matchAll(/<(?!a\b|button\b)[a-z][a-z0-9-]*\b[^>]*\bdata-(?:screen|view|tab|page|panel|section)\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]));
@@ -48,12 +50,14 @@ export function auditApp(html: string): AuditIssue[] {
   // Screens the navigation names must exist, or at least be known to the script.
   for (const m of markup.matchAll(/<(?:a|button)\b[^>]*\b(?:href\s*=\s*["']#([^"'\s]+)["']|data-(?:screen|view|tab|page|panel|section)\s*=\s*["']([^"']+)["'])[^>]*>/gi)) {
     const name = (m[1] || m[2] || '').trim(); if (!name || name === '/' ) continue;
-    if (idsInMarkup.has(name) || screensInMarkup.has(name) || mentioned(scripts, name)) continue;
+    // Present when an element carries the name as its id or as part of it (tab-registry, registry-panel), as a screen attribute, or when the script knows it.
+    const partOfId = new RegExp(`(?:^|[-_:])${escapeRe(name)}(?:[-_:]|$)`, 'i');
+    if (idsInMarkup.has(name) || screensInMarkup.has(name) || [...idsInMarkup].some(id => partOfId.test(id)) || mentioned(scripts, name)) continue;
     if (!issues.some(i => i.detail.includes(`"${name}"`))) issues.push({ kind: 'missing', detail: `the navigation points at "${name}" but no screen or element with that name exists` });
   }
   // Placeholder copy where real content should be.
   const visible = markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  for (const re of [/coming soon/i, /not (?:yet )?implemented/i, /under construction/i, /lorem ipsum/i, /\bTODO\b/, /this (?:feature|screen|section) (?:will|would) be/i, /\bplaceholder (?:text|content)\b/i]) {
+  for (const re of [/coming soon/i, /not (?:yet )?implemented/i, /under construction/i, /lorem ipsum/i, /\bTODO:/, /this (?:feature|screen|section) (?:will|would) be (?:added|implemented|available|built)/i, /\bplaceholder (?:text|content)\b/i]) {
     const hit = visible.match(re); if (hit) issues.push({ kind: 'placeholder', detail: `placeholder copy: "${visible.slice(Math.max(0, (hit.index || 0) - 30), (hit.index || 0) + hit[0].length + 30).trim()}"` });
   }
   return issues.slice(0, 16);
