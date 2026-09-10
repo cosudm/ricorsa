@@ -114,16 +114,26 @@ export async function POST(req: Request) {
       try {
         send('meta', { sessionId, buildId: id, version, lineage, request: request || null });
         send('status', { text: root ? 'Reading the current version' : 'Reading your graph' });
+        // Only the tail of the stream is inspected per token (tags are short), so a 50 KB document
+        // costs O(n) CPU rather than O(n^2). The full parse runs once for the plan and every few seconds for a save.
+        let sawPlan = false, sawApp = false, sawReply = false, replyStreaming = false;
         const result = await streamAnswer({
           tier: 'default', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: 16000, signal: ctl.signal, search: null,
           onText: (delta) => {
             raw += delta;
-            const p = parseBuild(raw);
-            if (p.reply && !p.html && !p.plan) { send('reply', { text: p.reply, done: p.replyDone }); return; }
-            if (!rowMade && (p.plan || p.html)) void ensureRow();
-            if (!planSent && p.planDone) { planSent = true; send('plan', { text: p.plan }); send('status', { text: 'Writing the app' }); }
+            const tail = raw.slice(-(delta.length + 8));
+            if (!sawPlan && tail.includes('<plan>')) sawPlan = true;
+            if (!sawApp && tail.includes('<app>')) sawApp = true;
+            if (!sawReply && tail.includes('<reply>')) sawReply = true;
+            if (sawReply && !sawPlan && !sawApp) {
+              // A question: stream the reply text as it arrives, never a new version.
+              replyStreaming = true; const p = parseBuild(raw); send('reply', { text: p.reply, done: p.replyDone }); return;
+            }
+            if (replyStreaming) return;
+            if (!rowMade && (sawPlan || sawApp)) void ensureRow();
+            if (!planSent && sawPlan && tail.includes('</plan>')) { planSent = true; send('plan', { text: parseBuild(raw).plan }); send('status', { text: 'Writing the app' }); }
             send('delta', { text: delta });
-            if (Date.now() - lastSave > 4000) { lastSave = Date.now(); void save({ plan: p.plan, html: p.html }); }
+            if (Date.now() - lastSave > 5000) { lastSave = Date.now(); const p = parseBuild(raw); void save({ plan: p.plan, html: p.html }); }
           },
         });
         const p = parseBuild(result.text);

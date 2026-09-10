@@ -86,7 +86,7 @@ export async function readPages(sources: Source[], max = 5, signal?: AbortSignal
       clearTimeout(t);
       const ct = res.headers.get('content-type') || '';
       if (!res.ok || !/text\/html|text\/plain|application\/xhtml/.test(ct)) return;
-      const html = (await res.text()).slice(0, 400000);
+      const html = (await res.text()).slice(0, 150000);
       s.text = htmlToText(html).slice(0, 7000);
     } catch { /* unreadable page: the snippet still counts */ }
   }));
