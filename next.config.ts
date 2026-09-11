@@ -20,6 +20,7 @@ const nextConfig: NextConfig = {
       },
       // The file viewer frames these on the app's own origin: a stored file (PDFs in the browser's viewer) and the sandboxed renderer page.
       { source: '/api/files/:id/content', headers: [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }] },
+      { source: '/api/connectors/:id/vault/files/:docId/content', headers: [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }] },
       { source: '/app/assets/viewer.html', headers: [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }] },
     ];
   },

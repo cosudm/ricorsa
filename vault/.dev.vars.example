@@ -1,0 +1,10 @@
+# Local development only. Copy to .dev.vars (ignored by git).
+ADMIN_KEY=change-me-staff-key
+RICORSA_CLIENT_SECRET=change-me-shared-with-ricorsa
+LINK_SECRET=change-me-random
+RESEND_API_KEY=
+RESEND_BASE_URL=
+OCR_PROVIDER=none
+AZURE_DI_ENDPOINT=
+AZURE_DI_KEY=
+MOONSHOT_API_KEY=

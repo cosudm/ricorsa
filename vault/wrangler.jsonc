@@ -1,0 +1,43 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vault",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // The admin screens are static files; everything under /api, /mcp and /v is the Worker.
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/v/*"] },
+  // Control plane: tenants, people, workspaces, matters, boxes and folders, batches, connections, receipts.
+  // Created in the dashboard (D1, "vault"); migrations in ./migrations are applied on every deploy (cf:migrate).
+  "d1_databases": [
+    { "binding": "DB", "database_name": "vault", "database_id": "271d44cc-e889-45df-b101-0f52a2bbf787", "migrations_dir": "migrations" }
+  ],
+  // Bytes: originals exactly as received under orig/<workspace>/<sha256>, extracted text under text/<sha256>/,
+  // manifests under manifests/. Created in the dashboard (R2, "vault-files", United States jurisdiction).
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "vault-files", "jurisdiction": "us" }
+  ],
+  // Every received file becomes one message: read, OCR when needed, classify, index.
+  "queues": {
+    "producers": [{ "binding": "INTAKE", "queue": "vault-intake" }],
+    "consumers": [{ "queue": "vault-intake", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 5, "dead_letter_queue": "vault-intake-dlq" }]
+  },
+  // Search shards (one per ~million files, SQLite with FTS5) and the per-workspace hash directory for duplicates.
+  "durable_objects": {
+    "bindings": [
+      { "name": "SHARD", "class_name": "SearchShard" },
+      { "name": "HASHDIR", "class_name": "HashDirectory" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SearchShard", "HashDirectory"] }],
+  // Plain configuration. Secrets (ADMIN_KEY, RICORSA_CLIENT_SECRET, LINK_SECRET, RESEND_API_KEY, OCR_PROVIDER and the
+  // provider's keys) are set on the Worker (Settings, Variables and Secrets) and survive deploys.
+  "vars": {
+    "APP_NAME": "VDRPros Vault",
+    "APP_BASE_URL": "https://vault.vdrpros.com",
+    "RICORSA_URL": "https://ricorsa.com",
+    "MAIL_FROM": "VDRPros Vault <vault@vdrpros.com>",
+    "SHARD_MAX_DOCS": "800000",
+    "SHARD_MAX_BYTES": "7000000000"
+  }
+}

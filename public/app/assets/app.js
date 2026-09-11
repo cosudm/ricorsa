@@ -193,8 +193,9 @@ function parseRoute() {
   const full = location.hash.replace(/^#\/?/, '');
   const [h, qs] = full.split('?');
   const query = Object.fromEntries(new URLSearchParams(qs || ''));
-  const [name, id] = h.split('/');
+  const [name, id, sub] = h.split('/');
   if (!name) return { name: 'home', query };
+  if (name === 'vault' && id && sub) return { name, id: decodeURIComponent(id), doc: decodeURIComponent(sub), query };
   if (['thread', 'space', 'build'].includes(name) && id) return { name, id, query };
   if (['discover', 'spaces', 'library', 'graph', 'account', 'connectors'].includes(name)) return { name, query };
   return { name: 'home', query };
@@ -285,10 +286,11 @@ function viewerShow(i) {
   if (i < 0 || i >= v.files.length) return;
   v.index = i; v.att = v.files[i]; v.frame = null; const seq = ++v.seq;
   const att = v.att, k = fileKind(att.name), el = v.el, body = $('[data-v-body]', el);
-  const src = '/api/files/' + encodeURIComponent(att.id) + '/content';
+  const apiBase = att.api || ('/api/files/' + encodeURIComponent(att.id));
+  const src = apiBase + '/content';
   $('[data-v-icon]', el).innerHTML = icon(k.icon, 20);
   $('[data-v-name]', el).textContent = att.name; $('[data-v-name]', el).title = att.name;
-  const base = `${k.label} · ${fmtBytes(att.size)}`; viewerStatus(base + ' · Opening');
+  const base = `${k.label} · ${fmtBytes(att.size)}${att.api ? ' · VDRPros Vault' : ''}${att.page ? ` · page ${att.page}` : ''}`; viewerStatus(base + ' · Opening');
   const nav = $('[data-v-nav]', el); nav.hidden = v.files.length < 2; $('[data-v-pos]', el).textContent = `${i + 1} of ${v.files.length}`;
   $('[data-v-prev]', el).disabled = i === 0; $('[data-v-next]', el).disabled = i === v.files.length - 1;
   const openA = $('[data-v-open]', el); openA.href = src; openA.hidden = !k.native;
@@ -301,7 +303,7 @@ function viewerShow(i) {
   const showRead = async (note) => {
     if (!fresh()) return;
     let text = '';
-    try { const r = await api('/api/files/' + encodeURIComponent(att.id) + '?text=1'); text = r.text || ''; } catch (e) { if (fresh()) { loading.innerHTML = `${icon('alert', 18)}<span>${esc((e && e.message) || 'Could not open this file')}</span>`; } return; }
+    try { const r = await api(apiBase + '?text=1'); text = r.text || ''; } catch (e) { if (fresh()) { loading.innerHTML = `${icon('alert', 18)}<span>${esc((e && e.message) || 'Could not open this file')}</span>`; } return; }
     if (!fresh()) return;
     openA.hidden = true; dl.hidden = !att.stored;
     mountFrame({ type: 'open', kind: 'read', name: att.name, ext: k.ext, text, note });
@@ -332,14 +334,14 @@ function viewerShow(i) {
   (async () => {
     // What is known about the file: whether the original is stored, and its details.
     let meta = null;
-    try { meta = (await api('/api/files/' + encodeURIComponent(att.id))).file; } catch (e) { if (fresh()) loading.innerHTML = `${icon('alert', 18)}<span>${esc((e && e.message) || 'Could not open this file')}</span>`; return; }
+    try { meta = (await api(apiBase)).file; } catch (e) { if (fresh()) loading.innerHTML = `${icon('alert', 18)}<span>${esc((e && e.message) || 'Could not open this file')}</span>`; return; }
     if (!fresh()) return;
     Object.assign(att, { stored: meta.stored, size: meta.size || att.size, chars: meta.chars });
     if (!meta.stored) { openA.hidden = true; dl.hidden = true; v.readShown = true; showRead('Only the text of this file was kept when it was attached, before files could be opened here. Attach it again to see the original.'); return; }
     dl.hidden = false;
     if (k.kind === 'pdf') {
       if (navigator.pdfViewerEnabled === false) { v.readShown = true; showRead('This browser cannot show PDFs inline, so here is the text Ricorsa read. Download the file to open it in a PDF app.'); return; }
-      const fr = document.createElement('iframe'); fr.className = 'viewer-native'; fr.title = att.name; fr.src = src + '#toolbar=1&navpanes=0';
+      const fr = document.createElement('iframe'); fr.className = 'viewer-native'; fr.title = att.name; fr.src = src + '#toolbar=1&navpanes=0' + (att.page ? '&page=' + att.page : '');
       fr.addEventListener('load', () => { if (fresh()) { loading.hidden = true; info(att.chars ? `${att.chars.toLocaleString('en-US')} characters read` : ''); } });
       body.insertBefore(fr, loading); return;
     }
@@ -362,6 +364,22 @@ function viewerShow(i) {
 window.addEventListener('message', (e) => {
   const v = viewer; if (!v || !v.frame || e.source !== v.frame.contentWindow || !e.data || e.data.from !== 'ricorsa-viewer') return;
   if (v.onFrame) v.onFrame(e.data);
+});
+/** A page of a document in the person's VDRPros Vault, opened through the connector that may read it. */
+function openVaultDoc(connId, docId, page) {
+  const api = '/api/connectors/' + encodeURIComponent(connId) + '/vault/files/' + encodeURIComponent(docId);
+  const att = { id: docId, name: 'Vault document', size: 0, stored: true, api, page: page ? +page : null };
+  openFileViewer(att, [att]);
+  fetch(api).then(r => r.json()).then(j => { if (j && j.file && viewer && viewer.att === att) { Object.assign(att, { name: j.file.name, size: j.file.size, chars: j.file.chars }); viewerShow(viewer.index); } }).catch(() => {});
+}
+function vaultLinkParts(href) {
+  const m = /#\/vault\/([^/?#]+)\/([^/?#]+)(?:\?p=(\d+))?/.exec(href || ''); if (!m) return null;
+  return { connId: decodeURIComponent(m[1]), docId: decodeURIComponent(m[2]), page: m[3] ? +m[3] : null };
+}
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href*="#/vault/"]'); if (!a) return;
+  const parts = vaultLinkParts(a.getAttribute('href')); if (!parts) return;
+  e.preventDefault(); openVaultDoc(parts.connId, parts.docId, parts.page);
 });
 
 // ---------- Popover ----------
@@ -1156,7 +1174,7 @@ function paintTurn(sec, thread, t) {
     const byServer = {}; for (const c of t.tools) (byServer[c.server] = byServer[c.server] || []).push(c);
     noteHtml += `<div class="answer-note tools-note">${icon('plug', 14)}<span>${running ? 'Using' : 'Used'} your connectors: ${Object.entries(byServer).map(([srv, calls]) => `<b>${esc(srv)}</b> (${calls.map(c => esc(c.name.replace(/_/g, ' ')) + (c.error ? ' ✕' : '')).join(', ')})`).join(' · ')}</span></div>`;
   }
-  if (t.status === 'done') { const files = (t.attachments || []).length, web = (t.sources || []).length; noteHtml += `<div class="answer-note">${icon('info', 14)}${files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.</div>`; }
+  if (t.status === 'done') { const files = (t.attachments || []).length, vault = (t.sources || []).filter(s => s.domain === 'VDRPros Vault').length, web = (t.sources || []).length - vault; noteHtml += `<div class="answer-note">${icon('info', 14)}${vault && web ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault and web sources retrieved when you asked.` : vault ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault; the numbered citations open the pages.` : files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.</div>`; }
   note.innerHTML = noteHtml;
 
   const actions = $('[data-actions]', sec);
@@ -1184,7 +1202,7 @@ function paintTurn(sec, thread, t) {
 
   const spane = $('[data-pane="sources"]', sec);
   spane.innerHTML = sources.length
-    ? `<div class="sources-list">${sources.map(s => `<div class="source-card" data-src-n="${s.n}"><span class="n">${s.n}</span><span class="favi" style="background:${colorFor(s.domain || s.title)};margin-top:2px">${esc((s.domain || s.title)[0] || '?')}</span><div><div class="t">${esc(s.title)}</div><div class="u">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.url)}</a>` : esc(s.domain || '')}</div></div>${s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open">${icon('external', 15)}</a>` : ''}</div>`).join('')}</div>`
+    ? `<div class="sources-list">${sources.map(s => `<div class="source-card" data-src-n="${s.n}"><span class="n">${s.n}</span><span class="favi" style="background:${colorFor(s.domain || s.title)};margin-top:2px">${esc((s.domain || s.title)[0] || '?')}</span><div><div class="t">${esc(s.title)}</div><div class="u">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(/#\/vault\//.test(s.url) ? 'VDRPros Vault · opens the page in the viewer' : s.url)}</a>` : esc(s.domain || '')}</div></div>${s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open">${icon('external', 15)}</a>` : ''}</div>`).join('')}</div>`
     : `<div class="empty">${icon('book', 28)}<div>${running ? 'Sources arrive before the answer is written.' : 'No sources were used for this answer.'}</div></div>`;
 }
 function nodeChip(type, label, extra = '', id = '') {
@@ -1802,14 +1820,14 @@ function paintConnectors() {
   if (!list.length) {
     const picks = (state.catalog || []).filter(p => p.key !== 'custom').slice(0, 6);
     html += `<div class="conn-empty"><div class="empty">${icon('plug', 28)}<div>No connectors yet.</div><p>Start with one of these, or add any MCP server by URL.</p></div>
-      <div class="conn-cat">${picks.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}" ${limit <= 0 && !admin ? 'disabled' : ''}><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div></div>`;
+      <div class="conn-cat">${picks.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}" ${limit <= 0 && !admin ? 'disabled' : ''}><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${p.flow === 'vault' ? 'One-time code by email' : esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div></div>`;
   } else {
     html += `<div class="conn-list">${list.map(c => {
-      const st = connStatus(c); const dom = domainOf(c.url) || c.url;
+      const st = connStatus(c); const dom = c.preset === 'vdrpros' ? 'VDRPros Vault' : (domainOf(c.url) || c.url);
       return `<div class="conn-card${c.enabled ? '' : ' off'}" data-conn="${esc(c.id)}">
         <div class="conn-main">
-          <span class="conn-logo" style="background:${colorFor(c.name)}">${esc(c.name[0] || '?').toUpperCase()}</span>
-          <div class="conn-txt"><b>${esc(c.name)}</b><span class="conn-url" title="${esc(c.url)}">${esc(dom)} · ${esc(AUTH_LABEL[c.authType] || c.authType)}</span>
+          <span class="conn-logo" style="background:${c.preset === 'vdrpros' ? '#0B6E63' : colorFor(c.name)}">${c.preset === 'vdrpros' ? 'V' : esc(c.name[0] || '?').toUpperCase()}</span>
+          <div class="conn-txt"><b>${esc(c.name)}</b><span class="conn-url" title="${esc(c.url)}">${esc(dom)} · ${c.preset === 'vdrpros' ? 'Connected with a one-time code' : esc(AUTH_LABEL[c.authType] || c.authType)}</span>
             <span class="conn-status ${st.cls}">${esc(st.text)}${c.lastError && c.status !== 'ok' ? `: ${esc(truncate(c.lastError, 120))}` : ''}</span></div>
           <label class="switch${c.enabled ? ' on' : ''}" title="${c.enabled ? 'On: its tools are available to answers' : 'Off: kept, but not used'}" data-toggle><i></i><span>${c.enabled ? 'On' : 'Off'}</span></label>
         </div>
@@ -1817,7 +1835,7 @@ function paintConnectors() {
           ${c.authType === 'oauth' ? `<a class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" href="/api/connectors/${encodeURIComponent(c.id)}/oauth/start" title="Sign in to the app and approve access">${icon('key', 14)}<span>${c.status === 'needs_auth' ? 'Sign in' : 'Sign in again'}</span></a>` : ''}
           <button type="button" class="btn sm" data-test title="Reach the server and refresh its tool list">${icon('refresh', 14)}<span>Test</span></button>
           <button type="button" class="btn sm" data-tools title="Choose which of its tools Ricorsa may use" ${c.tools.length ? '' : 'disabled'}>${icon('check', 14)}<span>Tools</span></button>
-          <button type="button" class="btn sm" data-edit title="Rename, change the URL or the token">${icon('edit', 14)}<span>Edit</span></button>
+          ${c.preset === 'vdrpros' ? `<button type="button" class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" data-reconnect title="Connect the Vault again with a new code">${icon('key', 14)}<span>Reconnect</span></button>` : `<button type="button" class="btn sm" data-edit title="Rename, change the URL or the token">${icon('edit', 14)}<span>Edit</span></button>`}
           <button type="button" class="btn sm danger" data-remove title="Remove this connector and its credentials">${icon('trash', 14)}<span>Remove</span></button>
         </div>
       </div>`; }).join('')}</div>`;
@@ -1830,7 +1848,8 @@ function paintConnectors() {
     $('[data-toggle]', card).addEventListener('click', async e => { e.preventDefault(); try { const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body: { enabled: !c.enabled } }); Object.assign(c, r.connector); paintConnectors(); } catch (err) { apiToast(err); } });
     $('[data-test]', card).addEventListener('click', async e => { const b = e.currentTarget; b.disabled = true; b.querySelector('span').textContent = 'Testing'; try { const r = await api('/api/connectors/' + encodeURIComponent(c.id) + '/test', { method: 'POST' }); Object.assign(c, r.connector); toast(c.status === 'ok' ? `${c.name}: ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'} available` : `${c.name}: ${c.lastError || 'not reachable'}`, c.status === 'ok' ? 'ok' : 'bad'); } catch (err) { apiToast(err); } paintConnectors(); });
     const tb = $('[data-tools]', card); if (tb) tb.addEventListener('click', () => toolsModal(c));
-    $('[data-edit]', card).addEventListener('click', () => editConnectorModal(c));
+    const eb = $('[data-edit]', card); if (eb) eb.addEventListener('click', () => editConnectorModal(c));
+    const rb = $('[data-reconnect]', card); if (rb) rb.addEventListener('click', () => vaultConnectModal((state.catalog || []).find(p => p.key === 'vdrpros'), c));
     $('[data-remove]', card).addEventListener('click', () => openModal(`<h2>Remove ${esc(c.name)}?</h2><p class="sub">Its credentials are deleted from your account. Past answers keep their notes.</p><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="cDel">Remove</button></div>`, {
       onMount: () => $('#cDel').addEventListener('click', async () => { try { await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'DELETE' }); state.connectors = state.connectors.filter(x => x.id !== c.id); closeModal(); paintConnectors(); toast('Connector removed'); } catch (err) { apiToast(err); } })
     }));
@@ -1841,12 +1860,13 @@ function addConnectorModal(presetKey) {
   const preset = presetKey ? cat.find(p => p.key === presetKey) : null;
   if (!preset) {
     openModal(`<h2>Add a connector</h2><p class="sub">Pick an app, or connect any MCP server by URL.</p>
-      <div class="conn-cat modal-cat">${cat.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}"><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div>
+      <div class="conn-cat modal-cat">${cat.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}"><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${p.flow === 'vault' ? 'One-time code by email' : esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div>
       <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button></div>`, {
       onMount: ov => $$('[data-pick]', ov).forEach(b => b.addEventListener('click', () => addConnectorModal(b.dataset.pick)))
     });
     return;
   }
+  if (preset.flow === 'vault') { vaultConnectModal(preset); return; }
   const custom = preset.key === 'custom';
   const authOpts = ['none', 'bearer', 'oauth'].map(a => `<option value="${a}"${a === preset.auth ? ' selected' : ''}>${AUTH_LABEL[a]}</option>`).join('');
   openModal(`<h2>${custom ? 'Custom MCP server' : 'Connect ' + esc(preset.name)}</h2><p class="sub">${esc(preset.blurb)}${preset.docs ? ` <a href="${esc(preset.docs)}" target="_blank" rel="noopener">Vendor docs</a>` : ''}</p>
@@ -1876,6 +1896,51 @@ function addConnectorModal(presetKey) {
       $('#cName').focus();
     }
   });
+}
+/**
+ * Connecting a VDRPros Vault: the person's Vault email, the one-time code it receives, then the workspaces to share.
+ * Nothing about the Vault's own sign-in is involved; the Vault issues Ricorsa a token limited to those workspaces.
+ */
+function vaultConnectModal(preset, existing) {
+  if (!preset) { toast('The Vault connector is not available', 'bad'); return; }
+  if (preset.available === false) { openModal(`<h2>VDRPros Vault</h2><p class="sub">This Ricorsa server is not linked to the Vault yet. Ask your administrator to finish the setup.</p><div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
+  const stepEmail = () => openModal(`<h2>${existing ? 'Reconnect' : 'Connect'} VDRPros Vault</h2><p class="sub">Enter the email address you use for the Vault. A one-time code will be sent to it; nothing is shared until you approve.</p>
+    <div class="field"><label for="vEmail">Vault email</label><input type="email" id="vEmail" maxlength="200" autocomplete="email" placeholder="you@firm.com"></div>
+    <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="vNext">Send code</button></div>`, {
+    onMount: () => {
+      const go = async () => { const email = $('#vEmail').value.trim(); if (!email) { $('#vEmail').focus(); return; } const b = $('#vNext'); b.disabled = true; b.textContent = 'Sending';
+        try { const r = await api('/api/connectors/vault/start', { body: { email } }); stepCode(r.challengeId, email); } catch (err) { b.disabled = false; b.textContent = 'Send code'; apiToast(err, 'Could not start'); } };
+      $('#vNext').addEventListener('click', go); $('#vEmail').addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); $('#vEmail').focus();
+    }
+  });
+  const stepCode = (challengeId, email) => openModal(`<h2>Enter the code</h2><p class="sub">If <b>${esc(email)}</b> has a Vault account, a six-digit code is on its way. It works for ten minutes.</p>
+    <div class="field"><label for="vCode">Code</label><input type="text" id="vCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="letter-spacing:.2em;font-size:20px"></div>
+    <div class="modal-actions"><button type="button" class="btn" id="vBack">Back</button><button type="button" class="btn primary" id="vVerify">Continue</button></div>`, {
+    onMount: () => {
+      $('#vBack').addEventListener('click', stepEmail);
+      const go = async () => { const code = $('#vCode').value.trim(); if (code.length < 4) { $('#vCode').focus(); return; } const b = $('#vVerify'); b.disabled = true; b.textContent = 'Checking';
+        try { const r = await api('/api/connectors/vault/verify', { body: { challengeId, code } }); stepWorkspaces(challengeId, r); } catch (err) { b.disabled = false; b.textContent = 'Continue'; apiToast(err, 'That code did not work'); } };
+      $('#vVerify').addEventListener('click', go); $('#vCode').addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); $('#vCode').focus();
+    }
+  });
+  const stepWorkspaces = (challengeId, r) => {
+    const ws = r.workspaces || [];
+    openModal(`<h2>Choose what Ricorsa may search</h2><p class="sub">${ws.length ? `Workspaces open to <b>${esc(r.email)}</b>. Ricorsa searches and reads only what you tick; the Vault logs every read.` : `<b>${esc(r.email)}</b> has no Vault workspaces to share. Ask your Vault administrator to add you to one.`}</p>
+      <div class="tool-list">${ws.map(w => `<label class="tool-row"><input type="checkbox" data-ws="${esc(w.id)}" checked><span><b>${esc(w.name)}</b><small>${esc(w.tenant)} · ${Number(w.documents || 0).toLocaleString('en-US')} documents, ${Number(w.pages || 0).toLocaleString('en-US')} pages${w.paperFolders ? `, ${w.paperFolders} folders still on paper` : ''}</small></span></label>`).join('')}</div>
+      <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button>${ws.length ? `<button type="button" class="btn primary" id="vOk">Connect</button>` : ''}</div>`, {
+      onMount: ov => { const ok = $('#vOk'); if (!ok) return; ok.addEventListener('click', async () => {
+        const picked = $$('[data-ws]', ov).filter(x => x.checked).map(x => x.dataset.ws); if (!picked.length) { toast('Tick at least one workspace', 'bad'); return; }
+        ok.disabled = true; ok.textContent = 'Connecting';
+        try {
+          const res = await api('/api/connectors/vault/approve', { body: { challengeId, workspaceIds: picked, name: existing ? existing.name : undefined } });
+          if (existing) { try { await api('/api/connectors/' + encodeURIComponent(existing.id), { method: 'DELETE' }); } catch (e) { /* the old connection is revoked with the row */ } state.connectors = (state.connectors || []).filter(x => x.id !== existing.id); }
+          state.connectors = [...(state.connectors || []), res.connector]; closeModal(); paintConnectors();
+          toast(res.connector.status === 'ok' ? `Vault connected: ${res.workspaces.length} workspace${res.workspaces.length === 1 ? '' : 's'}, ${res.connector.tools.length} tools` : `Vault connected, but ${res.connector.lastError || 'it could not be reached yet'}`, res.connector.status === 'ok' ? 'ok' : 'bad');
+        } catch (err) { ok.disabled = false; ok.textContent = 'Connect'; apiToast(err, 'Could not connect'); }
+      }); }
+    });
+  };
+  stepEmail();
 }
 function editConnectorModal(c) {
   openModal(`<h2>Edit ${esc(c.name)}</h2>
@@ -1913,6 +1978,7 @@ function render() {
   state.route = parseRoute();
   const r = state.route;
   if (r.name === 'home') renderHome();
+  else if (r.name === 'vault') { renderHome(); openVaultDoc(r.id, r.doc, r.query.p ? +r.query.p : null); }
   else if (r.name === 'thread') renderThread(r.id);
   else if (r.name === 'discover') renderDiscover();
   else if (r.name === 'build') renderBuild(r.id);

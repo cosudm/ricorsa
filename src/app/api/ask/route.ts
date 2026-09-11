@@ -16,6 +16,7 @@ import { chain } from '@/lib/hash';
 import { connectorsForModel, connectorsPromptBlock } from '@/lib/connectors';
 import { planFor } from '@/lib/plans';
 import { loadAttachments, claimAttachments, filesBlock, metaOf } from '@/lib/files';
+import { isVaultConnector, numberVaultHits, numberVaultPages } from '@/lib/vault';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -131,6 +132,8 @@ export async function POST(req: Request) {
         if (th.spaceId) { const rows = await db().select().from(schema.spaces).where(and(eq(schema.spaces.id, th.spaceId), eq(schema.spaces.userId, user.id))).limit(1); space = rows[0] || null; }
         let mcp: Awaited<ReturnType<typeof connectorsForModel>> = [];
         try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors); } catch (e) { console.warn('connectors unavailable', e); }
+        // Vault connectors: their search hits and read pages become numbered sources the answer can cite and the reader can open.
+        const vaultByServer = new Map(mcp.filter(m => isVaultConnector({ preset: m.preset, url: m.url })).map(m => [m.name, m.id]));
         const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp), files: attached.map(a => a.name) }));
         const messages = buildMessages(history, turn.q, sourcesBlock(sources), fileText);
         turn.tools = [];
@@ -143,6 +146,15 @@ export async function POST(req: Request) {
           mcp: mcp.map(m => ({ name: m.name, label: m.label, url: m.url, token: m.token, allowedTools: m.allowedTools, tools: m.tools })),
           maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' || attached.length ? 6000 : 4000),
           onStatus: (text) => { if (!wroteText) send('status', { text }); },
+          onToolResult: (call, r) => {
+            const connId = vaultByServer.get(call.server); if (!connId) return;
+            const out = call.name === 'vault_search' ? numberVaultHits(connId, r.text, r.structured, sources.length, sources) : (call.name === 'vault_read' || call.name === 'vault_document') ? numberVaultPages(connId, r.text, r.structured, sources.length, sources) : null;
+            if (!out || !out.added.length) return out?.text;
+            sources = [...sources, ...out.added];
+            turn.sources = sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url }));
+            send('sources', turn.sources);
+            return out.text;
+          },
           onTool: (call) => { const label = mcp.find(m => m.name === call.server)?.label || call.server; const i = (turn.tools || []).findIndex(t => t.server === label && t.name === call.name && t.error === undefined); const rec = { server: label, name: call.name, error: call.error }; if (i >= 0) turn.tools![i] = rec; else if (!(turn.tools || []).some(t => t.server === label && t.name === call.name && t.error === call.error)) turn.tools = [...(turn.tools || []), rec]; send('tools', turn.tools); },
           onText: (delta) => { if (!wroteText) { wroteText = true; send('status', { text: turn.mode === 'research' ? 'Writing the report' : 'Writing' }); } raw += delta; send('delta', { text: delta }); },
         });

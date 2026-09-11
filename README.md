@@ -118,3 +118,7 @@ Have the Privacy and Terms pages (`src/app/privacy`, `src/app/terms`) reviewed; 
 ## Manager Console
 
 The staff console (customers, sign-ups, licences, trials, communication, invoicing and billing) is a separate app in `console/`, deployed as its own Worker at https://manage.ricorsa.com with its own database and Auth0 application. It reads this product's database for live account data and writes only plan grants (statuses `TRIAL` and `LICENSED`, which `src/lib/plans.ts` treats as granting until `planRenewsAt` passes). See `console/README.md`.
+
+## VDRPros Vault
+
+The `vault/` directory is VDRPros Vault Cloud: the sealed document repository and the service behind the VDRPros Vault connector in Ricorsa (Connectors, VDRPros Vault). It deploys as its own Worker at https://vault.vdrpros.com; see `vault/README.md`.

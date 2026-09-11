@@ -3,7 +3,7 @@ import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, uid } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { planFor } from '@/lib/plans';
-import { CATALOG, checkConnector, listConnectors, presetFor, serverNameFor, toClient, validateUrl } from '@/lib/connectors';
+import { catalogForClient, checkConnector, listConnectors, presetFor, serverNameFor, toClient, validateUrl } from '@/lib/connectors';
 import { sealJson } from '@/lib/secretbox';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +14,7 @@ export const GET = handle(async () => {
   const plan = planFor(user.plan);
   const rows = await listConnectors(user.id);
   const items = await Promise.all(rows.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map(toClient));
-  return json({ items, catalog: CATALOG, limit: user.admin ? 100 : plan.caps.connectors, callback: `${process.env.APP_BASE_URL || ''}/api/connectors/oauth/callback` });
+  return json({ items, catalog: catalogForClient(), limit: user.admin ? 100 : plan.caps.connectors, callback: `${process.env.APP_BASE_URL || ''}/api/connectors/oauth/callback` });
 });
 
 const Body = z.object({

@@ -61,7 +61,7 @@ function toolsFrom(result: unknown): { tools: ConnectorTool[]; next: string | nu
 }
 
 /** Flatten a tools/call result into text the model can read. */
-export function toolResultText(result: unknown): { text: string; isError: boolean } {
+export function toolResultText(result: unknown): { text: string; isError: boolean; structured: unknown } {
   const r = (result || {}) as { content?: Array<{ type?: string; text?: string; data?: string; mimeType?: string; resource?: { text?: string; uri?: string } }>; isError?: boolean; structuredContent?: unknown };
   const parts: string[] = [];
   for (const c of r.content || []) {
@@ -73,7 +73,7 @@ export function toolResultText(result: unknown): { text: string; isError: boolea
   if (!parts.length && r.structuredContent !== undefined) parts.push(JSON.stringify(r.structuredContent));
   if (!parts.length && r.content === undefined) parts.push(JSON.stringify(result ?? null));
   const text = parts.join('\n').slice(0, MAX_RESULT_CHARS);
-  return { text: text || '(empty result)', isError: !!r.isError };
+  return { text: text || '(empty result)', isError: !!r.isError, structured: r.structuredContent };
 }
 
 export type McpProbe = { transport: 'http' | 'sse'; serverName?: string; serverVersion?: string; protocolVersion?: string; tools: ConnectorTool[] };
@@ -172,7 +172,7 @@ export class McpSession {
     return tools;
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+  async callTool(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean; structured?: unknown }> {
     const r = await this.post({ jsonrpc: '2.0', id: this.nextId++, method: 'tools/call', params: { name, arguments: args || {} } });
     if (r?.error) return { text: `Tool error: ${r.error.message || 'error ' + r.error.code}`, isError: true };
     return toolResultText(r?.result);
@@ -198,7 +198,7 @@ export async function probeMcp(url: string, token?: string | null, opts?: { time
 }
 
 /** Call one tool on a server: open, call, close. Used by the answer loop. */
-export async function callMcpTool(url: string, token: string | null, name: string, args: Record<string, unknown>, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ text: string; isError: boolean }> {
+export async function callMcpTool(url: string, token: string | null, name: string, args: Record<string, unknown>, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<{ text: string; isError: boolean; structured?: unknown }> {
   const t = withTimeout(opts?.timeoutMs ?? 45000, opts?.signal);
   const s = new McpSession(url, token, t.signal);
   try { await s.open(); return await s.callTool(name, args); }

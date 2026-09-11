@@ -10,12 +10,14 @@ import { HttpError, slugify } from './http';
 import { openJson, sealJson } from './secretbox';
 import { McpError, probeMcp } from './mcp';
 import { freshSecret } from './mcp-oauth';
+import { VAULT_PRESET, vaultConfigured, vaultMcpUrl } from './vault';
 
 export type ConnectorRow = typeof schema.connectors.$inferSelect;
 
 /** Well-known remote MCP servers. URLs are the vendors' published endpoints; each one can be edited before saving. */
-export type Preset = { key: string; name: string; url: string; auth: ConnectorAuth; blurb: string; tokenHint?: string; docs?: string };
+export type Preset = { key: string; name: string; url: string; auth: ConnectorAuth; blurb: string; tokenHint?: string; docs?: string; /** A first-party connect flow instead of a token or OAuth: 'vault' asks for the person's Vault email and a one-time code. */ flow?: 'vault'; available?: boolean };
 export const CATALOG: Preset[] = [
+  { key: 'vdrpros', name: 'VDRPros Vault', url: 'https://vault.vdrpros.com/mcp', auth: 'bearer', flow: 'vault', blurb: 'Your Vault workspaces: depositions, transcripts, exhibits, records and correspondence, searched page by page with citations that open the page. Connect with a one-time code sent to your Vault email.', docs: 'https://vdrpros.com/' },
   { key: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', auth: 'bearer', blurb: 'Repositories, issues, pull requests and code search.', tokenHint: 'A GitHub personal access token (fine-grained, with the repos you want to reach).', docs: 'https://github.com/github/github-mcp-server' },
   { key: 'notion', name: 'Notion', url: 'https://mcp.notion.com/mcp', auth: 'oauth', blurb: 'Search and read pages and databases in your workspace.', docs: 'https://developers.notion.com/docs/mcp' },
   { key: 'linear', name: 'Linear', url: 'https://mcp.linear.app/mcp', auth: 'oauth', blurb: 'Issues, projects and cycles.', docs: 'https://linear.app/docs/mcp' },
@@ -35,6 +37,10 @@ export const CATALOG: Preset[] = [
 export const MAX_TOOLS_SHOWN = 60;
 
 export function presetFor(key: string | null | undefined): Preset | null { return CATALOG.find(p => p.key === key) || null; }
+/** The catalog as the client sees it: the Vault entry carries this deployment's Vault address and whether it is set up. */
+export function catalogForClient(): Preset[] {
+  return CATALOG.map(p => p.key === VAULT_PRESET ? { ...p, url: vaultMcpUrl(), available: vaultConfigured() } : p);
+}
 
 /** A name the model can address: letters, digits, underscore and dash. Unique per person. */
 export function serverNameFor(name: string, taken: string[]): string {
@@ -114,7 +120,7 @@ export async function checkConnector(c: ConnectorRow): Promise<ConnectorRow> {
 }
 
 /** What the model gets: every enabled, working connector, with a live token. */
-export type ModelConnector = { name: string; label: string; url: string; token: string | null; allowedTools: string[] | null; tools: ConnectorTool[] };
+export type ModelConnector = { id: string; preset: string | null; name: string; label: string; url: string; token: string | null; allowedTools: string[] | null; tools: ConnectorTool[] };
 export async function connectorsForModel(userId: string, max: number): Promise<ModelConnector[]> {
   if (max <= 0) return [];
   const rows = (await listConnectors(userId)).filter(c => c.enabled && c.status !== 'error').sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).slice(0, max);
@@ -122,7 +128,7 @@ export async function connectorsForModel(userId: string, max: number): Promise<M
   for (const c of rows) {
     const token = await tokenFor(c);
     if (c.authType !== 'none' && !token) continue;
-    out.push({ name: c.serverName, label: c.name, url: c.url, token, allowedTools: c.allowedTools?.length ? c.allowedTools : null, tools: c.tools || [] });
+    out.push({ id: c.id, preset: c.preset, name: c.serverName, label: c.name, url: c.url, token, allowedTools: c.allowedTools?.length ? c.allowedTools : null, tools: c.tools || [] });
   }
   return out;
 }
@@ -134,5 +140,5 @@ export function connectorsPromptBlock(list: ModelConnector[]): string {
     const names = (c.allowedTools || c.tools.map(t => t.name)).slice(0, 12);
     return `- ${c.label} (server "${c.name}")${names.length ? `: ${names.join(', ')}${(c.allowedTools || c.tools).length > 12 ? ', …' : ''}` : ''}`;
   });
-  return `Connected apps. The person has linked these outside apps and MCP servers; their tools are available to you in this conversation:\n${lines.join('\n')}\nUse them when the question is about the person's own data, records or work in those apps (their issues, pages, deals, files, customers, projects, code), and when a tool would give a more exact answer than the web. Do not use them for general knowledge. Call the tool, read the result, then answer in your own words; never dump raw tool output, and never mention server names or tool names in the answer.`;
+  return `Connected apps. The person has linked these outside apps and MCP servers; their tools are available to you in this conversation:\n${lines.join('\n')}\nUse them when the question is about the person's own data, records or work in those apps (their issues, pages, deals, files, customers, projects, code), and when a tool would give a more exact answer than the web. Do not use them for general knowledge. Call the tool, read the result, then answer in your own words; never dump raw tool output, and never mention server names or tool names in the answer.${list.some(c => c.label === 'VDRPros Vault' || /vdrpros|vault/i.test(c.name)) ? `\nVDRPros Vault holds the person's own documents (depositions, transcripts, summaries, exhibits, records). For questions about a witness, a matter, a defendant, a site, a product or anything that would be in those files, search the Vault first (vault_search), read the pages you will rely on (vault_read), and cite them with the bracketed numbers the results carry, exactly like web sources: a claim from a Vault page ends with its [n]. When a matching folder is still on paper, say so and offer to request a scan; do not request one unless the person asks.` : ''}`;
 }

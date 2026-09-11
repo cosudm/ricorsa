@@ -180,6 +180,8 @@ export async function streamAnswer(opts: {
   onSources?: (sources: Source[]) => void;
   onStatus?: (text: string) => void;
   onTool?: (call: ToolCall) => void;
+  /** Sees every tool result before the model does; may hand back replacement text (used to number Vault pages as sources). */
+  onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void;
 }): Promise<StreamResult> {
   if (mockMode()) return mockStream(opts, modelFor(opts.tier));
   let model = await resolveModel(opts.tier);
@@ -228,13 +230,14 @@ export async function streamAnswer(opts: {
         toolCalls.push(call); opts.onTool?.(call);
         opts.onStatus?.(`Using ${hit ? labelOf.get(hit.spec.name) || hit.spec.name : c.name}: ${call.name.replace(/_/g, ' ')}`);
         let args: Record<string, unknown> = {}; try { args = c.arguments ? JSON.parse(c.arguments) : {}; } catch { args = {}; }
-        let text: string; let isError = false;
+        let text: string; let isError = false; let structured: unknown = undefined;
         if (!hit) { text = 'Unknown tool'; isError = true; }
         else {
-          try { const r = await callMcpTool(hit.spec.url, hit.spec.token, hit.tool, args, { signal: opts.signal }); text = r.text; isError = r.isError; }
+          try { const r = await callMcpTool(hit.spec.url, hit.spec.token, hit.tool, args, { signal: opts.signal }); text = r.text; isError = r.isError; structured = r.structured; }
           catch (e) { text = `The connector could not be reached: ${String((e as Error)?.message || e)}`; isError = true; }
         }
         call.error = isError; opts.onTool?.(call);
+        if (!isError && opts.onToolResult) { try { const replaced = opts.onToolResult(call, { text, isError, structured, args }); if (typeof replaced === 'string') text = replaced; } catch (e) { console.warn('[mcp] onToolResult failed', e); } }
         console.log('[mcp] tool', call.server, call.name, isError ? 'error' : 'ok', text.length);
         convo.push({ role: 'tool', tool_call_id: c.id, name: c.name, content: isError ? `ERROR: ${text}` : text });
       }
@@ -321,13 +324,25 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400): P
   } catch (e) { const p = describeProviderError(e); console.warn('[provider] quickJson failed', JSON.stringify({ code: p.code, status: p.status, type: p.type, message: p.message })); return null; }
 }
 
-async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
+async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; mcp?: McpServerSpec[] | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; onTool?: (call: ToolCall) => void; onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
   if (opts.system?.[0]?.text.startsWith("You are Ricorsa's builder")) return mockBuild(opts, model);
   const q = opts.messages[opts.messages.length - 1]?.content.split('Question:').pop()?.trim().slice(0, 80) || 'your question';
   const sources: Source[] = opts.search ? mockSources(q) : [];
   if (opts.search) { opts.onStatus?.(`Searching: ${q.slice(0, 60)}`); await new Promise(r => setTimeout(r, 300)); opts.onSources?.(sources); }
+  // With a Vault connected, the stub searches it for real (the local Vault), so the numbering and the viewer can be exercised.
+  let vaultPara = ''; const toolCalls: ToolCall[] = [];
+  const vault = (opts.mcp || []).find(m => (m.tools || []).some(t => t.name === 'vault_search'));
+  if (vault) {
+    const call: ToolCall = { server: vault.name, name: 'vault_search' }; toolCalls.push(call); opts.onTool?.(call); opts.onStatus?.(`Using ${vault.label}: vault search`);
+    let r: { text: string; isError: boolean; structured?: unknown };
+    try { r = await callMcpTool(vault.url, vault.token, 'vault_search', { query: q, limit: 5 }, { signal: opts.signal }); } catch (e) { r = { text: String((e as Error)?.message || e), isError: true }; }
+    call.error = r.isError; opts.onTool?.(call);
+    let text = r.text; if (!r.isError && opts.onToolResult) { const rep = opts.onToolResult(call, { text: r.text, isError: r.isError, structured: r.structured, args: { query: q } }); if (typeof rep === 'string') text = rep; }
+    const nums = [...new Set([...text.matchAll(/\[(\d+)\]/g)].map(m => m[1]))].slice(0, 3);
+    vaultPara = r.isError ? `\n\nThe Vault could not be searched (${text.slice(0, 120)}).` : nums.length ? `\n\n## From your Vault\nThe connected Vault has pages that match${nums.map(n => `[${n}]`).join('')}; in production the model reads them and answers from what they say, citing each page it relies on${nums[0] ? `[${nums[0]}]` : ''}.` : `\n\nNothing in the connected Vault matched "${q}".`;
+  }
   const full = `<answer>
-This is a mock answer for "${q}", streamed by the local development stub so the app can be exercised without API keys${sources.length ? '[1][2]' : ''}.
+This is a mock answer for "${q}", streamed by the local development stub so the app can be exercised without API keys${sources.length ? '[1][2]' : ''}.${vaultPara}
 
 ## What you are seeing
 - **Sources** above arrived from the search stub the same way live web search results arrive in production, numbered in order of appearance${sources.length ? '[1]' : ''}.
@@ -355,7 +370,7 @@ Where do exported files go?
     await new Promise(r => setTimeout(r, 15));
     opts.onText(full.slice(i, i + 24));
   }
-  return { text: full, truncated: false, model, sources, usage: { in: 1200, out: 320, cacheRead: 900, cacheWrite: 0, searches: sources.length ? 1 : 0 }, tools: [] };
+  return { text: full, truncated: false, model, sources, usage: { in: 1200, out: 320, cacheRead: 900, cacheWrite: 0, searches: sources.length ? 1 : 0 }, tools: toolCalls };
 }
 
 async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {

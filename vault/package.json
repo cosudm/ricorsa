@@ -1,0 +1,30 @@
+{
+  "name": "vault",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VDRPros Vault Cloud: sealed intake, storage, search and access for deal and litigation archives, with the connector Ricorsa uses.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 3180 --var APP_BASE_URL:http://localhost:3180",
+    "typecheck": "tsc --noEmit",
+    "cf:types": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply vault --local",
+    "db:migrate:remote": "wrangler d1 migrations apply vault --remote",
+    "cf:migrate": "wrangler d1 migrations apply vault --remote",
+    "cf:deploy": "wrangler deploy",
+    "upload": "node scripts/upload.mjs",
+    "test": "node test/run.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "hono": "^4.10.0",
+    "unpdf": "^1.8.1",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.130.0"
+  },
+  "engines": { "node": ">=20" }
+}

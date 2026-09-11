@@ -35,6 +35,9 @@
     "KIMI_BASE_URL": "https://api.moonshot.ai/v1",
     "PAYPAL_ENV": "live",
     "ADMIN_EMAILS": "chrismiguez78@gmail.com,cmiguez@smeprotech.com,admin@smepro.app,support@smeprotech.com",
-    "PAYPAL_CLIENT_ID": "BAAkDyjF4FPGW2WJrgPvOtFE1c0HUkZ0jRaRkooPnmsvBlNIzSxicOj-aKA0NDLcQQRGSmd-L4WEBEGLQQ"
+    "PAYPAL_CLIENT_ID": "BAAkDyjF4FPGW2WJrgPvOtFE1c0HUkZ0jRaRkooPnmsvBlNIzSxicOj-aKA0NDLcQQRGSmd-L4WEBEGLQQ",
+    // The VDRPros Vault connector talks to the Vault service (vault/) here; VAULT_CLIENT_SECRET is the shared secret,
+    // set on both Workers (the Vault calls it RICORSA_CLIENT_SECRET).
+    "VAULT_URL": "https://vault.vdrpros.com"
   }
 }

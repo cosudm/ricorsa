@@ -4,7 +4,9 @@ import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { checkConnector, getConnectorOwned, toClient, validateUrl } from '@/lib/connectors';
-import { sealJson } from '@/lib/secretbox';
+import { openJson, sealJson } from '@/lib/secretbox';
+import { isVaultConnector, vaultClient } from '@/lib/vault';
+import type { ConnectorSecret } from '@/lib/db/schema';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -37,6 +39,9 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
 
 export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const user = await currentUser(); const { id } = await ctx.params;
+  const c = await getConnectorOwned(user.id, id);
+  // A Vault connection is revoked on the Vault side too, so the token dies with the connector (best effort).
+  if (isVaultConnector(c)) { try { const s = await openJson<ConnectorSecret>(c.secret); if (s?.vaultConnectionId) await vaultClient('/connect/revoke', { connectionId: s.vaultConnectionId }); } catch (e) { console.warn('[vault] revoke failed', String((e as Error)?.message || e)); } }
   await db().delete(schema.connectors).where(and(eq(schema.connectors.id, id), eq(schema.connectors.userId, user.id)));
   return json({ ok: true });
 });

@@ -162,7 +162,7 @@ export type ConnectorAuth = 'none' | 'bearer' | 'oauth';
 export type ConnectorStatus = 'new' | 'ok' | 'error' | 'needs_auth';
 export type ConnectorTool = { name: string; description?: string; inputSchema?: Record<string, unknown> };
 /** Encrypted at rest. Bearer: { token }. OAuth: tokens plus what is needed to refresh them. */
-export type ConnectorSecret = { token?: string; accessToken?: string; refreshToken?: string; expiresAt?: number; tokenEndpoint?: string; clientId?: string; clientSecret?: string; scope?: string; resource?: string };
+export type ConnectorSecret = { token?: string; accessToken?: string; refreshToken?: string; expiresAt?: number; tokenEndpoint?: string; clientId?: string; clientSecret?: string; scope?: string; resource?: string; /** VDRPros Vault: the connection the token belongs to, for revoking it when the connector is removed. */ vaultConnectionId?: string; vaultWorkspaces?: Array<{ id: string; name: string; tenant: string }>; vaultEmail?: string };
 /** An OAuth sign-in that has started and not yet come back. */
 export type ConnectorPending = { state: string; verifier: string; authEndpoint: string; tokenEndpoint: string; clientId: string; clientSecret?: string; redirectUri: string; resource?: string; scope?: string; startedAt: number };
 export const connectors = sqliteTable('connectors', {
