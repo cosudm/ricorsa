@@ -1,0 +1,12 @@
+Third-party libraries used by the file viewer (public/app/assets/viewer.html). Each is loaded only when a file of its kind is opened.
+
+docx-preview 0.4.0        Apache License 2.0   https://github.com/VolodymyrBaydalka/docxjs      (Word documents)
+JSZip 3.10.2              MIT or GPL-3.0       https://stuk.github.io/jszip/                    (used by docx-preview)
+SheetJS CE 0.18.5         Apache License 2.0   https://sheetjs.com                              (Excel workbooks)
+PPTXjs 1.21.1             MIT                  https://github.com/meshesha/PPTXjs               (PowerPoint decks; pptx/pptxjs.min.js is the project's pptxjs.js minified as-is)
+jQuery 1.11.3             MIT                  https://jquery.org/license                       (required by PPTXjs)
+JSZip 2.x                 MIT or GPL-3.0       https://stuk.github.io/jszip/                    (required by PPTXjs)
+filereader.js             MIT                  https://github.com/meshesha/filereader.js        (required by PPTXjs)
+dingbat.js                MIT                  https://github.com/meshesha/PPTXjs               (bullet glyphs for PPTXjs)
+D3 3.x                    BSD 3-Clause         https://d3js.org                                 (charts inside decks)
+NVD3 1.8                  Apache License 2.0   https://nvd3.org                                 (charts inside decks)

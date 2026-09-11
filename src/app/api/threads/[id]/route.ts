@@ -4,6 +4,7 @@ import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, truncate } from '@/lib/http';
 import { getThreadOwned, toClient } from '@/lib/threads';
 import { db, schema } from '@/lib/db';
+import { deleteThreadAttachments } from '@/lib/files';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -29,7 +30,7 @@ export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const user = await currentUser(); const { id } = await ctx.params;
   const t = await getThreadOwned(user.id, id);
   await db().delete(schema.threads).where(eq(schema.threads.id, t.id));
-  // The text of any file attached to this thread goes with it.
-  await db().delete(schema.attachments).where(eq(schema.attachments.threadId, t.id));
+  // Any file attached to this thread goes with it: its text and the stored copy.
+  await deleteThreadAttachments(t.id);
   return json({ ok: true });
 });

@@ -58,6 +58,12 @@ const ICONS = {
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.5-1.5"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M13 10l2 2"/>',
   play: '<path d="M7 5l12 7-12 7z"/>',
+  chevronLeft: '<path d="M15 6l-6 6 6 6"/>',
+  chevronRight: '<path d="M9 6l6 6-6 6"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
+  grid: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16M15 4v16"/>',
+  slides: '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M12 17v3M8 20h8"/>',
+  doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8 13h8M8 17h6"/>',
 };
 function icon(name, size = 18, extra = '') {
   const body = ICONS[name] || '';
@@ -218,6 +224,145 @@ function openModal(html, { onMount } = {}) {
   return ov;
 }
 function closeModal() { $('#modalRoot').innerHTML = ''; }
+
+// ---------- File viewer ----------
+// Opens an attached file the way its own application would show it. PDFs and images use the browser's own
+// viewers; everything else is drawn by the renderer page (viewer.html) inside a sandboxed frame that gets
+// the file's bytes by message and can reach nothing else. `list` is the set of files to page through.
+const FILE_KINDS = [
+  [/^\.pdf$/, { kind: 'pdf', label: 'PDF', icon: 'file', native: true }],
+  [/^\.(png|jpe?g|gif|webp|bmp|svg)$/, { kind: 'image', label: 'Image', icon: 'image', native: true }],
+  [/^\.(tiff?)$/, { kind: 'read', label: 'TIFF image', icon: 'image' }],
+  [/^\.docx$/, { kind: 'docx', label: 'Word document', icon: 'doc' }],
+  [/^\.doc$/, { kind: 'read', label: 'Word document', icon: 'doc' }],
+  [/^\.xlsx?$/, { kind: 'sheet', label: 'Excel workbook', icon: 'grid' }],
+  [/^\.(csv|tsv)$/, { kind: 'csv', label: 'Spreadsheet', icon: 'grid' }],
+  [/^\.pptx$/, { kind: 'pptx', label: 'PowerPoint deck', icon: 'slides' }],
+  [/^\.ppt$/, { kind: 'read', label: 'PowerPoint deck', icon: 'slides' }],
+  [/^\.md$/, { kind: 'markdown', label: 'Markdown', icon: 'doc' }],
+  [/^\.html?$/, { kind: 'html', label: 'HTML', icon: 'code', native: true }],
+  [/^\.json$/, { kind: 'json', label: 'JSON', icon: 'code', native: true }],
+  [/^\.(txt|log)$/, { kind: 'text', label: 'Text', icon: 'file', native: true }],
+  [/^\.(rtf|epub)$/, { kind: 'read', label: 'Document', icon: 'doc' }],
+  [/^\.(js|ts|tsx|jsx|py|java|go|rb|rs|c|h|cpp|cs|php|sql|sh|xml|ya?ml|ini|conf|toml)$/, { kind: 'code', label: 'Code', icon: 'code', native: true }],
+];
+function fileKind(name) {
+  const ext = (String(name || '').match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+  const hit = FILE_KINDS.find(([re]) => re.test(ext));
+  return Object.assign({ ext, kind: 'text', label: 'File', icon: 'file', native: false }, hit ? hit[1] : {});
+}
+const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : (n || 0) + ' B';
+let viewer = null;
+function closeFileViewer() {
+  if (!viewer) return;
+  const v = viewer; viewer = null;
+  v.el.remove(); document.body.classList.remove('viewer-open');
+  if (v.prevFocus && v.prevFocus.focus) { try { v.prevFocus.focus(); } catch {} }
+}
+function openFileViewer(att, list) {
+  if (!att || !att.id) return;
+  closeFileViewer(); closePop();
+  const files = (list && list.length ? list : [att]).filter(a => a && a.id);
+  const el = document.createElement('div');
+  el.className = 'viewer'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
+  el.innerHTML = `<div class="viewer-bar"><span class="ficon" data-v-icon></span><div class="viewer-title"><b data-v-name></b><span data-v-meta></span></div>
+    <div class="viewer-nav" data-v-nav hidden><button type="button" class="icon-btn" data-v-prev aria-label="Previous file" title="Previous file (Left arrow)">${icon('chevronLeft', 18)}</button><span data-v-pos></span><button type="button" class="icon-btn" data-v-next aria-label="Next file" title="Next file (Right arrow)">${icon('chevronRight', 18)}</button></div>
+    <a class="btn sm" data-v-open target="_blank" rel="noopener" title="Open the file in its own browser tab">${icon('external', 14)}<span>Open</span></a>
+    <a class="btn sm" data-v-download title="Save the original file">${icon('download', 14)}<span>Download</span></a>
+    <button type="button" class="icon-btn" data-v-close aria-label="Close" title="Close (Esc)">${icon('x', 18)}</button></div>
+    <div class="viewer-body" data-v-body></div>`;
+  document.body.appendChild(el); document.body.classList.add('viewer-open');
+  viewer = { el, files, index: Math.max(0, files.findIndex(a => a.id === att.id)), att: null, frame: null, prevFocus: document.activeElement, seq: 0 };
+  $('[data-v-close]', el).addEventListener('click', closeFileViewer);
+  $('[data-v-prev]', el).addEventListener('click', () => viewerShow(viewer.index - 1));
+  $('[data-v-next]', el).addEventListener('click', () => viewerShow(viewer.index + 1));
+  viewerShow(viewer.index);
+  $('[data-v-close]', el).focus();
+}
+function viewerStatus(text) { if (viewer) $('[data-v-meta]', viewer.el).textContent = text; }
+function viewerShow(i) {
+  const v = viewer; if (!v) return;
+  if (i < 0 || i >= v.files.length) return;
+  v.index = i; v.att = v.files[i]; v.frame = null; const seq = ++v.seq;
+  const att = v.att, k = fileKind(att.name), el = v.el, body = $('[data-v-body]', el);
+  const src = '/api/files/' + encodeURIComponent(att.id) + '/content';
+  $('[data-v-icon]', el).innerHTML = icon(k.icon, 20);
+  $('[data-v-name]', el).textContent = att.name; $('[data-v-name]', el).title = att.name;
+  const base = `${k.label} · ${fmtBytes(att.size)}`; viewerStatus(base + ' · Opening');
+  const nav = $('[data-v-nav]', el); nav.hidden = v.files.length < 2; $('[data-v-pos]', el).textContent = `${i + 1} of ${v.files.length}`;
+  $('[data-v-prev]', el).disabled = i === 0; $('[data-v-next]', el).disabled = i === v.files.length - 1;
+  const openA = $('[data-v-open]', el); openA.href = src; openA.hidden = !k.native;
+  const dl = $('[data-v-download]', el); dl.href = src + '?download=1'; dl.setAttribute('download', att.name);
+  body.innerHTML = `<div class="viewer-loading" data-v-loading><span class="spinner"></span><span>Opening ${esc(k.label.toLowerCase())}</span></div>`;
+  const loading = $('[data-v-loading]', body);
+  const fresh = () => viewer === v && v.seq === seq;
+  const info = t => { if (fresh()) viewerStatus(base + (t ? ' · ' + t : '')); };
+  // Everything the renderer cannot draw falls back to the text Ricorsa read, laid out as pages.
+  const showRead = async (note) => {
+    if (!fresh()) return;
+    let text = '';
+    try { const r = await api('/api/files/' + encodeURIComponent(att.id) + '?text=1'); text = r.text || ''; } catch (e) { if (fresh()) { loading.innerHTML = `${icon('alert', 18)}<span>${esc((e && e.message) || 'Could not open this file')}</span>`; } return; }
+    if (!fresh()) return;
+    openA.hidden = true; dl.hidden = !att.stored;
+    mountFrame({ type: 'open', kind: 'read', name: att.name, ext: k.ext, text, note });
+  };
+  const mountFrame = (msg, transfer) => {
+    if (!fresh()) return;
+    let frame = v.frame;
+    if (!frame) {
+      frame = document.createElement('iframe'); frame.className = 'viewer-frame'; frame.title = att.name;
+      frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox'); frame.src = '/app/assets/viewer.html';
+      body.insertBefore(frame, loading); v.frame = frame; v.pending = msg; v.transfer = transfer;
+      return; // the frame asks for the file once it is ready (see the message listener below)
+    }
+    frame.contentWindow.postMessage(msg, '*', transfer || []);
+  };
+  v.onFrame = (m) => {
+    if (!fresh()) return;
+    if (m.type === 'ready' && v.pending) { const msg = v.pending, tr = v.transfer; v.pending = null; v.transfer = null; v.frame.contentWindow.postMessage(msg, '*', tr || []); return; }
+    if (m.type === 'key') { if (m.key === 'Escape') closeFileViewer(); else viewerShow(v.index + (m.key === 'ArrowLeft' ? -1 : 1)); return; }
+    if (m.type === 'status') { info(m.text); return; }
+    if (m.type === 'done') { loading.hidden = true; info(m.info); return; }
+    if (m.type === 'error') {
+      if (v.readShown) { loading.innerHTML = `${icon('alert', 18)}<span>${esc(m.message || 'Could not open this file')}</span>`; return; }
+      v.readShown = true; showRead(`Ricorsa could not draw this file the way its own app would (${m.message || 'unknown error'}), so here is the text it read. Download the original to open it in its app.`);
+    }
+  };
+  v.readShown = false;
+  (async () => {
+    // What is known about the file: whether the original is stored, and its details.
+    let meta = null;
+    try { meta = (await api('/api/files/' + encodeURIComponent(att.id))).file; } catch (e) { if (fresh()) loading.innerHTML = `${icon('alert', 18)}<span>${esc((e && e.message) || 'Could not open this file')}</span>`; return; }
+    if (!fresh()) return;
+    Object.assign(att, { stored: meta.stored, size: meta.size || att.size, chars: meta.chars });
+    if (!meta.stored) { openA.hidden = true; dl.hidden = true; v.readShown = true; showRead('Only the text of this file was kept when it was attached, before files could be opened here. Attach it again to see the original.'); return; }
+    dl.hidden = false;
+    if (k.kind === 'pdf') {
+      if (navigator.pdfViewerEnabled === false) { v.readShown = true; showRead('This browser cannot show PDFs inline, so here is the text Ricorsa read. Download the file to open it in a PDF app.'); return; }
+      const fr = document.createElement('iframe'); fr.className = 'viewer-native'; fr.title = att.name; fr.src = src + '#toolbar=1&navpanes=0';
+      fr.addEventListener('load', () => { if (fresh()) { loading.hidden = true; info(att.chars ? `${att.chars.toLocaleString('en-US')} characters read` : ''); } });
+      body.insertBefore(fr, loading); return;
+    }
+    if (k.kind === 'image') {
+      const wrap = document.createElement('div'); wrap.className = 'viewer-img'; wrap.title = 'Click to switch between fit and actual size';
+      const img = document.createElement('img'); img.alt = att.name; img.src = src;
+      img.addEventListener('load', () => { if (fresh()) { loading.hidden = true; info(`${img.naturalWidth} × ${img.naturalHeight}`); } });
+      img.addEventListener('error', () => { if (fresh()) { v.readShown = true; showRead('This image could not be shown, so here is the text Ricorsa read from it.'); } });
+      wrap.addEventListener('click', () => wrap.classList.toggle('actual'));
+      wrap.appendChild(img); body.insertBefore(wrap, loading); return;
+    }
+    // Everything else: fetch the bytes and hand them to the renderer frame.
+    let buffer;
+    try { const r = await fetch(src); if (!r.ok) throw new Error(r.status === 404 ? 'The stored copy of this file is gone' : 'Could not fetch the file (' + r.status + ')'); buffer = await r.arrayBuffer(); }
+    catch (e) { if (fresh()) { v.readShown = true; showRead(`The original could not be fetched (${(e && e.message) || 'error'}), so here is the text Ricorsa read.`); } return; }
+    if (!fresh()) return;
+    mountFrame({ type: 'open', kind: k.kind, name: att.name, ext: k.ext, size: att.size, buffer }, [buffer]);
+  })();
+}
+window.addEventListener('message', (e) => {
+  const v = viewer; if (!v || !v.frame || e.source !== v.frame.contentWindow || !e.data || e.data.from !== 'ricorsa-viewer') return;
+  if (v.onFrame) v.onFrame(e.data);
+});
 
 // ---------- Popover ----------
 let popCleanup = null;
@@ -710,9 +855,10 @@ function createComposer(o) {
   const paintAttach = () => {
     attachRow.hidden = !c.files.length;
     const reason = f => { const m = String(f.error || 'could not be read'); return m.length > 44 ? m.slice(0, 42) + '…' : m; };
-    attachRow.innerHTML = c.files.map((f, i) => `<div class="attach-chip ${esc(f.status)}" title="${esc(f.status === 'error' ? (f.error || 'Could not read this file') : f.status === 'uploading' ? 'Reading the file' : `${fmtSize(f.size)} · ${(f.chars || 0).toLocaleString('en-US')} characters read`)}">${f.status === 'uploading' ? '<span class="spinner tiny"></span>' : icon(f.status === 'error' ? 'alert' : 'file', 13)}<span class="name">${esc(f.name)}</span><span class="meta">${f.status === 'uploading' ? 'reading' : f.status === 'error' ? esc(reason(f)) : fmtSize(f.size)}</span>${f.status === 'error' && f.file ? `<button type="button" class="retry" data-retry="${i}" title="Try reading this file again">${icon('refresh', 11)}Retry</button>` : ''}<button type="button" data-rm="${i}" aria-label="Remove ${esc(f.name)}">${icon('x', 11)}</button></div>`).join('');
+    attachRow.innerHTML = c.files.map((f, i) => `<div class="attach-chip ${esc(f.status)}" title="${esc(f.status === 'error' ? (f.error || 'Could not read this file') : f.status === 'uploading' ? 'Reading the file' : `${fmtSize(f.size)} · ${(f.chars || 0).toLocaleString('en-US')} characters read`)}">${f.status === 'uploading' ? '<span class="spinner tiny"></span>' : icon(f.status === 'error' ? 'alert' : 'file', 13)}${f.status === 'ready' && f.id ? `<button type="button" class="name" data-open="${i}" title="Open ${esc(f.name)}">${esc(f.name)}</button>` : `<span class="name">${esc(f.name)}</span>`}<span class="meta">${f.status === 'uploading' ? 'reading' : f.status === 'error' ? esc(reason(f)) : fmtSize(f.size)}</span>${f.status === 'error' && f.file ? `<button type="button" class="retry" data-retry="${i}" title="Try reading this file again">${icon('refresh', 11)}Retry</button>` : ''}<button type="button" data-rm="${i}" aria-label="Remove ${esc(f.name)}">${icon('x', 11)}</button></div>`).join('');
     $$('[data-rm]', attachRow).forEach(b => b.addEventListener('click', () => { const i = +b.dataset.rm; const f = c.files[i]; if (f && f.id) api('/api/files/' + encodeURIComponent(f.id), { method: 'DELETE' }).catch(() => {}); c.files.splice(i, 1); paintAttach(); autosize(); paintSend(); }));
     $$('[data-retry]', attachRow).forEach(b => b.addEventListener('click', () => { const f = c.files[+b.dataset.retry]; if (f && f.file) uploadItem(f); }));
+    $$('[data-open]', attachRow).forEach(b => b.addEventListener('click', () => { const ready = c.files.filter(f => f.status === 'ready' && f.id); openFileViewer(c.files[+b.dataset.open], ready); }));
   };
   // Upload one picked file and read it; the chip shows the outcome, and a failed one can be retried.
   const uploadItem = async (item) => {
@@ -722,7 +868,7 @@ function createComposer(o) {
       const res = await fetch('/api/files', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw Object.assign(new Error(data.error || (res.status === 413 ? 'Too large for your plan' : res.status >= 500 ? 'The file reader is busy; try again' : 'Could not read the file')), { code: data.code });
-      Object.assign(item, { id: data.file.id, chars: data.file.chars, status: 'ready' });
+      Object.assign(item, { id: data.file.id, chars: data.file.chars, stored: data.file.stored, status: 'ready' });
     } catch (e) { item.status = 'error'; item.error = (e && e.message) || 'Could not read the file'; toast(`${item.name}: ${item.error}`, 'bad'); }
     paintAttach(); paintSend();
   };
@@ -745,7 +891,7 @@ function createComposer(o) {
     const text = ta.value.trim(); if (!text) return;
     if (c.files.some(f => f.status === 'uploading')) { toast('One moment, a file is still being read', 'bad'); return; }
     if (c.files.some(f => f.status === 'error')) { toast('A file could not be read. Retry it or remove it before sending.', 'bad'); return; }
-    const attachments = c.files.filter(f => f.status === 'ready' && f.id).map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, chars: f.chars }));
+    const attachments = c.files.filter(f => f.status === 'ready' && f.id).map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, chars: f.chars, stored: f.stored }));
     c.files = [];
     ta.value = ''; autosize(); paintAttach(); paintSend(); closePop();
     o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, attachments });
@@ -971,11 +1117,12 @@ function paintTurn(sec, thread, t) {
   const mode = MODES[t.mode] || MODES.search; const pills = [`<span class="pill ${esc(t.mode)}">${icon(mode.icon, 12)}${mode.label}</span>`];
   if (t.focus && t.focus !== 'web' && FOCI[t.focus]) pills.push(`<span class="pill">${icon(FOCI[t.focus].icon, 12)}${FOCI[t.focus].label}</span>`);
   if (space) pills.push(`<span class="pill space">${esc(space.emoji)} ${esc(space.name)}</span>`);
-  for (const a of (t.attachments || [])) pills.push(`<span class="pill file" title="${esc(a.name)} · ${esc(String(a.chars || 0))} characters read">${icon('file', 12)}${esc(a.name.length > 34 ? a.name.slice(0, 31) + '…' : a.name)}</span>`);
+  for (const a of (t.attachments || [])) pills.push(`<button type="button" class="pill file" data-file="${esc(a.id)}" title="Open ${esc(a.name)} · ${esc(String(a.chars || 0))} characters read">${icon(fileKind(a.name).icon, 12)}${esc(a.name.length > 34 ? a.name.slice(0, 31) + '…' : a.name)}</button>`);
   if (thread.origin && thread.origin.kind === 'discover' && thread.origin.ideaId) pills.push(`<span class="pill hashpill" title="Started from a Discover idea. Idea id ${esc(thread.origin.ideaId)} · graph ${esc(thread.origin.graphHash || '')}">${icon('compass', 12)}From Discover · ${esc(shortHash(thread.origin.ideaId))}</span>`);
   if (t.lineage) pills.push(`<span class="pill hashpill" title="Lineage hash ${esc(t.lineage)}">${icon('loop', 12)}${esc(shortHash(t.lineage))}</span>`);
   pills.push(`<span>${relTime(t.createdAt)}</span>`);
   $('[data-meta]', sec).innerHTML = pills.join('');
+  $$('[data-file]', sec).forEach(b => b.addEventListener('click', () => { const list = t.attachments || []; openFileViewer(list.find(a => a.id === b.dataset.file), list); }));
 
   const running = t.status === 'running';
   const sources = t.sources || [];
@@ -1783,7 +1930,8 @@ function init() {
   document.addEventListener('keydown', e => {
     const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '') || (e.target && e.target.isContentEditable);
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); newThread(); return; }
-    if (e.key === 'Escape') { closePop(); closeModal(); closeDrawer(); return; }
+    if (e.key === 'Escape') { if (viewer) { closeFileViewer(); return; } closePop(); closeModal(); closeDrawer(); return; }
+    if (viewer && !inField && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { viewerShow(viewer.index + (e.key === 'ArrowLeft' ? -1 : 1)); return; }
     if (e.key === '/' && !inField) { const ta = $('#main textarea'); if (ta) { e.preventDefault(); ta.focus(); } }
   });
   $('#main').innerHTML = `<div class="view"><div class="scroll"><div class="home"><div class="hero-mark"><span class="logomark" style="width:48px;height:48px">${LOGO_SVG(48)}</span>${WORDMARK(34).replace('class="wordmark"', 'class="wordmark big"')}</div><div class="tagline"><span class="dots">Loading your library</span></div></div></div></div>`;

@@ -1,0 +1,1 @@
+ALTER TABLE `attachments` ADD `r2_key` text;

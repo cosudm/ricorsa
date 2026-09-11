@@ -65,7 +65,8 @@ export type Turn = {
   /** Files the person attached to this question (the extracted text lives in the attachments table). */
   attachments?: AttachmentMeta[];
 };
-export type AttachmentMeta = { id: string; name: string; type: string; size: number; chars: number };
+/** `stored`: the file itself is in object storage and can be opened in the viewer (older turns may lack it). */
+export type AttachmentMeta = { id: string; name: string; type: string; size: number; chars: number; stored?: boolean };
 
 /** Where a thread came from. Discover-born threads carry the idea's hash id and the graph fingerprint it was drawn from. */
 export type ThreadOrigin = { kind: 'discover' | 'ask'; ideaId?: string; graphHash?: string; category?: string; title?: string; at: number; subject?: string };
@@ -190,8 +191,9 @@ export type BuildStatus = 'building' | 'done' | 'error';
 /** A message in a build chat. A plan message may carry `next`: suggested next-step requests for that version. */
 export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; next?: string[]; at: number };
 /**
- * Files attached to questions. Only the extracted text is kept (the upload itself is converted and discarded),
- * tied to the thread it was used in; a row with no thread is a pending upload that expires.
+ * Files attached to questions. The extracted text lives here (what the model reads); the file itself is kept
+ * as uploaded in the FILES bucket under `r2Key` so it can be opened in the viewer (null when storage was
+ * unavailable). Rows are tied to the thread they were used in; a row with no thread is a pending upload that expires.
  */
 export const attachments = sqliteTable('attachments', {
   id: text('id').primaryKey(),
@@ -203,6 +205,7 @@ export const attachments = sqliteTable('attachments', {
   text: text('text').notNull().default(''),
   chars: integer('chars').notNull().default(0),
   via: text('via').notNull().default('direct'),
+  r2Key: text('r2_key'),
   createdAt: tsNow('created_at'),
 }, (t) => [index('attachments_user_idx').on(t.userId, t.createdAt), index('attachments_thread_idx').on(t.threadId)]);
 

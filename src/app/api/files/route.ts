@@ -2,14 +2,16 @@ import { currentUser } from '@/lib/session';
 import { handle, json, fail, uid } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { planFor } from '@/lib/plans';
-import { extractText, FileError, metaOf, sweepPending, ACCEPT } from '@/lib/files';
+import { extractText, FileError, metaOf, mimeFor, sweepPending, ACCEPT } from '@/lib/files';
+import { putFile } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
 /**
- * POST /api/files  (multipart, one `file`) — read a file into text for the next question. Returns the
- * attachment's id and size; the text stays on the server. GET returns what the picker should accept.
+ * POST /api/files  (multipart, one `file`) — read a file into text for the next question and keep the file
+ * itself so it can be opened in the viewer. Returns the attachment's id and size; the text stays on the
+ * server. GET returns what the picker should accept.
  */
 export const GET = handle(async () => {
   const user = await currentUser();
@@ -38,8 +40,11 @@ export const POST = handle(async (req: Request) => {
     return fail(502, `${file.name} could not be read right now. Try again in a moment.`, 'file_service');
   }
   const id = uid();
-  const row = { id, userId: user.id, threadId: null, name: file.name.slice(0, 200), type: (file.type || '').slice(0, 100), size: file.size, text, chars: text.length, via };
+  // The file as sent, so the viewer can show it the way its own application would. Losing the copy only loses the viewer.
+  const key = `${user.id}/${id}`;
+  const stored = await putFile(key, await file.arrayBuffer(), mimeFor(file.name), file.name);
+  const row = { id, userId: user.id, threadId: null, name: file.name.slice(0, 200), type: (file.type || '').slice(0, 100), size: file.size, text, chars: text.length, via, r2Key: stored ? key : null };
   await db().insert(schema.attachments).values(row);
-  console.log('[files]', JSON.stringify({ user: user.id, name: row.name, size: row.size, chars: row.chars, via }));
+  console.log('[files]', JSON.stringify({ user: user.id, name: row.name, size: row.size, chars: row.chars, via, stored }));
   return json({ file: { ...metaOf(row), preview: text.slice(0, 240) } });
 });

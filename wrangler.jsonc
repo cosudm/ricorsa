@@ -13,6 +13,12 @@
   "d1_databases": [
     { "binding": "DB", "database_name": "ricorsa", "database_id": "47395d3b-09a7-403f-ad59-602ecb4fe1ff", "migrations_dir": "drizzle" }
   ],
+  // Files attached to questions are kept exactly as uploaded so they can be opened in the app's viewer
+  // (one object per attachment, keyed <user id>/<attachment id>). The bucket was created in the dashboard
+  // (R2, Create bucket) with the United States jurisdiction, so its data stays in the US.
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "ricorsa-vault", "jurisdiction": "us" }
+  ],
   // Plain configuration. Secrets (AUTH0_CLIENT_SECRET, AUTH0_SECRET, KIMI_API_KEY, BRAVE_API_KEY, PAYPAL_CLIENT_SECRET)
   // are set on the Worker (Settings, Variables and Secrets) and survive deploys. PayPal plans and the
   // webhook are created by the app itself on first use (src/lib/paypal-setup.ts).

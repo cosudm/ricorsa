@@ -278,6 +278,34 @@
   .spinner.tiny { width: 12px; height: 12px; border-width: 2px; margin: 0; }
   .composer.dropping { outline: 2px dashed var(--accent-line); outline-offset: 2px; }
   .pill.file { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .q-meta button.pill.file { cursor: pointer; font: inherit; font-weight: 500; }
+  .q-meta button.pill.file:hover { background: var(--accent-soft); color: var(--accent); }
+  .attach-chip button.name { width: auto; height: auto; border-radius: 4px; padding: 0; color: inherit; font-weight: 500; display: inline; text-align: left; }
+  .attach-chip button.name:hover { background: none; color: var(--accent); text-decoration: underline; }
+
+  /* ---------- File viewer: a file shown the way its own application would show it ---------- */
+  .viewer { position: fixed; inset: 0; z-index: 120; background: var(--surface); display: flex; flex-direction: column; animation: viewerIn .14s ease-out; }
+  @keyframes viewerIn { from { opacity: 0; transform: scale(.985); } to { opacity: 1; transform: none; } }
+  body.viewer-open { overflow: hidden; }
+  .viewer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--line); background: var(--card); min-height: 54px; flex: none; }
+  .viewer-bar .ficon { color: var(--accent); flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); }
+  .viewer-title { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; margin-right: 6px; }
+  .viewer-title b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
+  .viewer-title span { color: var(--ink-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .viewer-nav { display: inline-flex; align-items: center; gap: 2px; color: var(--ink-2); font-size: 12.5px; padding: 0 6px 0 2px; white-space: nowrap; }
+  .viewer-nav[hidden] { display: none; }
+  .viewer-nav .icon-btn:disabled { opacity: .35; }
+  .viewer-bar .btn[hidden] { display: none; }
+  .viewer-body { flex: 1; min-height: 0; position: relative; background: var(--surface); }
+  .viewer-body > iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+  .viewer-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--ink-2); background: var(--surface); font-size: 13.5px; }
+  .viewer-loading[hidden] { display: none; }
+  .viewer-loading .ico { color: var(--bad); }
+  .viewer-img { height: 100%; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; cursor: zoom-in; }
+  .viewer-img img { max-width: 100%; max-height: 100%; object-fit: contain; box-shadow: 0 1px 3px rgba(27,34,40,.14), 0 8px 24px -12px rgba(27,34,40,.25); background: #fff; }
+  .viewer-img.actual { display: block; cursor: zoom-out; }
+  .viewer-img.actual img { max-width: none; max-height: none; }
+  @media (max-width: 720px) { .viewer-bar { padding: 8px 8px 8px 12px; gap: 6px; } .viewer-bar .btn span { display: none; } .viewer-bar .btn { padding: 0 8px; } .viewer-bar .ficon { display: none; } }
 
   /* ---------- Popover menus ---------- */
   .pop {

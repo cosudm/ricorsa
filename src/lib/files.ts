@@ -4,11 +4,13 @@
  * inside the zip for the rest); anything that yields no text (a scanned PDF), an image, or an older binary
  * format goes through the model provider's file extraction service (Moonshot Files API, purpose
  * "file-extract", which also reads text out of images), and the upload there is deleted as soon as its
- * text is back. Only the text is kept, on the thread it was used in, so a follow-up can still lean on it.
+ * text is back. The text is kept on the thread it was used in, so a follow-up can still lean on it, and the
+ * file itself is kept in object storage (src/lib/storage.ts) so it can be opened in the app's viewer.
  */
 import { and, eq, inArray, isNull, lt } from 'drizzle-orm';
 import { unzipSync, strFromU8 } from 'fflate';
 import { db, schema } from './db';
+import { deleteFiles } from './storage';
 import type { AttachmentMeta } from './db/schema';
 
 /** What the picker offers and the server accepts (the extraction service reads all of these). */
@@ -27,6 +29,23 @@ export class FileError extends Error { constructor(public status: number, messag
 
 export function extOf(name: string): string { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return m ? '.' + m[1].toLowerCase() : ''; }
 export function isAccepted(name: string): boolean { return ACCEPT.includes(extOf(name)); }
+/** The media type a stored file is served with, decided by its extension (the browser's guess is not trusted for HTML, SVG or XML). */
+const MIME: Record<string, string> = {
+  '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // Markdown and delimited text are served as plain text so "Open" shows them in a tab instead of downloading them.
+  '.txt': 'text/plain', '.md': 'text/plain', '.csv': 'text/plain', '.tsv': 'text/plain', '.json': 'application/json', '.xml': 'text/xml',
+  '.html': 'text/html', '.htm': 'text/html', '.rtf': 'application/rtf', '.epub': 'application/epub+zip', '.log': 'text/plain', '.yaml': 'text/plain', '.yml': 'text/plain',
+  '.ini': 'text/plain', '.conf': 'text/plain', '.toml': 'text/plain', '.js': 'text/javascript', '.ts': 'text/plain', '.tsx': 'text/plain', '.jsx': 'text/plain', '.py': 'text/plain',
+  '.java': 'text/plain', '.go': 'text/plain', '.rb': 'text/plain', '.rs': 'text/plain', '.c': 'text/plain', '.h': 'text/plain', '.cpp': 'text/plain', '.cs': 'text/plain',
+  '.php': 'text/plain', '.sql': 'text/plain', '.sh': 'text/plain', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.bmp': 'image/bmp', '.tif': 'image/tiff', '.tiff': 'image/tiff', '.svg': 'image/svg+xml',
+};
+export function mimeFor(name: string): string {
+  const m = MIME[extOf(name)] || 'application/octet-stream';
+  return /^text\/|json$|xml$/.test(m) ? m + '; charset=utf-8' : m;
+}
 const BINARY_EXT = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.rtf', '.epub', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
 /** Plain text by extension, or by a text MIME type when the extension is not a known binary format (Office MIME types mention "xml" but are zips). */
 function isTextLike(name: string, type: string): boolean {
@@ -178,8 +197,8 @@ export async function extractText(file: File, signal?: AbortSignal): Promise<{ t
   return { text, via };
 }
 
-export function metaOf(row: { id: string; name: string; type: string; size: number; chars: number }): AttachmentMeta {
-  return { id: row.id, name: row.name, type: row.type, size: row.size, chars: row.chars };
+export function metaOf(row: { id: string; name: string; type: string; size: number; chars: number; r2Key?: string | null }): AttachmentMeta {
+  return { id: row.id, name: row.name, type: row.type, size: row.size, chars: row.chars, stored: !!row.r2Key };
 }
 
 /** The person's attachments by id, optionally limited to those not yet used or used in one thread. */
@@ -195,9 +214,24 @@ export async function claimAttachments(ids: string[], threadId: string): Promise
   await db().update(schema.attachments).set({ threadId }).where(and(inArray(schema.attachments.id, ids), isNull(schema.attachments.threadId)));
 }
 
-/** Uploads nobody used within a day are dropped (called from the upload route, best effort). */
+/** Uploads nobody used within a day are dropped, rows and stored files (called from the upload route, best effort). */
 export async function sweepPending(userId: string): Promise<void> {
-  try { await db().delete(schema.attachments).where(and(eq(schema.attachments.userId, userId), isNull(schema.attachments.threadId), lt(schema.attachments.createdAt, new Date(Date.now() - PENDING_TTL_MS)))); } catch { /* best effort */ }
+  try {
+    const gone = await db().delete(schema.attachments).where(and(eq(schema.attachments.userId, userId), isNull(schema.attachments.threadId), lt(schema.attachments.createdAt, new Date(Date.now() - PENDING_TTL_MS)))).returning({ r2Key: schema.attachments.r2Key });
+    await deleteFiles(gone.map(g => g.r2Key));
+  } catch { /* best effort */ }
+}
+
+/** Drop every attachment of a thread, rows and stored files (the thread itself is deleted by the caller). */
+export async function deleteThreadAttachments(threadId: string): Promise<void> {
+  const gone = await db().delete(schema.attachments).where(eq(schema.attachments.threadId, threadId)).returning({ r2Key: schema.attachments.r2Key });
+  await deleteFiles(gone.map(g => g.r2Key));
+}
+
+/** The storage keys of everything a person uploaded, for account deletion (the rows go with the user row's cascade). */
+export async function storageKeysFor(userId: string): Promise<string[]> {
+  const rows = await db().select({ r2Key: schema.attachments.r2Key }).from(schema.attachments).where(eq(schema.attachments.userId, userId));
+  return rows.map(r => r.r2Key).filter((k): k is string => !!k);
 }
 
 /**
