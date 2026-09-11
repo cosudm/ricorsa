@@ -24,14 +24,14 @@ export default async function Landing() {
             <div className="fine">Free plan includes 10 questions a day. No card needed to start.</div>
           </div>
           <div className="demo" aria-label="Example answer">
-            <p className="q">Why do kestrels hover in place?</p>
+            <p className="q">Should my two-person consultancy be an LLC or an S corp?</p>
             <div className="srcs">
-              <div className="src"><b>Common kestrel</b>en.wikipedia.org</div>
-              <div className="src"><b>Kestrel</b>rspb.org.uk</div>
-              <div className="src"><b>All About Birds</b>allaboutbirds.org</div>
+              <div className="src"><b>S corporations</b>irs.gov</div>
+              <div className="src"><b>Choose a business structure</b>sba.gov</div>
+              <div className="src"><b>LLC vs. S Corp</b>investopedia.com</div>
             </div>
-            <div className="ans">Kestrels hover by flying into the wind at the wind&rsquo;s own speed, so their ground speed drops to zero while air keeps flowing over their wings<span className="cite">1</span>. The head stays almost perfectly still while the body rides the gusts, which keeps the image of the ground stable enough to spot a vole from twenty metres up<span className="cite">2</span><span className="cite">3</span>.</div>
-            <div className="learned"><b>Learned from this exchange</b><span className="nchip"><i className="dot" style={{ background: 'var(--n-topic)' }} />birds of prey</span><span className="nchip"><i className="dot diamond" style={{ background: 'var(--n-goal)' }} />explain science simply</span><span className="nchip"><i className="dot hex" style={{ background: 'var(--n-expertise)' }} />biology · novice</span></div>
+            <div className="ans">An LLC is the legal wrapper and an S corp is a tax election, so this is less either-or than it sounds: most small consultancies form the LLC first and can elect S corp treatment later by filing Form 2553 with the IRS<span className="cite">1</span>. The election starts to pay off once profits comfortably exceed a reasonable salary for each of you, because the salary carries payroll taxes while the remaining distributions do not<span className="cite">2</span>; below that point the extra payroll and bookkeeping usually cost more than they save<span className="cite">3</span>.</div>
+            <div className="learned"><b>Learned from this exchange</b><span className="nchip"><i className="dot" style={{ background: 'var(--n-topic)' }} />business structure</span><span className="nchip"><i className="dot diamond" style={{ background: 'var(--n-goal)' }} />keep it practical</span><span className="nchip"><i className="dot hex" style={{ background: 'var(--n-expertise)' }} />small business · owner</span></div>
           </div>
         </section>
 
