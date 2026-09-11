@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ricorsa-console",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "observability": { "enabled": true },
+  // The console's own data (customers, licences, trials, invoices, staff) lives in its own database. The product's
+  // database is bound too, read for live account data and written only to grant plans, trials and licences.
+  // Both are created in the dashboard (D1) and the custom domain manage.ricorsa.com is attached in the Worker's Settings.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "ricorsa-console", "database_id": "6307a1b3-e03f-4e1b-9ad8-7d2294e74df6", "migrations_dir": "drizzle" },
+    { "binding": "RICORSA", "database_name": "ricorsa", "database_id": "47395d3b-09a7-403f-ad59-602ecb4fe1ff" }
+  ],
+  // Plain configuration. Secrets (AUTH0_CLIENT_SECRET, AUTH0_SECRET, PAYPAL_CLIENT_SECRET, RESEND_API_KEY) are set on the
+  // Worker (Settings, Variables and Secrets) and survive deploys.
+  "vars": {
+    "APP_NAME": "SMEPro Ricorsa Manager Console",
+    "APP_BASE_URL": "https://manage.ricorsa.com",
+    "PRODUCT_URL": "https://ricorsa.com",
+    "AUTH0_DOMAIN": "dev-xddeyes70ajfjexx.us.auth0.com",
+    "AUTH0_CLIENT_ID": "REPLACE_WITH_CONSOLE_CLIENT_ID",
+    // Owners: signed-in people with these emails are owners of the console and can invite staff.
+    "CONSOLE_OWNERS": "chrismiguez78@gmail.com,cmiguez@smeprotech.com,admin@smepro.app,support@smeprotech.com",
+    "PAYPAL_ENV": "live",
+    "PAYPAL_CLIENT_ID": "BAAkDyjF4FPGW2WJrgPvOtFE1c0HUkZ0jRaRkooPnmsvBlNIzSxicOj-aKA0NDLcQQRGSmd-L4WEBEGLQQ",
+    "RESEND_FROM": "Ricorsa <hello@ricorsa.com>"
+  }
+}

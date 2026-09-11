@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { CancelButton, DeleteAccountButton } from '@/components/AccountActions';
 import { currentUser } from '@/lib/session';
-import { planFor } from '@/lib/plans';
+import { planFor, statusGrants } from '@/lib/plans';
 import { readUsage } from '@/lib/usage';
 import { loadGraph } from '@/lib/graph';
 
@@ -14,7 +14,9 @@ export default async function Account() {
   const user = await currentUser();
   const plan = planFor(user.plan);
   const [usage, graph] = await Promise.all([readUsage(user.id), loadGraph(user.id)]);
-  const active = !user.subscriptionStatus || ['ACTIVE', 'APPROVAL_PENDING'].includes(user.subscriptionStatus);
+  const active = statusGrants(user.subscriptionStatus);
+  const granted = user.subscriptionStatus === 'TRIAL' || user.subscriptionStatus === 'LICENSED';
+  const ended = user.subscriptionStatus === 'TRIAL_ENDED' || user.subscriptionStatus === 'LICENSE_ENDED';
   return (
     <>
       <SiteNav signedIn />
@@ -25,8 +27,10 @@ export default async function Account() {
           <div className="cards">
             <div className="card">
               <h3>Plan</h3>
-              <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}{user.admin ? ' · admin, all access' : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>Renews {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
-              {!active && <div className="notice" style={{ marginBottom: 12 }}>Your PayPal subscription is {user.subscriptionStatus?.toLowerCase()}. Update the payment method in PayPal, or subscribe again on the pricing page, to restore {plan.name} limits.</div>}
+              <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}{user.admin ? ' · admin, all access' : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>{granted ? (user.subscriptionStatus === 'TRIAL' ? 'Trial ends' : 'Licensed until') : 'Renews'} {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
+              {granted && !user.planRenewsAt && <p className="note">Your {plan.name} plan is licensed with no end date.</p>}
+              {ended && <div className="notice" style={{ marginBottom: 12 }}>Your {user.subscriptionStatus === 'TRIAL_ENDED' ? 'trial' : 'licence'} has ended, so the account is on the Free plan. Choose a plan on the pricing page to keep going.</div>}
+              {!active && !ended && <div className="notice" style={{ marginBottom: 12 }}>Your PayPal subscription is {user.subscriptionStatus?.toLowerCase()}. Update the payment method in PayPal, or subscribe again on the pricing page, to restore {plan.name} limits.</div>}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {plan.key === 'free' ? <a className="btn primary" href="/pricing">Upgrade</a> : <a className="btn" href="/pricing">Change plan</a>}
                 <CancelButton hasSubscription={!!user.paypalSubscriptionId && active} />

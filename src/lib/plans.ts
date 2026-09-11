@@ -67,6 +67,19 @@ export const PLANS: Record<PlanKey, Plan> = {
   },
 };
 
+/**
+ * Subscription statuses that grant the paid plan on the row: PayPal's ACTIVE and APPROVAL_PENDING, plus TRIAL and
+ * LICENSED, which the Manager Console sets by hand (with `planRenewsAt` as the end date, or null for open-ended).
+ */
+export const GRANTING_STATUSES = new Set(['ACTIVE', 'APPROVAL_PENDING', 'TRIAL', 'LICENSED']);
+export function statusGrants(status: string | null | undefined): boolean { return !status || GRANTING_STATUSES.has(status); }
+/** Console grants that have run past their end date no longer count. */
+export function grantExpired(status: string | null | undefined, renewsAt: Date | number | null | undefined): boolean {
+  if (status !== 'TRIAL' && status !== 'LICENSED') return false;
+  if (!renewsAt) return false;
+  return new Date(renewsAt).getTime() < Date.now();
+}
+
 export function planFor(key: string | null | undefined): Plan {
   return PLANS[(key as PlanKey) in PLANS ? (key as PlanKey) : 'free'];
 }

@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { db, schema } from './db';
-import { planFor } from './plans';
+import { planFor, statusGrants } from './plans';
 import type { CurrentUser } from './session';
 import { HttpError } from './http';
 
@@ -19,7 +19,7 @@ export async function readUsage(userId: string) {
 /** Throws a 402/429 when the plan does not allow another answer of this kind. */
 export async function assertQuota(user: CurrentUser, mode: 'search' | 'research', tier: string) {
   const plan = planFor(user.plan);
-  if (!user.admin && user.plan !== 'free' && user.subscriptionStatus && !['ACTIVE', 'APPROVAL_PENDING'].includes(user.subscriptionStatus)) {
+  if (!user.admin && user.plan !== 'free' && !statusGrants(user.subscriptionStatus)) {
     throw new HttpError(402, 'Your subscription is not active. Update your payment method or resubscribe.', 'subscription_inactive');
   }
   // Feature gates follow the plan (for an admin, the plan they chose to demo); the counted limits never apply to an admin.

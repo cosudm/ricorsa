@@ -5,7 +5,7 @@ import { fail, readJson, HttpError, uid, truncate } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import type { BuildMessage } from '@/lib/db/schema';
 import { loadGraph } from '@/lib/graph';
-import { planFor } from '@/lib/plans';
+import { statusGrants, planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
 import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, type BuildSpec } from '@/lib/build';
 import { auditApp, repairRequest } from '@/lib/build-audit';
@@ -46,7 +46,7 @@ export async function POST(req: Request) {
   let user; try { user = await currentUser(); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Sign-in check failed'); }
   const plan = planFor(user.plan);
   if (plan.caps.discover !== 'full') return fail(402, 'Building from Discover is part of the Team plan.', 'upgrade_required');
-  if (!user.admin && user.subscriptionStatus && !['ACTIVE', 'APPROVAL_PENDING'].includes(user.subscriptionStatus)) return fail(402, 'Your subscription is not active.', 'subscription_inactive');
+  if (!user.admin && !statusGrants(user.subscriptionStatus)) return fail(402, 'Your subscription is not active.', 'subscription_inactive');
   const parsed = Body.safeParse(await readJson(req).catch(() => ({})));
   if (!parsed.success) return fail(400, 'Invalid request', 'invalid_request');
   const b = parsed.data;

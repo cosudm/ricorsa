@@ -114,3 +114,7 @@ Everything created from a graph carries a cryptographic id. When Discover genera
 ## Before launch
 
 Have the Privacy and Terms pages (`src/app/privacy`, `src/app/terms`) reviewed; they are starting points. The identity graph is profiling of a named person, so keep the pause, export and delete paths working and mention them in the privacy policy. Add a support inbox, and decide who receives the enterprise inquiries that the landing page sends to `enterprise@ricorsa.com`.
+
+## Manager Console
+
+The staff console (customers, sign-ups, licences, trials, communication, invoicing and billing) is a separate app in `console/`, deployed as its own Worker at https://manage.ricorsa.com with its own database and Auth0 application. It reads this product's database for live account data and writes only plan grants (statuses `TRIAL` and `LICENSED`, which `src/lib/plans.ts` treats as granting until `planRenewsAt` passes). See `console/README.md`.
