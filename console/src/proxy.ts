@@ -8,7 +8,7 @@ import { auth0, auth0Configured, devFakeUserEnabled } from '@/lib/auth0';
 export async function proxy(request: NextRequest) {
   if (devFakeUserEnabled()) return NextResponse.next();
   const { pathname } = request.nextUrl;
-  if (pathname.startsWith('/api/webhooks/')) return NextResponse.next();
+  if (pathname.startsWith('/api/webhooks/') || pathname === '/api/health') return NextResponse.next();
   if (!auth0Configured()) {
     const body = pathname.startsWith('/api/') ? JSON.stringify({ error: 'Sign-in is not configured yet', code: 'auth_unconfigured' }) : '<!doctype html><meta charset="utf-8"><title>Ricorsa Manager Console</title><body style="font-family:system-ui;padding:48px;max-width:560px;margin:auto;color:#1B2228"><h1 style="font-weight:500">Almost there</h1><p>Sign-in for the console is still being set up. Please check back shortly.</p></body>';
     return new NextResponse(body, { status: 503, headers: { 'Content-Type': pathname.startsWith('/api/') ? 'application/json' : 'text/html; charset=utf-8', 'Retry-After': '300' } });

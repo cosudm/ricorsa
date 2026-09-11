@@ -2,8 +2,11 @@ import { Auth0Client } from '@auth0/nextjs-auth0/server';
 
 let _client: Auth0Client | null = null;
 
+/** True once every Auth0 setting is present. The placeholder client id shipped in wrangler.jsonc does not count. */
 export function auth0Configured(): boolean {
-  return Boolean(process.env.AUTH0_DOMAIN && process.env.AUTH0_CLIENT_ID && process.env.AUTH0_CLIENT_SECRET && process.env.AUTH0_SECRET && process.env.APP_BASE_URL);
+  const clientId = process.env.AUTH0_CLIENT_ID || '';
+  if (!clientId || clientId.startsWith('REPLACE_')) return false;
+  return Boolean(process.env.AUTH0_DOMAIN && process.env.AUTH0_CLIENT_SECRET && process.env.AUTH0_SECRET && process.env.APP_BASE_URL);
 }
 
 export function auth0(): Auth0Client {
