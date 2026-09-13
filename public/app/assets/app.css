@@ -766,6 +766,8 @@
   table.grants .ok { color: var(--good); } table.grants .muted { color: var(--ink-3); }
   @media (max-width: 640px) { .grant-form { grid-template-columns: 1fr 1fr; } }
   .smsg-sub.check { display: flex; gap: 5px; align-items: flex-start; margin-top: 8px; } .smsg-sub.check svg { flex: none; margin-top: 2px; color: var(--good); }
+  .smsg-sub.fallback { display: flex; gap: 5px; align-items: flex-start; margin-top: 6px; color: var(--warn); } .smsg-sub.fallback svg { flex: none; margin-top: 2px; }
+  .models-check { display: grid; gap: 8px; margin: 12px 0 4px; font-size: 13px; } .models-check .row { display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: start; } .models-check .row b { color: var(--ink-2); font-weight: 600; } .models-check .ok { color: var(--good); } .models-check .bad { color: var(--warn); } .models-check code { font-size: 12px; }
   .build-left { margin-top: 6px; font-size: 12px; color: var(--ink-3); } .build-left summary { cursor: pointer; } .build-left ul { margin: 4px 0 0; padding-left: 18px; } .build-left li { margin: 2px 0; }
   .smsg .build-plan { margin: 4px 0 0; }
   .smsg-actions { display: flex; gap: 6px; }

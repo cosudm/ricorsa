@@ -208,7 +208,7 @@ export type BuildStatus = 'building' | 'done' | 'error';
 /** A message in a build chat. A plan message may carry `next`: suggested next-step requests for that version. */
 /** What the check of a version found: whether a real browser ran it, how much it pressed, and what was left. */
 export type BuildCheck = { ran: boolean; clicked: number; controls: number; screens: number; seconds: number; left: number; rounds?: number };
-export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; next?: string[]; at: number; model?: string; check?: BuildCheck; left?: string[] };
+export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; next?: string[]; at: number; model?: string; /** The configured model could not be used and `model` wrote instead: which one was wanted and what it answered. */ fallback?: { wanted: string; why: string }; check?: BuildCheck; left?: string[] };
 /**
  * Files attached to questions. The extracted text lives here (what the model reads); the file itself is kept
  * as uploaded in the FILES bucket under `r2Key` so it can be opened in the viewer (null when storage was

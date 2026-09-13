@@ -35,11 +35,13 @@ export function isClaude(model: string): boolean { return /^claude-/i.test(model
 /**
  * Thinking effort per tier. Kimi K3 and the thinking models take `reasoning_effort`; Claude takes
  * `output_config.effort` (low, medium, high, xhigh, max) with adaptive thinking. Fast thinks little, Best a
- * moderate amount, Reasoning as much as it can, builds and ideas a lot. Override per tier with
- * REASONING_QUICK, REASONING_DEFAULT, REASONING_COMPLEX, REASONING_BUILD, REASONING_IDEAS (Kimi) and
- * EFFORT_QUICK, EFFORT_DEFAULT, EFFORT_COMPLEX, EFFORT_BUILD, EFFORT_IDEAS (Claude); "off" sends nothing.
+ * moderate amount, Reasoning as much as it can, builds and ideas a lot. Builds on Kimi stop at "high": at
+ * "max" K3 thinks for many minutes before writing a line, and the plan it writes first is most of the value
+ * of that thinking anyway. Override per tier with REASONING_QUICK, REASONING_DEFAULT, REASONING_COMPLEX,
+ * REASONING_BUILD, REASONING_IDEAS (Kimi) and EFFORT_QUICK, EFFORT_DEFAULT, EFFORT_COMPLEX, EFFORT_BUILD,
+ * EFFORT_IDEAS (Claude); "off" sends nothing.
  */
-const DEFAULT_REASONING: Record<Tier, string> = { quick: 'low', default: 'medium', complex: 'max', build: 'max', ideas: 'high' };
+const DEFAULT_REASONING: Record<Tier, string> = { quick: 'low', default: 'medium', complex: 'max', build: 'high', ideas: 'high' };
 const DEFAULT_EFFORT: Record<Tier, string> = { quick: 'low', default: 'medium', complex: 'max', build: 'high', ideas: 'high' };
 const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 function envFor(prefix: string, tier: Tier): string | undefined {
@@ -91,11 +93,39 @@ export async function availableModels(force = false): Promise<string[]> {
 }
 
 /** Anthropic is skipped for a while after its key is rejected or the account has no credit, so builds do not wait on a dead door. A changed key is tried at once. */
-let anthropicDown: { key: string; until: number } | null = null;
+let anthropicDown: { key: string; until: number; why: string } | null = null;
 function anthropicUsable(): boolean { const k = anthropicKey(); return !!k && !(anthropicDown && anthropicDown.key === k && Date.now() < anthropicDown.until); }
-function markAnthropicDown(why: string) { anthropicDown = { key: anthropicKey() || '', until: Date.now() + 600_000 }; console.warn('[provider] anthropic set aside for ten minutes:', why); }
-/** Whether Claude models can be used right now (a key is set and it has not been rejected recently). */
+function markAnthropicDown(why: string) { anthropicDown = { key: anthropicKey() || '', until: Date.now() + 600_000, why }; console.warn('[provider] anthropic set aside for ten minutes:', why); }
+/** Whether an Anthropic key is set at all. */
 export function anthropicConfigured(): boolean { return !!anthropicKey(); }
+/** Why a Claude tier is not on Claude right now: no key, or the last refusal that set Anthropic aside. Null when Claude is in use. */
+export function anthropicStatus(): { configured: boolean; usable: boolean; setAsideUntil: string | null; why: string | null } {
+  const k = anthropicKey();
+  if (!k) return { configured: false, usable: false, setAsideUntil: null, why: 'ANTHROPIC_API_KEY is not set on the server' };
+  const down = !!(anthropicDown && anthropicDown.key === k && Date.now() < anthropicDown.until);
+  return { configured: true, usable: !down, setAsideUntil: down ? new Date(anthropicDown!.until).toISOString() : null, why: down ? anthropicDown!.why : null };
+}
+/**
+ * One tiny message on Anthropic so an admin can read exactly what the account answers (a bad key, an account
+ * without credit, an unknown model id), instead of finding it in the logs. An accepted probe clears a set-aside
+ * at once, so a fixed key or a top-up takes effect on the next build.
+ */
+export async function probeAnthropic(model = configured('build')): Promise<{ ok: boolean; status: number; message: string; model: string; ms: number }> {
+  const key = anthropicKey(); const started = Date.now();
+  const m = isClaude(model) ? model : DEFAULT_MODELS.build;
+  if (!key) return { ok: false, status: 0, message: 'ANTHROPIC_API_KEY is not set on the server', model: m, ms: 0 };
+  try {
+    const res = await fetch(`${anthropicBase()}/v1/messages`, {
+      method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: m, max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] }), signal: AbortSignal.timeout(20_000),
+    });
+    const text = await res.text();
+    if (res.ok) { if (anthropicDown && anthropicDown.key === key) anthropicDown = null; return { ok: true, status: res.status, message: `Anthropic accepted a message on ${m}`, model: m, ms: Date.now() - started }; }
+    let message = text.slice(0, 300);
+    try { const j = JSON.parse(text) as { error?: { type?: string; message?: string } }; if (j.error?.message) message = `${j.error.type || 'error'}: ${j.error.message}`.slice(0, 300); } catch { /* not JSON */ }
+    return { ok: false, status: res.status, message, model: m, ms: Date.now() - started };
+  } catch (e) { return { ok: false, status: 0, message: String((e as Error)?.message || e).slice(0, 200), model: m, ms: Date.now() - started }; }
+}
 
 /** The best model an account can use for a tier: the configured id when available, otherwise the next known one. */
 export async function resolveModel(tier: Tier, exclude: string[] = []): Promise<string> {
@@ -226,12 +256,13 @@ export async function streamAnswer(opts: {
   onTool?: (call: ToolCall) => void;
   /** Sees every tool result before the model does; may hand back replacement text (used to number Vault pages as sources). */
   onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void;
-  /** Told which model is writing, including when a fallback takes over mid-way. */
-  onModel?: (model: string) => void;
+  /** Told which model is writing, including when a fallback takes over mid-way; `fallback` says which model was wanted and why it could not be used. */
+  onModel?: (model: string, fallback?: { wanted: string; why: string }) => void;
 }): Promise<StreamResult> {
   if (mockMode()) return mockStream(opts, modelFor(opts.tier));
   let model = await resolveModel(opts.tier);
-  opts.onModel?.(model);
+  const wanted = configured(opts.tier);
+  opts.onModel?.(model, isClaude(wanted) && !isClaude(model) ? { wanted, why: anthropicStatus().why || 'Anthropic could not be used' } : undefined);
   const systemText = opts.system.map(b => b.text).join('\n\n');
   const convo: ChatMessage[] = [{ role: 'system', content: systemText }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
   const { tools, lookup } = toolsFor(opts.mcp || undefined);
@@ -242,7 +273,7 @@ export async function streamAnswer(opts: {
   const tried: string[] = [model];
 
   let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let effort = effortFor(opts.tier, model); let noPartial = isClaude(model); let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens; let overloadRetries = 0;
-  const switchTo = (next: string) => { model = next; tried.push(next); reasoning = reasoningFor(opts.tier, next); effort = effortFor(opts.tier, next); temperature = temperatureFor(next, opts.temperature); noPartial = noPartial || isClaude(next); maxTokens = opts.maxTokens; opts.onModel?.(next); };
+  const switchTo = (next: string, fallback?: { wanted: string; why: string }) => { model = next; tried.push(next); reasoning = reasoningFor(opts.tier, next); effort = effortFor(opts.tier, next); temperature = temperatureFor(next, opts.temperature); noPartial = noPartial || isClaude(next); maxTokens = opts.maxTokens; opts.onModel?.(next, fallback); };
   for (;;) {
     let res: ChatOut;
     try {
@@ -257,7 +288,7 @@ export async function streamAnswer(opts: {
         if (e.status === 401 || e.status === 402 || e.status === 403 || (e.status === 400 && /credit|billing|balance/i.test(e.message))) markAnthropicDown(`HTTP ${e.status}: ${e.message.slice(0, 120)}`);
         // Anything the Anthropic side refuses: hand the tier to the next candidate (a Kimi model) so the person still gets a result.
         const next = await resolveModel(opts.tier, tried);
-        if (next !== model && out.length === 0) { console.warn('[provider] anthropic failed, switching', model, '->', next, `HTTP ${e.status}: ${e.message.slice(0, 160)}`); switchTo(next); continue; }
+        if (next !== model && out.length === 0) { const why = `HTTP ${e.status}: ${e.message.slice(0, 160)}`; console.warn('[provider] anthropic failed, switching', model, '->', next, why); switchTo(next, isClaude(next) ? undefined : { wanted: model, why }); continue; }
       }
       // A temperature this model does not take: send none and try again.
       if (e instanceof ProviderRequestError && e.status === 400 && temperature !== undefined && /temperature/i.test(e.message)) { console.warn('[provider] temperature not accepted by', model); temperature = undefined; continue; }

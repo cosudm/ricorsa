@@ -1405,7 +1405,7 @@ async function runBuildRequest(body) {
     const live = st.live; if (!live) return;
     if (ev === 'meta') { if (!st.sessionId && data.sessionId) { st.sessionId = data.sessionId; if (location.hash === '#/build/live') { history.replaceState(null, '', '#/build/' + data.sessionId); state.route = parseRoute(); } } live.buildId = data.buildId; live.version = data.version; live.lineage = data.lineage; }
     else if (ev === 'status') { live.statusText = data.text || ''; paintStudio(); }
-    else if (ev === 'model') { live.model = data.model || ''; paintStudio(); }
+    else if (ev === 'model') { live.model = data.model || ''; if (data.fallback) live.fallback = data.fallback; paintStudio(); }
     else if (ev === 'phase') {
       // review: the version is being opened in a browser; repair: the builder rewrites the document, streamed from the top again; final: the check's summary.
       if (data.text === 'review') { live.checking = true; live.issues = null; live.statusText = data.round ? 'Checking the fixed version in a browser' : 'Checking the app in a browser'; }
@@ -1487,15 +1487,21 @@ function modelName(id) {
   if (/^kimi-k(\d[\d.]*)/i.test(m)) return 'Kimi K' + m.match(/^kimi-k(\d[\d.]*)/i)[1] + (/code/i.test(m) ? ' code' : '');
   return m;
 }
+/** The configured model could not be used and another wrote instead: say so, with what the provider answered, so a slow or weaker build is never a mystery. */
+function fallbackLineHtml(fb, model) {
+  if (!fb || !fb.wanted) return '';
+  return `<div class="smsg-sub fallback">${icon('alert', 12)}<span>${esc(modelName(fb.wanted))} could not be used${fb.why ? ` (${esc(fb.why)})` : ''}${model ? `, so ${esc(modelName(model))} wrote this version` : ''}. An admin can check the model accounts under Settings.</span></div>`;
+}
 /** What the check of a version found, under its plan: how it was checked and what, if anything, is left. */
 function checkLineHtml(m) {
-  const c = m.check; if (!c) return m.model ? `<div class="smsg-sub">Written by ${esc(modelName(m.model))}</div>` : '';
+  const fb = fallbackLineHtml(m.fallback, m.model);
+  const c = m.check; if (!c) return (m.model ? `<div class="smsg-sub">Written by ${esc(modelName(m.model))}</div>` : '') + fb;
   const by = m.model ? `Written by ${esc(modelName(m.model))} · ` : '';
   let line;
   if (c.ran) line = `${by}Opened in a browser: ${c.clicked} control${c.clicked === 1 ? '' : 's'} pressed, ${c.screens} screen${c.screens === 1 ? '' : 's'} opened${c.rounds ? `, ${c.rounds} fix round${c.rounds === 1 ? '' : 's'}` : ''}${c.left ? ` · ${c.left} note${c.left === 1 ? '' : 's'} left` : ' · everything responded'}`;
   else line = `${by}Checked by a code review${c.rounds ? ` with ${c.rounds} fix round${c.rounds === 1 ? '' : 's'}` : ''}${c.left ? ` · ${c.left} note${c.left === 1 ? '' : 's'} left` : ''}`;
   const left = m.left && m.left.length ? `<details class="build-left"><summary>What is left</summary><ul>${m.left.map(l => `<li>${esc(l)}</li>`).join('')}</ul></details>` : '';
-  return `<div class="smsg-sub check">${icon('check', 12)}<span>${line}</span></div>${left}`;
+  return `<div class="smsg-sub check">${icon('check', 12)}<span>${line}</span></div>${fb}${left}`;
 }
 function paintStudio(final) {
   const root = $('[data-studio]'); const st = state.studio; if (!root || !st) return;
@@ -1520,7 +1526,7 @@ function paintStudio(final) {
   let html = st.messages.map(m => studioMessageHtml(m, st)).join('');
   if (live) {
     if (live.reply) html += `<div class="smsg bot"><div class="bubble">${md(live.reply)}</div></div>`;
-    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing what the check found' : live.checking ? 'checking it in a browser' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}${live.ran ? 'The browser check found' : 'The review found'} ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix${live.round > 1 ? ` (round ${live.round})` : ''}</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written${live.model ? ` · ${esc(modelName(live.model))}` : ''}</div>` : (live.model ? `<div class="smsg-sub">${esc(modelName(live.model))}</div>` : '')}</div></div>`;
+    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing what the check found' : live.checking ? 'checking it in a browser' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}${live.ran ? 'The browser check found' : 'The review found'} ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix${live.round > 1 ? ` (round ${live.round})` : ''}</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written${live.model ? ` · ${esc(modelName(live.model))}` : ''}</div>` : (live.model ? `<div class="smsg-sub">${esc(modelName(live.model))}</div>` : '')}${fallbackLineHtml(live.fallback, live.model)}</div></div>`;
   }
   msgs.innerHTML = html || `<div class="empty">${icon('zap', 24)}<div>Nothing here yet.</div></div>`;
   $$('[data-show-version]', msgs).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.showVersion)));
@@ -1788,7 +1794,8 @@ function openSettings() {
     <div class="setting"><div class="l"><b>Answer length</b><small>Applies to Search mode.</small></div>${sel('stLen', LENGTHS, s.length)}</div>
     <div class="setting"><div class="l"><b>Learning loop</b><small>Let each answer update your identity graph, which shapes how later questions are read.</small></div><select id="stLearn"><option value="on"${state.graph && state.graph.paused ? '' : ' selected'}>On</option><option value="paused"${state.graph && state.graph.paused ? ' selected' : ''}>Paused</option></select></div>
     ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Pro or Team customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="pro"${s.demoPlan === 'pro' ? ' selected' : ''}>Pro</option><option value="team"${s.demoPlan === 'team' ? ' selected' : ''}>Team</option></select></div>
-    <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Pro or Team without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>` : ''}
+    <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Pro or Team without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>
+    <div class="setting"><div class="l"><b>Model accounts</b><small>Admin only. Which model each part of Ricorsa is running on right now, and what Anthropic and Kimi answer when asked. Start here when a build is slow or shows a different model than expected.</small></div><button type="button" class="btn sm" data-models>${icon('zap', 14)}Check</button></div>` : ''}
     <div class="setting"><div class="l"><b>Plan and usage</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. No question limits. Today ${state.usage.today} questions, this month ${state.usage.month}${state.usage.research ? `, Research ${state.usage.research}` : ''}.` : `${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.`}</small></div><a class="btn sm" href="/account">Account</a></div>
     <div class="setting"><div class="l"><b>Export everything</b><small>All threads, Spaces and your graph as one JSON file.</small></div><a class="btn sm" href="/api/account/export">${icon('download', 14)}Export</a></div>
     <div class="setting"><div class="l"><b>Sign out</b><small>Signed in as ${esc(state.user ? (state.user.email || state.user.name || '') : '')}. Sign out to switch to a different account.</small></div><a class="btn sm" href="/auth/logout">Sign out</a></div>
@@ -1800,7 +1807,32 @@ function openSettings() {
       const demo = $('#stDemo'); if (demo) demo.addEventListener('change', async e => { s.demoPlan = e.target.value; try { await api('/api/me', { method: 'PATCH', body: { demoPlan: e.target.value } }); await bootstrap(); renderSidebar(); render(); toast(e.target.value ? `Showing Ricorsa as a ${state.plan ? state.plan.name : e.target.value} customer` : 'Back to full admin access'); } catch (err) { apiToast(err); } });
       $('#stLearn').addEventListener('change', async e => { try { await setGraphPaused(e.target.value === 'paused'); } catch (err) { apiToast(err); } });
       const gr = $('[data-grants]', ov); if (gr) gr.addEventListener('click', () => grantsModal());
+      const mo = $('[data-models]', ov); if (mo) mo.addEventListener('click', () => modelsModal());
     }
+  });
+}
+/** Admins: the live state of the model accounts. Anthropic is asked for one tiny message so its exact answer is on screen. */
+async function modelsModal() {
+  openModal(`<h2>${icon('zap', 20)}Model accounts</h2><p class="sub">Asking Anthropic and Kimi now.</p><div class="skel"><i></i><i></i></div>`);
+  let r;
+  try { r = await api('/api/admin/models'); } catch (e) { apiToast(e, 'Could not check the model accounts'); return; }
+  const TIER_LABEL = { quick: 'Fast answers', default: 'Best answers', complex: 'Reasoning answers', build: 'Build studio', ideas: 'Discover ideas' };
+  const a = r.anthropic || {}; const p = a.probe;
+  const anth = !a.configured ? `<span class="bad">No key on the server (ANTHROPIC_API_KEY).</span>`
+    : p ? (p.ok ? `<span class="ok">Working.</span> ${esc(p.message)} in ${Math.round(p.ms / 100) / 10}s.` : `<span class="bad">Refused (HTTP ${p.status || 'none'}).</span> ${esc(p.message)}${a.setAsideUntil ? ` Set aside until ${esc(new Date(a.setAsideUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}; builds use Kimi until then.` : ''}`)
+    : (a.usable ? `<span class="ok">Key set.</span>` : `<span class="bad">Set aside:</span> ${esc(a.why || '')}`);
+  const hint = p && !p.ok ? (p.status === 401 ? 'The key is not accepted: paste a current key from console.anthropic.com into the ricorsa worker as ANTHROPIC_API_KEY.' : p.status === 404 ? 'That model id is not available to this key; set MODEL_BUILD and MODEL_IDEAS to a model the account can use.' : /credit|billing|balance/i.test(p.message) ? 'The Anthropic account has no prepaid credit: add credit under Plans and billing at console.anthropic.com, then press Check again.' : p.status === 403 ? 'The key is valid but not allowed to use this model or this API: check the key permissions and the organization plan.' : '') : '';
+  const tiers = Object.entries(r.tiers || {}).map(([k, t]) => `<div class="row"><b>${esc(TIER_LABEL[k] || k)}</b><span>${esc(modelName(t.resolved))}${t.resolved !== t.configured ? ` <span class="bad">(wanted ${esc(modelName(t.configured))})</span>` : ''}</span></div>`).join('');
+  openModal(`<h2>${icon('zap', 20)}Model accounts</h2><p class="sub">What each part of Ricorsa is running on right now.</p>
+    <div class="models-check">
+      <div class="row"><b>Anthropic</b><span>${anth}${hint ? `<br><small>${esc(hint)}</small>` : ''}</span></div>
+      <div class="row"><b>Kimi</b><span>${r.available && r.available.length ? `<span class="ok">Working.</span> ${r.available.length} models on the account.` : `<span class="bad">No model list came back.</span>`}</span></div>
+      <div class="row"><b>Browser check</b><span>${r.browserRun ? `<span class="ok">On.</span> Every built app is opened in a real browser.` : `<span class="bad">Off.</span> Built apps get a code review only (no Browser Run binding on this deployment).`}</span></div>
+      <div class="row"><b>Web search</b><span>${r.search ? `<span class="ok">On.</span>` : `<span class="bad">Off.</span> No BRAVE_API_KEY.`}</span></div>
+      ${tiers}
+    </div>
+    <div class="modal-actions"><button type="button" class="btn" id="mdAgain">${icon('refresh', 14)}Check again</button><button type="button" class="btn primary" data-close>Done</button></div>`, {
+    onMount: ov => { $('#mdAgain', ov).addEventListener('click', () => modelsModal()); }
   });
 }
 /** Admins: plans granted by email, and a form to add one. */

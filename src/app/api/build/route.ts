@@ -120,6 +120,9 @@ export async function POST(req: Request) {
       const sessionId = root ? root.id : id;
       const startedAt = Date.now();
       let modelUsed = '';
+      // Set when the tier's configured model (Claude) could not be used and a Kimi model wrote instead; shown in the studio and kept on the message.
+      let fallback: { wanted: string; why: string } | null = null;
+      const onModel = (m: string, fb?: { wanted: string; why: string }) => { modelUsed = m; if (fb) fallback = fb; send('model', { model: m, fallback: fb || null }); };
       const save = async (patch: Partial<typeof schema.builds.$inferInsert>) => { if (!rowMade) return; try { await d.update(schema.builds).set({ ...patch, updatedAt: new Date() }).where(eq(schema.builds.id, id)); } catch (e) { console.error('build save failed', e); } };
       const addMessage = async (m: Omit<BuildMessage, 'id' | 'at'>) => {
         const msg: BuildMessage = { id: uid(), at: Date.now(), ...m };
@@ -172,7 +175,7 @@ export async function POST(req: Request) {
         let sawPlan = false, sawApp = false, sawReply = false, replyStreaming = false;
         const result = await streamAnswer({
           tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
-          onModel: (m) => { modelUsed = m; send('model', { model: m }); },
+          onModel,
           onThinking: (delta) => { thinkingChars += delta.length; },
           onText: (delta) => {
             if (!wroteText) { wroteText = true; send('status', { text: 'Writing the plan' }); }
@@ -222,7 +225,7 @@ export async function POST(req: Request) {
           try {
             const fix = await streamAnswer({
               tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequestFor(rev.findings, rev.ran)), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
-              onModel: (m) => { modelUsed = m; send('model', { model: m }); },
+              onModel,
               onText: (delta) => {
                 if (!wrote2) { wrote2 = true; phaseLabel = ''; }
                 raw2 += delta;
@@ -256,7 +259,7 @@ export async function POST(req: Request) {
         const summary = p.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean)[0] || spec.what;
         const next = p.next.length ? p.next : nextStepsFallback(spec.kind);
         await save({ status: 'done', plan: p.plan, html, summary });
-        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next, model: modelUsed, check, left: rev.findings.slice(0, 8) });
+        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next, model: modelUsed, fallback: fallback || undefined, check, left: rev.findings.slice(0, 8) });
         send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId, check, model: modelUsed });
       } catch (e) {
         const err = e as { name?: string; message?: string };
