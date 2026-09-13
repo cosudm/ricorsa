@@ -38,7 +38,11 @@ export async function availableWorkspaces(env: Env, email: string): Promise<Arra
   return out;
 }
 
-export async function startChallenge(env: Env, o: { email: string; client: string; externalUser?: string | null }): Promise<{ challengeId: string; sent: boolean; devCode?: string }> {
+/** How the code reaches the person: by email when a mail provider is configured, otherwise a staff member reads it out. */
+export type CodeDelivery = 'email' | 'staff';
+export function codeDelivery(env: Env): CodeDelivery { return env.RESEND_API_KEY ? 'email' : 'staff'; }
+
+export async function startChallenge(env: Env, o: { email: string; client: string; externalUser?: string | null }): Promise<{ challengeId: string; sent: boolean; delivery: CodeDelivery; devCode?: string }> {
   const email = o.email.trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address');
   const id = uid();
@@ -53,7 +57,9 @@ export async function startChallenge(env: Env, o: { email: string; client: strin
     const r = await sendCode(env, email, code, o.client);
     sent = r.sent; if (r.devCode) devCode = r.devCode;
   }
-  return { challengeId: id, sent, ...(devCode ? { devCode } : {}) };
+  // The delivery route depends only on the server's configuration, never on whether the address has an account,
+  // so the answer looks the same for a known and an unknown address.
+  return { challengeId: id, sent, delivery: codeDelivery(env), ...(devCode ? { devCode } : {}) };
 }
 
 export async function verifyChallenge(env: Env, o: { challengeId: string; code: string; client: string }): Promise<{ email: string; workspaces: Array<{ id: string; name: string; tenant: string; documents: number; pages: number; paperFolders: number; role: string }> }> {

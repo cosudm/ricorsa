@@ -1949,16 +1949,20 @@ function addConnectorModal(presetKey) {
 function vaultConnectModal(preset, existing) {
   if (!preset) { toast('The Vault connector is not available', 'bad'); return; }
   if (preset.available === false) { openModal(`<h2>VDRPros Vault</h2><p class="sub">This Ricorsa server is not linked to the Vault yet. Ask your administrator to finish the setup.</p><div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
-  const stepEmail = () => openModal(`<h2>${existing ? 'Reconnect' : 'Connect'} VDRPros Vault</h2><p class="sub">Enter the email address you use for the Vault. A one-time code will be sent to it; nothing is shared until you approve.</p>
+  const stepEmail = () => openModal(`<h2>${existing ? 'Reconnect' : 'Connect'} VDRPros Vault</h2><p class="sub">Enter the email address your Vault administrator set up for you (not a Vault or Ricorsa address). A one-time code is issued for it; nothing is shared until you approve.</p>
     <div class="field"><label for="vEmail">Vault email</label><input type="email" id="vEmail" maxlength="200" autocomplete="email" placeholder="you@firm.com"></div>
     <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="vNext">Send code</button></div>`, {
     onMount: () => {
       const go = async () => { const email = $('#vEmail').value.trim(); if (!email) { $('#vEmail').focus(); return; } const b = $('#vNext'); b.disabled = true; b.textContent = 'Sending';
-        try { const r = await api('/api/connectors/vault/start', { body: { email } }); stepCode(r.challengeId, email); } catch (err) { b.disabled = false; b.textContent = 'Send code'; apiToast(err, 'Could not start'); } };
+        try { const r = await api('/api/connectors/vault/start', { body: { email } }); stepCode(r.challengeId, email, r.delivery); } catch (err) { b.disabled = false; b.textContent = 'Send code'; apiToast(err, 'Could not start'); } };
       $('#vNext').addEventListener('click', go); $('#vEmail').addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); $('#vEmail').focus();
     }
   });
-  const stepCode = (challengeId, email) => openModal(`<h2>Enter the code</h2><p class="sub">If <b>${esc(email)}</b> has a Vault account, a six-digit code is on its way. It works for ten minutes.</p>
+  // How the code reaches the person comes from the Vault: by email, or read out by a Vault administrator from the
+  // staff console while the Vault has no mail provider. The wording must not suggest an email that will never come.
+  const stepCode = (challengeId, email, delivery) => openModal(`<h2>Enter the code</h2><p class="sub">${delivery === 'staff'
+      ? `This Vault does not send email yet. Your Vault administrator can read you the six-digit code for <b>${esc(email)}</b> from the staff console (Tenants and people, "Sign-in codes waiting"). It works for ten minutes.`
+      : `If <b>${esc(email)}</b> has a Vault account, a six-digit code is on its way to that inbox. It works for ten minutes.`}</p>
     <div class="field"><label for="vCode">Code</label><input type="text" id="vCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" style="letter-spacing:.2em;font-size:20px"></div>
     <div class="modal-actions"><button type="button" class="btn" id="vBack">Back</button><button type="button" class="btn primary" id="vVerify">Continue</button></div>`, {
     onMount: () => {
