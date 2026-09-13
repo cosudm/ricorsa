@@ -64,6 +64,12 @@ admin.post('/tenants', async c => {
   await receipt(c.env.DB, id, 'tenant.created', id, { name: b.name, slug });
   return c.json({ tenant: await first(c.env.DB, 'SELECT * FROM tenants WHERE id = ?', id) });
 });
+/** Sign-in codes waiting for the tenant's people while no mail provider is configured (read them out to the person). */
+admin.get('/codes', async c => {
+  const t = c.req.query('tenant'); if (!t) throw new HttpError(400, 'Which tenant?');
+  const items = await all(c.env.DB, `SELECT ch.email, ch.code_plain AS code, ch.client, ch.expires_at, ch.created_at FROM challenges ch WHERE ch.code_plain IS NOT NULL AND ch.consumed_at IS NULL AND ch.expires_at > ? AND ch.email IN (SELECT email FROM users WHERE tenant_id = ?) ORDER BY ch.created_at DESC LIMIT 20`, Date.now(), t);
+  return c.json({ items, mail: !!c.env.RESEND_API_KEY });
+});
 admin.get('/users', async c => { const t = c.req.query('tenant'); return c.json({ items: t ? await all(c.env.DB, 'SELECT * FROM users WHERE tenant_id = ? ORDER BY created_at DESC', t) : await all(c.env.DB, 'SELECT * FROM users ORDER BY created_at DESC LIMIT 500') }); });
 admin.post('/users', async c => {
   const b = z.object({ tenantId: z.string(), email: z.string().trim().toLowerCase().email(), name: z.string().trim().max(120).optional(), role: z.enum(['owner', 'admin', 'contributor', 'reviewer', 'viewer']).default('viewer') }).parse(await c.req.json());

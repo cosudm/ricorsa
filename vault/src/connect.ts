@@ -44,7 +44,10 @@ export async function startChallenge(env: Env, o: { email: string; client: strin
   const id = uid();
   const code = String(Math.floor(100000 + Math.random() * 900000));
   const users = await usersByEmail(env, email);
-  await run(env.DB, 'INSERT INTO challenges (id, email, code_hash, client, external_user, attempts, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)', id, email, await sha256Hex(`${id}:${code}`), o.client, o.externalUser || null, Date.now() + CODE_TTL_MS, Date.now());
+  // Without a mail provider the code cannot reach the person by email, so it is kept on the challenge for staff to
+  // read out (Tenants and people, "Sign-in codes waiting"). With mail configured nothing but the hash is stored.
+  const keepForStaff = !env.RESEND_API_KEY && users.length > 0;
+  await run(env.DB, 'INSERT INTO challenges (id, email, code_hash, client, external_user, attempts, expires_at, created_at, code_plain) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)', id, email, await sha256Hex(`${id}:${code}`), o.client, o.externalUser || null, Date.now() + CODE_TTL_MS, Date.now(), keepForStaff ? code : null);
   let sent = false; let devCode: string | undefined;
   if (users.length) {
     const r = await sendCode(env, email, code, o.client);
@@ -61,6 +64,7 @@ export async function verifyChallenge(env: Env, o: { challengeId: string; code: 
   const ok = timingSafeEqual(ch.code_hash, await sha256Hex(`${ch.id}:${String(o.code || '').trim()}`));
   await run(env.DB, 'UPDATE challenges SET attempts = attempts + 1, verified_at = COALESCE(verified_at, ?) WHERE id = ?', ok ? Date.now() : null, ch.id);
   if (!ok) throw new HttpError(400, 'That code is not right, or the address has no Vault account.', 'bad_code');
+  await run(env.DB, 'UPDATE challenges SET code_plain = NULL WHERE id = ?', ch.id);
   const ws = await availableWorkspaces(env, ch.email);
   return { email: ch.email, workspaces: ws.map(w => ({ id: w.id, name: w.name, tenant: w.tenant, documents: w.doc_count, pages: w.page_count, paperFolders: w.paper_folders, role: w.role })) };
 }
