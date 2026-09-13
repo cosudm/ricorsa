@@ -43,7 +43,7 @@ Definition of done (the version you return is the one the person uses; a real br
 
 Conversation
 - The first message describes the idea. Later messages ask for changes, report findings from the browser check, or ask questions about the app.
-- For a change request or a list of findings, return the full updated document; keep everything else working and keep the person's data model stable so their saved data still loads.
+- For a change request or a list of findings, change only what is asked and keep the person's data model stable so their saved data still loads. When the change touches a few places, return edits (the <edits> form below) rather than the whole document: each edit copies a short, unique stretch of the current document exactly as it is (two to forty lines, including enough surrounding lines to be unique) and gives the text that replaces it. When the change is broad (more than about a third of the document), return the full document instead.
 - For a question or a comment that needs no change, answer briefly in the reply form below instead of rebuilding.
 - After every version, suggest what to build next: four short requests the person could send as the next step, each a concrete enhancement to this particular app (a new screen or feature it is missing, a smarter default, an integration to simulate, a design refinement). Phrase each as a request, like "Add a monthly view with totals".
 
@@ -55,6 +55,24 @@ Four to eight short lines: what the app is (or what changed this time), its scre
 <!doctype html>
 ...the complete HTML document...
 </app>
+<next>
+Four next-step requests, one per line, no numbering
+</next>
+or, for a change or fixes that touch a few places of an existing document,
+<plan>
+One short line per change.
+</plan>
+<edits>
+<edit>
+<find>
+...lines copied exactly from the current document, unique in it...
+</find>
+<replace>
+...the lines that take their place (empty to delete)...
+</replace>
+</edit>
+...more <edit> blocks as needed, in document order...
+</edits>
 <next>
 Four next-step requests, one per line, no numbering
 </next>
@@ -119,32 +137,66 @@ export function buildMessages(spec: BuildSpec, history: BuildTurn[], current: { 
   // Earlier turns as plain text (plans and replies only; the documents themselves are not repeated).
   msgs.push({ role: 'assistant', content: '<plan>\n(built)\n</plan>' });
   for (const t of history.slice(-8)) msgs.push({ role: t.role, content: t.role === 'assistant' ? `<reply>\n${t.text}\n</reply>` : t.text });
-  msgs.push({ role: 'user', content: `Here is the current version of the app:\n\n${current.html.slice(0, 120000)}\n\nMy request: ${request}\n\nIf this asks for a change, return the full updated document in the required format. If it is only a question, answer with <reply>.` });
+  msgs.push({ role: 'user', content: `Here is the current version of the app:\n\n${current.html.slice(0, 120000)}\n\nMy request: ${request}\n\nIf this asks for a change, return it in the required format: <edits> when it touches a few places (each <find> copied exactly from the document above), the full document only when the change is broad. If it is only a question, answer with <reply>.` });
   // Keep the alternation valid: merge consecutive same-role messages.
   const out: Msg[] = [];
   for (const m of msgs) { const last = out[out.length - 1]; if (last && last.role === m.role) last.content += '\n\n' + m.content; else out.push({ ...m }); }
   return out;
 }
 
-export type BuildParse = { plan: string; planDone: boolean; html: string; htmlDone: boolean; reply: string; replyDone: boolean; next: string[] };
+export type BuildParse = { plan: string; planDone: boolean; html: string; htmlDone: boolean; edits: string; editsDone: boolean; reply: string; replyDone: boolean; next: string[] };
 
 /** Progressive parser for the builder's tagged output. */
 export function parseBuild(raw: string): BuildParse {
   const t = raw || '';
   const pO = t.indexOf('<plan>'), pC = t.indexOf('</plan>');
   const aO = t.indexOf('<app>'), aC = t.lastIndexOf('</app>');
+  const eO = t.indexOf('<edits>'), eC = t.lastIndexOf('</edits>');
   const rO = t.indexOf('<reply>'), rC = t.indexOf('</reply>');
-  const plan = pO >= 0 ? t.slice(pO + 6, pC > pO ? pC : (aO > pO ? aO : undefined)).trim() : '';
+  const plan = pO >= 0 ? t.slice(pO + 6, pC > pO ? pC : (aO > pO ? aO : (eO > pO ? eO : undefined))).trim() : '';
   let html = '';
   if (aO >= 0) html = t.slice(aO + 5, aC > aO ? aC : undefined);
   html = html.replace(/^\s*```(?:html)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+  const edits = eO >= 0 && aO < 0 ? t.slice(eO + 7, eC > eO ? eC : undefined) : '';
   const reply = rO >= 0 ? t.slice(rO + 7, rC > rO ? rC : undefined).trim() : '';
-  // Next steps come after the document (or the reply); only a closed block counts.
-  const nFrom = Math.max(aC, rC, 0);
+  // Next steps come after the document, the edits or the reply; only a closed block counts.
+  const nFrom = Math.max(aC, eC, rC, 0);
   const nO = t.indexOf('<next>', nFrom), nC = nO >= 0 ? t.indexOf('</next>', nO) : -1;
   const next = nC > nO ? t.slice(nO + 6, nC).split('\n').map(l => l.replace(/^[-*•\d.)\s]+/, '').trim()).filter(l => l.length > 3 && l.length <= 120).slice(0, 4) : [];
-  return { plan, planDone: pC > pO, html, htmlDone: aC > aO, reply, replyDone: rC > rO, next };
+  return { plan, planDone: pC > pO, html, htmlDone: aC > aO, edits, editsDone: eC > eO, reply, replyDone: rC > rO, next };
 }
+
+export type EditResult = { html: string; applied: number; failed: string[]; total: number };
+
+/**
+ * Apply the builder's <edit> blocks to a document: each <find> is looked up exactly, then with whitespace runs
+ * treated as equal, and replaced once. An edit whose text is not in the document (or is there more than once
+ * after the loose match) is skipped and reported, so the caller can hand it back or fall back to a rewrite.
+ */
+export function applyEdits(html: string, edits: string): EditResult {
+  const doc = html.replace(/\r\n?/g, '\n');
+  let out = doc; let applied = 0; const failed: string[] = []; let total = 0;
+  const re = /<edit>\s*<find>\n?([\s\S]*?)\n?<\/find>\s*<replace>\n?([\s\S]*?)\n?<\/replace>\s*<\/edit>/g;
+  for (let m = re.exec(edits); m; m = re.exec(edits)) {
+    total++;
+    const find = stripFence(m[1]); const replace = stripFence(m[2]);
+    if (!find.trim()) { failed.push('an edit with an empty find'); continue; }
+    let at = out.indexOf(find);
+    let len = find.length;
+    if (at < 0) {
+      // The same text with any run of whitespace matching any other run (indentation and blank lines drift).
+      const pattern = find.trim().split(/\s+/).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+      const loose = new RegExp(pattern, 'g');
+      const first = loose.exec(out);
+      if (first && !loose.exec(out)) { at = first.index; len = first[0].length; }
+    }
+    if (at < 0) { failed.push(find.trim().split('\n')[0].trim().slice(0, 80)); continue; }
+    out = out.slice(0, at) + replace + out.slice(at + len);
+    applied++;
+  }
+  return { html: out, applied, failed, total };
+}
+function stripFence(s: string): string { return s.replace(/^\s*```[a-z]*\s*\n/i, '').replace(/\n\s*```\s*$/, ''); }
 
 /** Next steps to offer when the builder gave none: sensible for the kind of app. */
 export function nextStepsFallback(kind: string): string[] {
@@ -160,11 +212,12 @@ export function nextStepsFallback(kind: string): string[] {
  * The repair request handed back to the builder after a check. Findings from the browser run are facts about
  * what happened when the app was used; the static audit's are what the code says.
  */
-export function repairRequestFor(findings: string[], ran: boolean): string {
+export function repairRequestFor(findings: string[], ran: boolean, failedEdits: string[] = []): string {
   const how = ran
     ? 'A real browser opened this version, pressed every visible control and opened every screen. It found these problems:'
     : 'A review of this version found parts that do not work:';
-  return `${how}\n${findings.map(f => `- ${f}`).join('\n')}\nFix every one of them and return the complete updated document; keep everything else exactly as it is, including the data model, so saved data still loads. A control reported as doing nothing must visibly do what its label says; a screen the navigation names must exist as a container with that data-screen name and be shown when its control is pressed; errors must be gone; no browser dialogs, no network requests, no placeholder copy.`;
+  const missed = failedEdits.length ? `\nYour last edits were applied except these, whose <find> text was not in the document (copy the lines exactly as they are, with their indentation, and include enough neighbouring lines to be unique): ${failedEdits.map(f => `"${f}"`).join(', ')}.` : '';
+  return `${how}\n${findings.map(f => `- ${f}`).join('\n')}\nFix every one of them as <edits> (each <find> copied exactly from the current document); return the full document only if the fixes touch most of it. Keep everything else exactly as it is, including the data model, so saved data still loads. A control reported as doing nothing must visibly do what its label says; a screen the navigation names must exist as a container with that data-screen name and be shown when its control is pressed; errors must be gone; no browser dialogs, no network requests, no placeholder copy.${missed}`;
 }
 
 /** Stamp the finished document with its provenance so a copy anywhere can be traced back. Earlier stamps are replaced. */

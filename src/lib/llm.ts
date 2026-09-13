@@ -24,8 +24,10 @@ const CANDIDATES: Record<Tier, string[]> = {
   quick: ['kimi-k3-turbo', 'kimi-k3', 'kimi-k2-turbo-preview', 'kimi-k2.5-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-8k'],
   default: ['kimi-k3', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'kimi-latest', 'moonshot-v1-32k'],
   complex: ['kimi-k3', 'kimi-k2-thinking', 'kimi-k2-thinking-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-128k'],
-  // Apps are long, exacting documents: Claude first, then the strongest Kimi models thinking hard, then the code models.
-  build: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
+  // Apps are long, exacting documents: Claude first. When Anthropic cannot be used, the fast Kimi code model
+  // rather than K3: an app is 20 to 35 thousand tokens of output, and K3 writes at about a third of the speed
+  // after minutes of thinking, so a K3 build ran past twenty minutes without finishing its plan.
+  build: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'kimi-k2.7-code-highspeed', 'kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
   ideas: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'kimi-k3', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
 };
 
@@ -601,6 +603,18 @@ async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; s
     return { text: full, truncated: false, model, sources: [], usage: { in: 300, out: 60, cacheRead: 0, cacheWrite: 0, searches: 0 }, tools: [] };
   }
   const note = request ? `<p style="background:#e8eff6;padding:8px 12px;border-radius:8px">Change applied (stub): ${request.replace(/</g, '&lt;').slice(0, 120)}</p>` : '';
+  // A change to an existing version comes back as edits, the way production answers a local change; findings from a check too.
+  const isRepair = /A real browser opened this version|A review of this version found/.test(request);
+  if (request && /Here is the current version of the app/.test(last)) {
+    const anchor = '<p>A mock build from the development stub. Add a few items below.</p>';
+    const full = `<plan>\n- ${isRepair ? 'Fixed what the check found' : request.replace(/</g, '&lt;').slice(0, 80)}\n</plan>\n<edits>\n<edit>\n<find>\n${anchor}\n</find>\n<replace>\n${anchor}${note}\n</replace>\n</edit>\n</edits>\n<next>\nAdd a due date to each item\nAdd a filter for done and open items\nAdd export to CSV\nMake it work well on a phone\n</next>`;
+    for (let i = 0; i < full.length; i += 40) {
+      if (opts.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      await new Promise(r => setTimeout(r, 12));
+      opts.onText(full.slice(i, i + 40));
+    }
+    return { text: full, truncated: false, model, sources: [], usage: { in: 900, out: 200, cacheRead: 0, cacheWrite: 0, searches: 0 }, tools: [] };
+  }
   const full = `<plan>
 - A small working tracker for "${title}"
 - One screen: add items, mark them done, see a running total

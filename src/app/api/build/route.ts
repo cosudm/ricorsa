@@ -7,7 +7,7 @@ import type { BuildMessage } from '@/lib/db/schema';
 import { loadGraph } from '@/lib/graph';
 import { statusGrants, planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
-import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, repairRequestFor, type BuildSpec, type BuildCheck } from '@/lib/build';
+import { buildSystem, buildMessages, parseBuild, applyEdits, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, repairRequestFor, type BuildSpec, type BuildCheck } from '@/lib/build';
 import { auditApp } from '@/lib/build-audit';
 import { runApp, runFindings, seriousFindings, browserRunAvailable } from '@/lib/build-run';
 import { describeProviderError } from '@/lib/llm';
@@ -172,7 +172,7 @@ export async function POST(req: Request) {
         send('status', { text: restart ? 'Starting again from the idea' : root ? 'Reading the current version' : 'Reading your graph' });
         // Only the tail of the stream is inspected per token (tags are short), so a 50 KB document
         // costs O(n) CPU rather than O(n^2). The full parse runs once for the plan and every few seconds for a save.
-        let sawPlan = false, sawApp = false, sawReply = false, replyStreaming = false;
+        let sawPlan = false, sawApp = false, sawReply = false, replyStreaming = false, sawEdits = false, lastEditStatus = 0;
         const result = await streamAnswer({
           tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
           onModel,
@@ -183,7 +183,10 @@ export async function POST(req: Request) {
             const tail = raw.slice(-(delta.length + 8));
             if (!sawPlan && tail.includes('<plan>')) sawPlan = true;
             if (!sawApp && tail.includes('<app>')) sawApp = true;
+            if (!sawEdits && tail.includes('<edits>')) { sawEdits = true; send('status', { text: 'Writing the change' }); }
             if (!sawReply && tail.includes('<reply>')) sawReply = true;
+            // A change written as edits: nothing to preview until they are applied, so report progress instead.
+            if (sawEdits && !sawApp) { if (Date.now() - lastEditStatus > 2000) { lastEditStatus = Date.now(); send('status', { text: `Writing the change · ${(raw.match(/<\/edit>/g) || []).length} done` }); } if (Date.now() - lastSave > 5000) { lastSave = Date.now(); void save({}); } return; }
             if (sawReply && !sawPlan && !sawApp) {
               // A question: stream the reply text as it arrives, never a new version.
               replyStreaming = true; const p = parseBuild(raw); send('reply', { text: p.reply, done: p.replyDone }); return;
@@ -199,19 +202,26 @@ export async function POST(req: Request) {
         addUsage(result.usage);
         modelUsed = result.model;
         console.log('[build]', JSON.stringify({ model: result.model, chars: result.text.length, seconds: Math.round((Date.now() - startedAt) / 1000), thinkingChars, restart, version, truncated: result.truncated }));
-        if (p.reply && !p.html) {
+        if (p.reply && !p.html && !p.edits) {
           // A question: answer in the chat, no new version.
           await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
           const m = await addMessage({ role: 'assistant', text: truncate(p.reply, 4000), kind: 'reply', buildId: null, version: null, model: modelUsed });
           send('done', { reply: m, build: null, sessionId });
           return;
         }
+        if (!p.html && p.edits && latest?.html) {
+          // A change written as edits to the current version: apply them here.
+          const r = applyEdits(latest.html, p.edits);
+          console.log('[build] edits', JSON.stringify({ applied: r.applied, total: r.total, failed: r.failed.slice(0, 4) }));
+          if (r.applied) p = { ...p, html: r.html };
+          else throw new Error('The builder sent edits that do not match the current version');
+        }
         if (!p.html || !/<\/html>|<body|<script|<div/i.test(p.html)) throw new Error('The builder did not return an app');
         await ensureRow();
         await save({ plan: p.plan, html: p.html });
 
         // Review: open the version in a real browser and press everything; hand what breaks back to the builder.
-        let rounds = 0;
+        let rounds = 0; let failedEdits: string[] = [];
         phaseLabel = 'Checking the app in a browser'; send('status', { text: phaseLabel }); send('phase', { text: 'review' });
         let rev = await review(p.html);
         while (rev.findings.length && rounds < MAX_REPAIR_ROUNDS && !ctl.signal.aborted) {
@@ -221,29 +231,37 @@ export async function POST(req: Request) {
           phaseLabel = `Fixing what the check found (${rev.findings.length} part${rev.findings.length === 1 ? '' : 's'})`;
           send('status', { text: phaseLabel });
           send('phase', { text: 'repair', issues: rev.findings, round: rounds, ran: rev.ran });
-          let raw2 = ''; let planSent2 = false; let sawPlan2 = false; let wrote2 = false;
+          // The builder answers with edits (a few seconds) or, for broad fixes, a whole document (streamed to the studio as before).
+          let raw2 = ''; let sawApp2 = false; let sawEdits2 = false; let lastStatus2 = 0;
           try {
             const fix = await streamAnswer({
-              tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequestFor(rev.findings, rev.ran)), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
+              tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequestFor(rev.findings, rev.ran, failedEdits)), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
               onModel,
               onText: (delta) => {
-                if (!wrote2) { wrote2 = true; phaseLabel = ''; }
                 raw2 += delta;
                 const tail = raw2.slice(-(delta.length + 8));
-                if (!sawPlan2 && tail.includes('<plan>')) sawPlan2 = true;
-                if (!planSent2 && sawPlan2 && tail.includes('</plan>')) { planSent2 = true; send('status', { text: 'Rewriting the app with the fixes' }); }
-                send('delta', { text: delta });
+                if (!sawApp2 && tail.includes('<app>')) { sawApp2 = true; phaseLabel = ''; send('status', { text: 'Rewriting the app with the fixes' }); }
+                if (!sawEdits2 && tail.includes('<edits>')) { sawEdits2 = true; phaseLabel = 'Writing the fixes'; }
+                if (sawApp2) send('delta', { text: delta });
+                else if (sawEdits2 && Date.now() - lastStatus2 > 2000) { lastStatus2 = Date.now(); send('status', { text: `Writing the fixes · ${(raw2.match(/<\/edit>/g) || []).length} done` }); }
                 if (Date.now() - lastSave > 5000) { lastSave = Date.now(); void save({}); }
               },
             });
             addUsage(fix.usage);
             const p2 = parseBuild(fix.text);
-            if (p2.html && /<\/html>|<body|<script|<div/i.test(p2.html) && p2.html.length > p.html.length * 0.5) {
-              p = { ...p, html: p2.html, plan: p.plan + (p2.plan ? '\n' + p2.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map((l, i) => i === 0 ? `After the check: ${l}` : l).join('\n') : ''), next: p2.next.length ? p2.next : p.next };
+            let fixed = '';
+            if (p2.html && /<\/html>|<body|<script|<div/i.test(p2.html) && p2.html.length > p.html.length * 0.5) { fixed = p2.html; failedEdits = []; }
+            else if (p2.edits) {
+              const r = applyEdits(p.html, p2.edits);
+              console.log('[build] repair edits', JSON.stringify({ round: rounds, applied: r.applied, total: r.total, failed: r.failed.slice(0, 4) }));
+              if (r.applied) { fixed = r.html; failedEdits = r.failed; }
+            }
+            if (fixed) {
+              p = { ...p, html: fixed, plan: p.plan + (p2.plan ? '\n' + p2.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map((l, i) => i === 0 ? `After the check: ${l}` : l).join('\n') : ''), next: p2.next.length ? p2.next : p.next };
               await save({ plan: p.plan, html: p.html });
               phaseLabel = 'Checking the fixed version in a browser'; send('status', { text: phaseLabel }); send('phase', { text: 'review', round: rounds });
               rev = await review(p.html);
-            } else { console.warn('[build] repair discarded: no complete document came back'); break; }
+            } else { console.warn('[build] repair discarded: neither a complete document nor a matching edit came back'); break; }
           } catch (e) {
             if (ctl.signal.aborted) throw e;
             console.warn('[build] repair failed, keeping the version as it was', String((e as Error)?.message || e));
