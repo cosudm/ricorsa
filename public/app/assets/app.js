@@ -1489,9 +1489,9 @@ function modelName(id) {
   return m;
 }
 /** The configured model could not be used and another wrote instead: say so, with what the provider answered, so a slow or weaker build is never a mystery. */
-function fallbackLineHtml(fb, model) {
+function fallbackLineHtml(fb, model, live) {
   if (!fb || !fb.wanted) return '';
-  return `<div class="smsg-sub fallback">${icon('alert', 12)}<span>${esc(modelName(fb.wanted))} could not be used${fb.why ? ` (${esc(fb.why)})` : ''}${model ? `, so ${esc(modelName(model))} wrote this version` : ''}. An admin can check the model accounts under Settings.</span></div>`;
+  return `<div class="smsg-sub fallback">${icon('alert', 12)}<span>${esc(modelName(fb.wanted))} could not be used${fb.why ? ` (${esc(fb.why)})` : ''}${model ? `, so ${esc(modelName(model))} ${live ? 'is writing' : 'wrote'} this version` : ''}. An admin can check the model accounts under Settings.</span></div>`;
 }
 /** What the check of a version found, under its plan: how it was checked and what, if anything, is left. */
 function checkLineHtml(m) {
@@ -1527,7 +1527,7 @@ function paintStudio(final) {
   let html = st.messages.map(m => studioMessageHtml(m, st)).join('');
   if (live) {
     if (live.reply) html += `<div class="smsg bot"><div class="bubble">${md(live.reply)}</div></div>`;
-    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing what the check found' : live.checking ? 'checking it in a browser' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}${live.ran ? 'The browser check found' : 'The review found'} ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix${live.round > 1 ? ` (round ${live.round})` : ''}</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written${live.model ? ` · ${esc(modelName(live.model))}` : ''}</div>` : (live.model ? `<div class="smsg-sub">${esc(modelName(live.model))}</div>` : '')}${fallbackLineHtml(live.fallback, live.model)}</div></div>`;
+    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing what the check found' : live.checking ? 'checking it in a browser' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}${live.ran ? 'The browser check found' : 'The review found'} ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix${live.round > 1 ? ` (round ${live.round})` : ''}</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written${live.model ? ` · ${esc(modelName(live.model))}` : ''}</div>` : (live.model ? `<div class="smsg-sub">${esc(modelName(live.model))}</div>` : '')}${fallbackLineHtml(live.fallback, live.model, true)}</div></div>`;
   }
   msgs.innerHTML = html || `<div class="empty">${icon('zap', 24)}<div>Nothing here yet.</div></div>`;
   $$('[data-show-version]', msgs).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.showVersion)));
