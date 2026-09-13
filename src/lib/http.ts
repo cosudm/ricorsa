@@ -35,6 +35,13 @@ export function truncate(s: unknown, n: number): string {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
   return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t;
 }
+/**
+ * Model-written copy that people read as their own words (home suggestions, Discover ideas) without the long
+ * dashes models reach for: " — " and " – " become a comma, a dash glued to words becomes ", ".
+ */
+export function plain(s: unknown): string {
+  return String(s ?? '').replace(/\s*[—–]\s*/g, ', ').replace(/,\s*,/g, ',').replace(/\s+,/g, ',');
+}
 export function slugify(s: string): string {
   return String(s).toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
 }

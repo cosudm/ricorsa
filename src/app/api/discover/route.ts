@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { and, eq, ne, desc } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
-import { handle, json, readJson, fail, truncate } from '@/lib/http';
+import { handle, json, readJson, fail, truncate, plain } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { quickJson } from '@/lib/llm';
 import { loadGraph, topNodes } from '@/lib/graph';
@@ -91,7 +91,7 @@ Vary the kinds and the layouts across the six. No markdown, valid JSON only.
 
 ${brief}${avoid.length ? `\n\nShown before (propose different ideas): ${avoid.slice(0, 12).join('; ')}` : ''}`, 5000, 'ideas');
   const items = (Array.isArray(data) ? data : []).filter(x => x && typeof x.title === 'string' && typeof x.what === 'string').slice(0, 6).map(x => ({
-    kind: truncate(x.kind || cat, 24), title: truncate(x.title, 90), what: truncate(x.what, 200), why: truncate(String(x.why || ''), 120) || undefined,
+    kind: truncate(x.kind || cat, 24), title: truncate(plain(x.title), 90), what: truncate(plain(x.what), 200), why: truncate(plain(x.why || ''), 120) || undefined,
     builds: Array.isArray(x.builds) ? x.builds.map(s => truncate(String(s), 40)).filter(Boolean).slice(0, 4) : [],
     prompt: truncate(x.prompt || x.title, 400),
     preview: cleanPreview(x.preview),

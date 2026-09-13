@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
-import { handle, json } from '@/lib/http';
+import { handle, json, plain } from '@/lib/http';
 import { loadGraph, topNodes } from '@/lib/graph';
 import { graphFingerprint } from '@/lib/hash';
 import { quickJson } from '@/lib/llm';
@@ -63,7 +63,7 @@ async function generate(g: GraphData): Promise<Prompt[] | null> {
   if (!Array.isArray(data)) return null;
   const clean = data
     .filter(p => p && typeof p.q === 'string' && p.q.trim().length > 8)
-    .map(p => ({ q: p.q.trim().slice(0, 140), aspect: (['topic', 'entity', 'goal', 'expertise', 'style'].includes(p.aspect) ? p.aspect : 'topic') as Prompt['aspect'], why: String(p.why || '').trim().slice(0, 90) }))
+    .map(p => ({ q: plain(p.q).trim().slice(0, 140), aspect: (['topic', 'entity', 'goal', 'expertise', 'style'].includes(p.aspect) ? p.aspect : 'topic') as Prompt['aspect'], why: plain(p.why || '').trim().slice(0, 90) }))
     .slice(0, 4);
   return clean.length >= 2 ? clean : null;
 }
