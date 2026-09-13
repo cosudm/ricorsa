@@ -41,6 +41,7 @@ export default function AppPage() {
     <>
       <link rel="stylesheet" href="/app/assets/app.css" />
       <div dangerouslySetInnerHTML={{ __html: SHELL }} />
+      <Script src="/app/assets/bridge.js" strategy="beforeInteractive" />
       <Script src="/app/assets/app.js" strategy="afterInteractive" />
     </>
   );

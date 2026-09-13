@@ -1516,7 +1516,7 @@ function paintStudio(final) {
     const send = () => { const t = ta.value.trim(); if (!t) return; ta.value = ''; sendBuildMessage(t); };
     $('[data-send]', root).addEventListener('click', () => { if (state.studio && state.studio.live) stopBuild(); else send(); });
     ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
-    $('[data-s-open]', root).addEventListener('click', () => { const v = currentVersion(); if (!v) { toast('Wait for a version to finish', 'bad'); return; } window.open('/api/builds/' + encodeURIComponent(v.id) + '?raw=1', '_blank', 'noopener'); });
+    $('[data-s-open]', root).addEventListener('click', () => { const v = currentVersion(); if (!v) { toast('Wait for a version to finish', 'bad'); return; } window.open('/app/run#' + encodeURIComponent(v.id) + ':' + encodeURIComponent(v.version || ''), '_blank', 'noopener'); });
     $('[data-s-download]', root).addEventListener('click', () => { const html = shownHtml(); if (!html) { toast('Nothing to download yet', 'bad'); return; } downloadFile(slugify(st.title || 'ricorsa-app') + '.html', html, 'text/html'); toast('Saved'); });
     $('[data-s-copy]', root).addEventListener('click', async () => { const html = shownHtml(); if (!html) { toast('Nothing to copy yet', 'bad'); return; } const ok = await copyText(html); toast(ok ? 'Source copied' : 'Could not copy', ok ? 'ok' : 'bad'); });
   }
@@ -1579,7 +1579,9 @@ function paintStudio(final) {
     }
     const lines = showHtml ? showHtml.split('\n').length : 0;
     codeMeta.textContent = showHtml ? `${lines.toLocaleString('en-US')} lines · ${(showHtml.length / 1024).toFixed(1)} KB${live ? ' · writing' : (st.selected ? ` · v${st.selected}` : '')}` : '';
-  } else if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; if (frame.dataset.hash !== String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done')) { frame.dataset.hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done'); frame.srcdoc = showHtml; } }
+  } else if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; if (frame.dataset.hash !== String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done')) { frame.dataset.hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done'); frame.srcdoc = window.RicorsaBridge ? window.RicorsaBridge.wrap(showHtml) : showHtml; } }
+  // The live line to Ricorsa's model for the app in the frame (window.ricorsa.ask inside the app): one host for the page, the version on screen answering for itself.
+  if (window.RicorsaBridge) window.RicorsaBridge.host(() => $('[data-s-frame]'), () => { const s = state.studio; if (!s) return null; const v = s.versions.find(x => x.version === s.selected); return (v && v.id) || (s.current && s.current.id) || (s.live && (s.live.buildId || s.sessionId)) || s.sessionId || null; });
   overlay.hidden = !(live && !live.html && !live.reply);
   $('[data-s-overlay-text]', root).textContent = live ? (live.statusText || 'Building') : '';
 }

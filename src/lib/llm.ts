@@ -626,9 +626,15 @@ async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; s
 <style>body{font-family:system-ui,sans-serif;margin:0;background:#fbfbf9;color:#1b2228}main{max-width:640px;margin:0 auto;padding:32px 20px}h1{font-size:24px;margin:0 0 6px}p{color:#55606b}form{display:flex;gap:8px;margin:18px 0}input{flex:1;padding:10px 12px;border:1px solid #cfcfc7;border-radius:10px;font:inherit}button{padding:10px 14px;border:0;border-radius:10px;background:#2d5f8a;color:#fff;font:inherit;cursor:pointer}ul{list-style:none;padding:0;margin:0}li{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #e5e5df}li.done span{text-decoration:line-through;color:#8a939c}footer{margin-top:28px;font-size:12px;color:#8a939c}</style></head>
 <body><main><h1>${title}</h1><p>A mock build from the development stub. Add a few items below.</p>${note}
 <form id="f"><input id="t" placeholder="Add something" aria-label="Add an item" required><button type="submit">Add</button></form>
-<ul id="l"></ul><p id="c"></p><footer>Built by Ricorsa from your identity graph</footer></main>
+<ul id="l"></ul><p id="c"></p>
+<section id="askbox"><h2 style="font-size:16px;margin:24px 0 6px">Ask</h2><form id="af"><input id="aq" placeholder="Ask the model something" aria-label="Question"><button type="submit" id="ab">Ask</button></form><p id="aa" aria-live="polite"></p><p id="an" style="font-size:12px;color:#8a939c"></p></section>
+<footer>Built by Ricorsa from your identity graph</footer></main>
 <script>
 var items=[];try{items=JSON.parse(localStorage.getItem('mock-items')||'[]')}catch(e){}
+(function(){var f=document.getElementById('af'),q=document.getElementById('aq'),a=document.getElementById('aa'),n=document.getElementById('an'),b=document.getElementById('ab');
+if(!(window.ricorsa&&window.ricorsa.available)){n.textContent='Live answers work when this app is opened from Ricorsa.';}
+f.addEventListener('submit',function(e){e.preventDefault();var t=q.value.trim();if(!t)return;if(!(window.ricorsa&&window.ricorsa.available)){a.textContent='Sample answer (offline): '+t;return;}
+b.disabled=true;a.textContent='';window.ricorsa.ask(t,{system:'Answer in one short paragraph.',onText:function(d,full){a.textContent=full;}}).then(function(r){a.textContent=r.text;n.textContent='Answered by Ricorsa';}).catch(function(err){a.textContent=err.message;}).then(function(){b.disabled=false;});});})();
 function save(){try{localStorage.setItem('mock-items',JSON.stringify(items))}catch(e){}}
 function render(){var l=document.getElementById('l');l.innerHTML='';items.forEach(function(it,i){var li=document.createElement('li');if(it.done)li.className='done';var cb=document.createElement('input');cb.type='checkbox';cb.checked=!!it.done;cb.onchange=function(){it.done=cb.checked;save();render()};var s=document.createElement('span');s.textContent=it.text;li.appendChild(cb);li.appendChild(s);l.appendChild(li)});document.getElementById('c').textContent=items.filter(function(x){return x.done}).length+' of '+items.length+' done'}
 document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var t=document.getElementById('t');items.push({text:t.value,done:false});t.value='';save();render()});

@@ -27,7 +27,11 @@ export type ExerciseReport = {
 
 /** Installed before any app script runs: records errors, dialogs, downloads, clipboard writes, window.open and form submits. */
 export const INSTALL_SRC = `(() => {
-  const R = window.__ricorsaRun = { errors: [], dialogs: [], events: 0, external: [] };
+  const R = window.__ricorsaRun = { errors: [], dialogs: [], events: 0, external: [], asks: 0 };
+  // The live line to Ricorsa's model, as the studio provides it: here it answers at once with a labelled sample,
+  // so every flow that asks the model can be pressed through without a request leaving the page.
+  window.ricorsa = { available: true, version: 1, ask: (prompt, opts) => { R.asks++; opts = opts || {}; const text = 'Sample answer (check mode) to: ' + String(prompt == null ? '' : prompt).slice(0, 120);
+    return new Promise((resolve) => { setTimeout(() => { try { if (typeof opts.onSources === 'function') opts.onSources([]); if (typeof opts.onText === 'function') opts.onText(text, text); } catch (e) { R.errors.length < 40 && R.errors.push('error while showing an answer: ' + ((e && e.message) || e)); } resolve({ text, sources: [], model: 'check' }); }, 30); }); } };
   const push = (arr, s) => { if (arr.length < 40) arr.push(String(s).slice(0, 240)); };
   window.addEventListener('error', (e) => { push(R.errors, (e && e.message) || 'error'); });
   window.addEventListener('unhandledrejection', (e) => { const r = e && e.reason; push(R.errors, 'unhandled promise rejection: ' + ((r && (r.message || r.toString())) || 'rejection')); });
