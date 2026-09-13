@@ -1579,7 +1579,7 @@ function paintStudio(final) {
     }
     const lines = showHtml ? showHtml.split('\n').length : 0;
     codeMeta.textContent = showHtml ? `${lines.toLocaleString('en-US')} lines · ${(showHtml.length / 1024).toFixed(1)} KB${live ? ' · writing' : (st.selected ? ` · v${st.selected}` : '')}` : '';
-  } else if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; if (frame.dataset.hash !== String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done')) { frame.dataset.hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done'); frame.srcdoc = window.RicorsaBridge ? window.RicorsaBridge.wrap(showHtml) : showHtml; } }
+  } else if (showHtml && (final || !live || now - (live.lastFrame || 0) > 2500)) { if (live) live.lastFrame = now; const hash = String(showHtml.length) + ':' + (st.selected || '') + ':' + (live ? 'live' : 'done') + (window.RicorsaBridge ? ':b' : ':nb'); if (frame.dataset.hash !== hash) { frame.dataset.hash = hash; frame.srcdoc = window.RicorsaBridge ? window.RicorsaBridge.wrap(showHtml) : showHtml; } }
   // The live line to Ricorsa's model for the app in the frame (window.ricorsa.ask inside the app): one host for the page, the version on screen answering for itself.
   if (window.RicorsaBridge) window.RicorsaBridge.host(() => $('[data-s-frame]'), () => { const s = state.studio; if (!s) return null; const v = s.versions.find(x => x.version === s.selected); return (v && v.id) || (s.current && s.current.id) || (s.live && (s.live.buildId || s.sessionId)) || s.sessionId || null; });
   overlay.hidden = !(live && !live.html && !live.reply);
@@ -2074,8 +2074,16 @@ function render() {
   renderSidebar();
   closeDrawer();
 }
+/** The live line for built apps (bridge.js) is loaded with the shell; make sure of it, and repaint the studio once it lands. */
+function ensureBridge() {
+  if (window.RicorsaBridge || document.querySelector('script[data-bridge]')) return;
+  const sc = document.createElement('script'); sc.src = '/app/assets/bridge.js'; sc.dataset.bridge = '1';
+  sc.onload = () => { if (state.route && state.route.name === 'build' && state.studio) paintStudio(true); };
+  document.head.appendChild(sc);
+}
 function init() {
   setupSidebar();
+  ensureBridge();
   window.addEventListener('hashchange', render);
   document.addEventListener('keydown', e => {
     const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '') || (e.target && e.target.isContentEditable);

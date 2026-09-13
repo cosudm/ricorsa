@@ -29,8 +29,12 @@ const RUNNER = `
   var note = document.querySelector('[data-run-note]'), frame = document.querySelector('[data-run-frame]'), title = document.querySelector('[data-run-title]'), sub = document.querySelector('[data-run-sub]');
   if (!id) { note.textContent = 'No app was named. Open one from the Build studio.'; return; }
   var buildId = id;
-  if (window.RicorsaBridge) window.RicorsaBridge.host(function () { return frame; }, function () { return buildId; });
-  fetch('/api/builds/' + encodeURIComponent(id) + (version ? '?version=' + encodeURIComponent(version) : ''), { credentials: 'same-origin' }).then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'This app is not in your account.' : 'The app could not be loaded (' + r.status + ').'); return r.json(); }).then(function (j) {
+  // The live line (bridge.js) normally arrives with the page; fetch it here if it has not.
+  var ready = window.RicorsaBridge ? Promise.resolve() : new Promise(function (res) { var sc = document.createElement('script'); sc.src = '/app/assets/bridge.js'; sc.onload = res; sc.onerror = res; document.head.appendChild(sc); });
+  ready.then(function () {
+    if (window.RicorsaBridge) window.RicorsaBridge.host(function () { return frame; }, function () { return buildId; });
+    return fetch('/api/builds/' + encodeURIComponent(id) + (version ? '?version=' + encodeURIComponent(version) : ''), { credentials: 'same-origin' });
+  }).then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'This app is not in your account.' : 'The app could not be loaded (' + r.status + ').'); return r.json(); }).then(function (j) {
     var cur = j.current || {};
     var html = cur.html || '';
     if (!html) throw new Error('This version has no document yet.');
