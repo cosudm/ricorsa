@@ -3,6 +3,7 @@ import { db, schema } from './db';
 import { planKeyFromPaypalPlan, type PlanKey } from './plans';
 import { paypalProvisioned } from './paypal-setup';
 import { getSubscription, type PaypalSubscription } from './paypal';
+import { applyGrant } from './grants';
 
 /** Statuses that grant paid access. APPROVAL_PENDING is allowed briefly while PayPal finishes the first charge. */
 const GRANTING = new Set(['ACTIVE', 'APPROVAL_PENDING']);
@@ -29,6 +30,9 @@ export async function applySubscription(sub: PaypalSubscription, userIdHint?: st
   }
   const plan: PlanKey = GRANTING.has(status) ? planKey : 'free';
   await d.update(schema.users).set({ plan, paypalSubscriptionId: sub.id, subscriptionStatus: status, planRenewsAt: nextBillingAt }).where(eq(schema.users.id, userId));
+  // A plan granted by email outranks whatever PayPal just said (a cancelled subscription must not take a licence away).
+  const granted = await applyGrant({ ...user, plan, subscriptionStatus: status, planRenewsAt: nextBillingAt, paypalSubscriptionId: sub.id });
+  if (granted) return { userId, plan: granted.plan as PlanKey, status: granted.subscriptionStatus || status };
   return { userId, plan, status };
 }
 

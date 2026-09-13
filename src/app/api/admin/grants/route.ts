@@ -3,6 +3,7 @@ import { desc, eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, fail, readJson } from '@/lib/http';
 import { db, schema } from '@/lib/db';
+import { applyGrant } from '@/lib/grants';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,12 +39,8 @@ export const POST = handle(async (req: Request) => {
   await d.insert(schema.grants).values(row).onConflictDoUpdate({ target: schema.grants.email, set: { plan: row.plan, status: row.status, endsAt: row.endsAt, note: row.note, createdBy: row.createdBy, appliedTo: null, appliedAt: null } });
   // Already signed up: apply now.
   const existing = (await d.select().from(schema.users).where(eq(schema.users.email, b.data.email)).limit(1))[0];
-  let applied = false;
-  if (existing) {
-    await d.update(schema.users).set({ plan: row.plan, subscriptionStatus: row.status, planRenewsAt: endsAt }).where(eq(schema.users.id, existing.id));
-    await d.update(schema.grants).set({ appliedTo: existing.id, appliedAt: new Date() }).where(eq(schema.grants.email, b.data.email));
-    applied = true;
-  }
+  const applied = !!existing;
+  if (existing) await applyGrant(existing);
   const saved = (await d.select().from(schema.grants).where(eq(schema.grants.email, b.data.email)))[0];
   return json({ grant: saved, applied });
 });
