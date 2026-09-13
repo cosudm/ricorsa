@@ -7,16 +7,19 @@ import type { BuildMessage } from '@/lib/db/schema';
 import { loadGraph } from '@/lib/graph';
 import { statusGrants, planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
-import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, type BuildSpec } from '@/lib/build';
-import { auditApp, repairRequest } from '@/lib/build-audit';
+import { buildSystem, buildMessages, parseBuild, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, repairRequestFor, type BuildSpec, type BuildCheck } from '@/lib/build';
+import { auditApp } from '@/lib/build-audit';
+import { runApp, runFindings, seriousFindings, browserRunAvailable } from '@/lib/build-run';
 import { describeProviderError } from '@/lib/llm';
 import { recordUsage } from '@/lib/usage';
 import { estimateCostMicros } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
-/** Thinking is always on for the code models and counts against max_tokens; a whole app plus its thinking needs room. */
-const BUILD_MAX_TOKENS = 32000;
+/** Room for a whole app plus the thinking that precedes it. Kimi models that take less step down on their own. */
+const BUILD_MAX_TOKENS = 64000;
+/** Review rounds per version: a second round only when the first repair left something that breaks the app. */
+const MAX_REPAIR_ROUNDS = 2;
 
 const Body = z.object({
   // Start a session from an idea
@@ -34,13 +37,17 @@ const Body = z.object({
   restart: z.boolean().optional(),
 });
 
+type Review = { findings: string[]; serious: number; ran: boolean; check: BuildCheck };
+
 /**
  * POST /api/build  — the build chat (Team plan). Streams server-sent events:
- *   meta → status → plan → delta* → done | reply → done | error
+ *   meta → status → plan → delta* → phase(review/repair)* → done | reply → done | error
  * A new idea starts a session (version 1). A message in an existing session either produces the next
  * version (plan + app, streamed) or a plain reply when it was only a question. When no version has
  * finished yet (the first one failed or was interrupted), a message or a restart writes the first version
  * again with the person's notes folded in, instead of asking for a change to nothing.
+ * Every version is checked before it is called done: a real browser opens it, presses every control and
+ * opens every screen; what it finds goes back to the builder for repair, up to two rounds.
  */
 export async function POST(req: Request) {
   let user; try { user = await currentUser(); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Sign-in check failed'); }
@@ -112,6 +119,7 @@ export async function POST(req: Request) {
       let raw = ''; let planSent = false; let rowMade = !root || restart; let lastSave = Date.now();
       const sessionId = root ? root.id : id;
       const startedAt = Date.now();
+      let modelUsed = '';
       const save = async (patch: Partial<typeof schema.builds.$inferInsert>) => { if (!rowMade) return; try { await d.update(schema.builds).set({ ...patch, updatedAt: new Date() }).where(eq(schema.builds.id, id)); } catch (e) { console.error('build save failed', e); } };
       const addMessage = async (m: Omit<BuildMessage, 'id' | 'at'>) => {
         const msg: BuildMessage = { id: uid(), at: Date.now(), ...m };
@@ -128,15 +136,34 @@ export async function POST(req: Request) {
       };
       // While the model is still thinking nothing streams, so a heartbeat keeps the studio informed and the
       // row's timestamp fresh (a row untouched for a while is treated as interrupted).
-      let thinkingChars = 0; let lastTouch = Date.now(); let wroteText = false;
+      let thinkingChars = 0; let lastTouch = Date.now(); let wroteText = false; let phaseLabel = '';
       const progress = () => {
-        if (wroteText) return;
+        if (wroteText && !phaseLabel) return;
         const s = Math.round((Date.now() - startedAt) / 1000);
         const words = Math.round(thinkingChars / 5.5);
-        send('status', { text: `${restart ? 'Starting again' : latest ? 'Working out the change' : 'Planning the app'}${words > 0 ? ` · ${words.toLocaleString('en-US')} words of thinking` : ''} · ${s}s` });
+        const base = phaseLabel || (restart ? 'Starting again' : latest ? 'Working out the change' : 'Planning the app');
+        send('status', { text: `${base}${!phaseLabel && words > 0 ? ` · ${words.toLocaleString('en-US')} words of thinking` : ''} · ${s}s` });
         if (Date.now() - lastTouch > 20000) { lastTouch = Date.now(); void save({}); }
       };
       const heartbeat = setInterval(progress, 5000);
+      const usage = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 };
+      const addUsage = (u: { in: number; out: number; cacheRead: number; cacheWrite: number }) => { usage.in += u.in; usage.out += u.out; usage.cacheRead += u.cacheRead; usage.cacheWrite += u.cacheWrite; };
+
+      /** What the checks find in a document: the browser run when it is available, the static audit otherwise (placeholder copy always). */
+      const review = async (html: string): Promise<Review> => {
+        const stat = auditApp(html);
+        const placeholders = stat.filter(i => i.kind === 'placeholder').map(i => i.detail);
+        if (browserRunAvailable() && !ctl.signal.aborted) {
+          const run = await runApp(html, { onStatus: (t) => { phaseLabel = t; send('status', { text: t }); } });
+          if (run.ran) {
+            const findings = [...new Set([...runFindings(run), ...placeholders])].slice(0, 20);
+            return { findings, serious: seriousFindings(run), ran: true, check: { ran: true, clicked: run.clicked, controls: run.controls, screens: run.report?.screensSeen.length || 0, seconds: run.seconds, left: findings.length } };
+          }
+        }
+        const findings = stat.map(i => i.detail);
+        return { findings, serious: stat.filter(i => i.kind !== 'placeholder').length, ran: false, check: { ran: false, clicked: 0, controls: 0, screens: 0, seconds: 0, left: findings.length } };
+      };
+
       try {
         send('meta', { sessionId, buildId: id, version, lineage, request: request || null, restart });
         send('status', { text: restart ? 'Starting again from the idea' : root ? 'Reading the current version' : 'Reading your graph' });
@@ -145,6 +172,7 @@ export async function POST(req: Request) {
         let sawPlan = false, sawApp = false, sawReply = false, replyStreaming = false;
         const result = await streamAnswer({
           tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, latest ? { html: latest.html } : null, request), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
+          onModel: (m) => { modelUsed = m; send('model', { model: m }); },
           onThinking: (delta) => { thinkingChars += delta.length; },
           onText: (delta) => {
             if (!wroteText) { wroteText = true; send('status', { text: 'Writing the plan' }); }
@@ -165,58 +193,71 @@ export async function POST(req: Request) {
           },
         });
         let p = parseBuild(result.text);
-        const usage = { in: result.usage.in, out: result.usage.out, cacheRead: result.usage.cacheRead };
-        console.log('[build]', JSON.stringify({ model: result.model, chars: result.text.length, seconds: Math.round((Date.now() - startedAt) / 1000), thinkingChars, restart, version }));
+        addUsage(result.usage);
+        modelUsed = result.model;
+        console.log('[build]', JSON.stringify({ model: result.model, chars: result.text.length, seconds: Math.round((Date.now() - startedAt) / 1000), thinkingChars, restart, version, truncated: result.truncated }));
         if (p.reply && !p.html) {
           // A question: answer in the chat, no new version.
-          await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead) });
-          const m = await addMessage({ role: 'assistant', text: truncate(p.reply, 4000), kind: 'reply', buildId: null, version: null });
+          await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
+          const m = await addMessage({ role: 'assistant', text: truncate(p.reply, 4000), kind: 'reply', buildId: null, version: null, model: modelUsed });
           send('done', { reply: m, build: null, sessionId });
           return;
         }
         if (!p.html || !/<\/html>|<body|<script|<div/i.test(p.html)) throw new Error('The builder did not return an app');
         await ensureRow();
-        // Review pass: controls nothing handles, screens the navigation names that do not exist, placeholder copy.
-        // Anything found goes back to the builder once, so the version the person gets works throughout.
-        const issues = auditApp(p.html);
-        if (issues.length && !ctl.signal.aborted) {
-          console.log('[build] review', JSON.stringify({ issues: issues.map(i => i.detail).slice(0, 8) }));
-          send('status', { text: `Review found ${issues.length} part${issues.length === 1 ? '' : 's'} to fix` });
-          send('phase', { text: 'repair', issues: issues.map(i => i.detail) });
-          await save({ plan: p.plan, html: p.html });
-          let raw2 = ''; let planSent2 = false; let sawPlan2 = false;
+        await save({ plan: p.plan, html: p.html });
+
+        // Review: open the version in a real browser and press everything; hand what breaks back to the builder.
+        let rounds = 0;
+        phaseLabel = 'Checking the app in a browser'; send('status', { text: phaseLabel }); send('phase', { text: 'review' });
+        let rev = await review(p.html);
+        while (rev.findings.length && rounds < MAX_REPAIR_ROUNDS && !ctl.signal.aborted) {
+          if (rounds >= 1 && rev.serious === 0) break;   // rough edges after one repair are fine; broken things are not
+          rounds++;
+          console.log('[build] review', JSON.stringify({ round: rounds, ran: rev.ran, serious: rev.serious, findings: rev.findings.slice(0, 8) }));
+          phaseLabel = `Fixing what the check found (${rev.findings.length} part${rev.findings.length === 1 ? '' : 's'})`;
+          send('status', { text: phaseLabel });
+          send('phase', { text: 'repair', issues: rev.findings, round: rounds, ran: rev.ran });
+          let raw2 = ''; let planSent2 = false; let sawPlan2 = false; let wrote2 = false;
           try {
             const fix = await streamAnswer({
-              tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequest(issues)), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
+              tier: 'build', system: buildSystem(graph), messages: buildMessages(spec, history, { html: p.html }, repairRequestFor(rev.findings, rev.ran)), maxTokens: BUILD_MAX_TOKENS, signal: ctl.signal, search: null,
+              onModel: (m) => { modelUsed = m; send('model', { model: m }); },
               onText: (delta) => {
+                if (!wrote2) { wrote2 = true; phaseLabel = ''; }
                 raw2 += delta;
                 const tail = raw2.slice(-(delta.length + 8));
                 if (!sawPlan2 && tail.includes('<plan>')) sawPlan2 = true;
-                if (!planSent2 && sawPlan2 && tail.includes('</plan>')) { planSent2 = true; send('status', { text: 'Fixing what the review found' }); }
+                if (!planSent2 && sawPlan2 && tail.includes('</plan>')) { planSent2 = true; send('status', { text: 'Rewriting the app with the fixes' }); }
                 send('delta', { text: delta });
                 if (Date.now() - lastSave > 5000) { lastSave = Date.now(); void save({}); }
               },
             });
-            usage.in += fix.usage.in; usage.out += fix.usage.out; usage.cacheRead += fix.usage.cacheRead;
+            addUsage(fix.usage);
             const p2 = parseBuild(fix.text);
-            if (p2.html && /<\/html>|<body|<script|<div/i.test(p2.html) && p2.html.length > p.html.length * 0.6) {
-              const left = auditApp(p2.html);
-              console.log('[build] repaired', JSON.stringify({ before: issues.length, after: left.length, chars: p2.html.length }));
-              p = { ...p, html: p2.html, plan: p.plan + (p2.plan ? '\n' + p2.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map((l, i) => i === 0 ? `After review: ${l}` : l).join('\n') : ''), next: p2.next.length ? p2.next : p.next };
-            } else console.warn('[build] repair discarded: no complete document came back');
+            if (p2.html && /<\/html>|<body|<script|<div/i.test(p2.html) && p2.html.length > p.html.length * 0.5) {
+              p = { ...p, html: p2.html, plan: p.plan + (p2.plan ? '\n' + p2.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map((l, i) => i === 0 ? `After the check: ${l}` : l).join('\n') : ''), next: p2.next.length ? p2.next : p.next };
+              await save({ plan: p.plan, html: p.html });
+              phaseLabel = 'Checking the fixed version in a browser'; send('status', { text: phaseLabel }); send('phase', { text: 'review', round: rounds });
+              rev = await review(p.html);
+            } else { console.warn('[build] repair discarded: no complete document came back'); break; }
           } catch (e) {
             if (ctl.signal.aborted) throw e;
-            console.warn('[build] repair failed, keeping the first version', String((e as Error)?.message || e));
+            console.warn('[build] repair failed, keeping the version as it was', String((e as Error)?.message || e));
+            break;
           }
-          send('phase', { text: 'final' });
         }
-        await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead) });
+        phaseLabel = '';
+        const check: BuildCheck = { ...rev.check, left: rev.findings.length, rounds };
+        console.log('[build] checked', JSON.stringify({ ...check, model: modelUsed, usage }));
+        send('phase', { text: 'final', check, left: rev.findings.slice(0, 8) });
+        await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
         const html = stampHtml(p.html, { buildId: id, ideaId, graphHash, lineage });
         const summary = p.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean)[0] || spec.what;
         const next = p.next.length ? p.next : nextStepsFallback(spec.kind);
         await save({ status: 'done', plan: p.plan, html, summary });
-        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next });
-        send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId });
+        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next, model: modelUsed, check, left: rev.findings.slice(0, 8) });
+        send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId, check, model: modelUsed });
       } catch (e) {
         const err = e as { name?: string; message?: string };
         const p = parseBuild(raw);

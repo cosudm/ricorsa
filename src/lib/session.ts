@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { auth0, auth0Configured, devFakeUserEnabled } from './auth0';
 import { db, schema } from './db';
 import { HttpError } from './http';
-import { grantExpired } from './plans';
+import { grantExpired, statusGrants } from './plans';
 
 export type CurrentUser = typeof schema.users.$inferSelect & { admin?: boolean; effectivePlan?: string };
 
@@ -48,11 +48,30 @@ export async function currentUser(): Promise<CurrentUser> {
     // keep the row fresh without an extra write per request storm: only if older than an hour
     if (Date.now() - new Date(row.lastSeenAt).getTime() > 3600e3) {
       await d.update(schema.users).set({ lastSeenAt: new Date(), email, name, picture }).where(eq(schema.users.id, sub));
+      // A plan granted by email since they last came: applied now, when nothing paid is in the way.
+      if (row.plan === 'free' || !statusGrants(row.subscriptionStatus)) row = await applyGrant(row) || row;
     }
     return withAccess(row);
   }
   const inserted = await d.insert(schema.users).values({ id: sub, email, name, picture }).onConflictDoNothing().returning();
-  if (inserted[0]) return withAccess(inserted[0]);
+  if (inserted[0]) return withAccess(await applyGrant(inserted[0]) || inserted[0]);
   const again = await d.select().from(schema.users).where(eq(schema.users.id, sub)).limit(1);
   return withAccess(again[0]);
+}
+
+/**
+ * A plan granted to this email address ahead of time (Settings, admins: "Grant a plan by email") lands on the row:
+ * plan, LICENSED or TRIAL, and the end date. Applied once; the grant records who it went to.
+ */
+async function applyGrant(row: typeof schema.users.$inferSelect): Promise<typeof schema.users.$inferSelect | null> {
+  const email = (row.email || '').trim().toLowerCase();
+  if (!email) return null;
+  const d = db();
+  const g = (await d.select().from(schema.grants).where(eq(schema.grants.email, email)).limit(1))[0];
+  if (!g || g.appliedTo || (g.endsAt && new Date(g.endsAt).getTime() < Date.now())) return null;
+  const patch = { plan: g.plan, subscriptionStatus: g.status, planRenewsAt: g.endsAt ? new Date(g.endsAt) : null };
+  await d.update(schema.users).set(patch).where(eq(schema.users.id, row.id));
+  await d.update(schema.grants).set({ appliedTo: row.id, appliedAt: new Date() }).where(eq(schema.grants.email, email));
+  console.log('[grant] applied', JSON.stringify({ email, plan: g.plan, status: g.status, user: row.id }));
+  return { ...row, ...patch };
 }

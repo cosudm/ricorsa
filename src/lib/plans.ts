@@ -99,17 +99,27 @@ export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, p
 }
 
 /** Rough per-answer cost estimate in micro-dollars, for the usage table. Adjust to current list prices. */
-export const PRICE_PER_MTOK_USD: Record<string, { in: number; out: number; cacheRead: number }> = {
+export const PRICE_PER_MTOK_USD: Record<string, { in: number; out: number; cacheRead: number; cacheWrite?: number }> = {
   quick: { in: 0.6, out: 2.5, cacheRead: 0.15 },   // Kimi K3, low effort (list prices; adjust when Moonshot publishes K3 rates)
   default: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K3, medium effort
   complex: { in: 0.6, out: 2.5, cacheRead: 0.15 }, // Kimi K3, max effort
-  build: { in: 0.6, out: 2.5, cacheRead: 0.15 },   // Kimi K2.7 code (high speed) for the Build studio
+  build: { in: 10, out: 50, cacheRead: 1, cacheWrite: 12.5 },   // Claude Fable 5.1 for the Build studio (Kimi rates apply when it falls back)
+  ideas: { in: 10, out: 50, cacheRead: 1, cacheWrite: 12.5 },   // Discover ideas, written by the build model
 };
+/** List prices per model family, so the estimate follows whichever model actually answered. */
+const PRICE_BY_MODEL: Array<[RegExp, { in: number; out: number; cacheRead: number; cacheWrite?: number }]> = [
+  [/^claude-fable/i, { in: 10, out: 50, cacheRead: 1, cacheWrite: 12.5 }],
+  [/^claude-opus/i, { in: 5, out: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
+  [/^claude-sonnet/i, { in: 2, out: 10, cacheRead: 0.2, cacheWrite: 2.5 }],
+  [/^claude-haiku/i, { in: 1, out: 5, cacheRead: 0.1, cacheWrite: 1.25 }],
+  [/^kimi|^moonshot/i, { in: 0.6, out: 2.5, cacheRead: 0.15 }],
+];
 /** Web search (Brave) is billed per query on top of tokens once past the free allowance. */
 export const WEB_SEARCH_USD = 0.005;
 
-export function estimateCostMicros(tier: string, tokensIn: number, tokensOut: number, cacheRead = 0, searches = 0): number {
-  const p = PRICE_PER_MTOK_USD[tier] || PRICE_PER_MTOK_USD.default;
-  const usd = (tokensIn * p.in + tokensOut * p.out + cacheRead * p.cacheRead) / 1e6 + searches * WEB_SEARCH_USD;
+export function estimateCostMicros(tier: string, tokensIn: number, tokensOut: number, cacheRead = 0, searches = 0, model?: string, cacheWrite = 0): number {
+  const byModel = model ? PRICE_BY_MODEL.find(([re]) => re.test(model))?.[1] : undefined;
+  const p = byModel || PRICE_PER_MTOK_USD[tier] || PRICE_PER_MTOK_USD.default;
+  const usd = (tokensIn * p.in + tokensOut * p.out + cacheRead * p.cacheRead + cacheWrite * (p.cacheWrite ?? p.in)) / 1e6 + searches * WEB_SEARCH_USD;
   return Math.round(usd * 1e6);
 }

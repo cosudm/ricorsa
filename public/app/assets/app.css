@@ -555,6 +555,8 @@
   .disc .body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
   .disc .cat-tag { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
   .disc .h { font-size: 16px; font-weight: 600; line-height: 1.3; letter-spacing: -.01em; color: var(--ink); text-wrap: balance; }
+  .disc .why { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; line-height: 1.4; color: var(--accent); }
+  .disc .why svg { flex: none; margin-top: 3px; }
   .disc.feature .h { font-size: 22px; }
   .disc .b { font-size: 13px; color: var(--ink-2); line-height: 1.45; }
   .disc-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -752,6 +754,19 @@
   .smsg.bot.live .bubble { border-color: var(--accent-line); }
   .smsg-title { font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
   .smsg-sub { font-size: 12px; color: var(--ink-3); margin-top: 4px; }
+  /* Admin: plans granted by email */
+  .grant-form { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr auto; gap: 10px; align-items: end; margin: 6px 0 14px; }
+  .grant-form .field { margin: 0; } .grant-form .field.wide { grid-column: 1 / -1; }
+  .grant-form .btn { align-self: end; margin-bottom: 2px; }
+  .grant-list { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+  table.grants { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.grants th, table.grants td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.grants th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 600; }
+  table.grants tr:last-child td { border-bottom: 0; }
+  table.grants .ok { color: var(--good); } table.grants .muted { color: var(--ink-3); }
+  @media (max-width: 640px) { .grant-form { grid-template-columns: 1fr 1fr; } }
+  .smsg-sub.check { display: flex; gap: 5px; align-items: flex-start; margin-top: 8px; } .smsg-sub.check svg { flex: none; margin-top: 2px; color: var(--good); }
+  .build-left { margin-top: 6px; font-size: 12px; color: var(--ink-3); } .build-left summary { cursor: pointer; } .build-left ul { margin: 4px 0 0; padding-left: 18px; } .build-left li { margin: 2px 0; }
   .smsg .build-plan { margin: 4px 0 0; }
   .smsg-actions { display: flex; gap: 6px; }
   .smsg .bubble p { margin: 0 0 8px; } .smsg .bubble p:last-child { margin: 0; }

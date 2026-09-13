@@ -19,7 +19,10 @@
   "r2_buckets": [
     { "binding": "FILES", "bucket_name": "ricorsa-vault", "jurisdiction": "us" }
   ],
-  // Plain configuration. Secrets (AUTH0_CLIENT_SECRET, AUTH0_SECRET, KIMI_API_KEY, BRAVE_API_KEY, PAYPAL_CLIENT_SECRET)
+  // Browser Run: every version the Build studio writes is opened in a headless Chrome, every control pressed and
+  // every screen opened, before it is called done (src/lib/build-run.ts). Without the binding the static audit runs instead.
+  "browser": { "binding": "BROWSER" },
+  // Plain configuration. Secrets (AUTH0_CLIENT_SECRET, AUTH0_SECRET, KIMI_API_KEY, ANTHROPIC_API_KEY, BRAVE_API_KEY, PAYPAL_CLIENT_SECRET)
   // are set on the Worker (Settings, Variables and Secrets) and survive deploys. PayPal plans and the
   // webhook are created by the app itself on first use (src/lib/paypal-setup.ts).
   "vars": {
@@ -30,8 +33,10 @@
     "MODEL_QUICK": "kimi-k3",
     "MODEL_DEFAULT": "kimi-k3",
     "MODEL_COMPLEX": "kimi-k3",
-    // The Build studio writes whole apps: the code model at high speed finishes in a fraction of K3's time.
-    "MODEL_BUILD": "kimi-k2.7-code-highspeed",
+    // The Build studio and Discover ideas run on Claude (ANTHROPIC_API_KEY is a secret on the Worker); when Anthropic
+    // cannot serve, Kimi K3 takes over at maximum thinking. EFFORT_BUILD (low, medium, high, xhigh, max) tunes Claude's effort.
+    "MODEL_BUILD": "claude-fable-5-1",
+    "MODEL_IDEAS": "claude-fable-5-1",
     "KIMI_BASE_URL": "https://api.moonshot.ai/v1",
     "PAYPAL_ENV": "live",
     "ADMIN_EMAILS": "chrismiguez78@gmail.com,cmiguez@smeprotech.com,admin@smepro.app,support@smeprotech.com",

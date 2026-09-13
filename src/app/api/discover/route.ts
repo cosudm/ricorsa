@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne, desc } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, truncate } from '@/lib/http';
 import { db, schema } from '@/lib/db';
@@ -7,6 +7,7 @@ import { quickJson } from '@/lib/llm';
 import { loadGraph, topNodes } from '@/lib/graph';
 import { graphFingerprint, sha256Hex, canonical, subjectId } from '@/lib/hash';
 import { planFor } from '@/lib/plans';
+import type { GraphData } from '@/lib/db/schema';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,7 @@ const CATS = ['For you', 'Apps', 'Agents', 'Tools', 'Decentralized', 'Data & cre
 type Cat = typeof CATS[number];
 /** What the card's preview shows: the screen the thing would open on, in the person's own terms. */
 type Preview = { layout: 'dashboard' | 'list' | 'chat' | 'form' | 'table' | 'map' | 'editor' | 'cards' | 'profile' | 'timeline'; name: string; nav: string[]; items: string[]; stat?: { label: string; value: string } | null; cta?: string };
-type Idea = { kind: string; title: string; what: string; builds: string[]; prompt: string; preview?: Preview; id?: string; graphHash?: string; at?: number; curated?: boolean };
+type Idea = { kind: string; title: string; what: string; builds: string[]; prompt: string; why?: string; preview?: Preview; id?: string; graphHash?: string; at?: number; curated?: boolean };
 const LAYOUTS = ['dashboard', 'list', 'chat', 'form', 'table', 'map', 'editor', 'cards', 'profile', 'timeline'] as const;
 function cleanPreview(p: unknown): Preview | undefined {
   if (!p || typeof p !== 'object') return undefined;
@@ -59,33 +60,74 @@ export const POST = handle(async (req: Request) => {
   if (caps.discover !== 'full') return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, locked: true, graphHash: await graphFingerprint(graph) });
   if (nodeCount < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, graphHash: await graphFingerprint(graph) });
 
-  const day = new Date().toISOString().slice(0, 10);
+  // Ideas are cached per person and category against the exact graph they were drawn from, so they refresh
+  // when the graph moves and stay put while it does not. "Generate again" always writes a fresh set.
+  const hash = await graphFingerprint(graph);
+  const day = hash.slice(0, 32);
   const key = `${user.id}|${cat}`;
   const cached = await db().select().from(schema.discoverCache).where(and(eq(schema.discoverCache.category, key), eq(schema.discoverCache.day, day))).limit(1);
-  if (cached[0] && !b.data.refresh) return json({ items: cached[0].items, personal: true, graphHash: (cached[0].items[0] as Idea | undefined)?.graphHash });
+  if (cached[0] && !b.data.refresh) return json({ items: cached[0].items, personal: true, graphHash: hash });
 
-  const summary = [
-    'Topics: ' + topNodes(graph, 'topic', 10).map(n => n.label).join('; '),
-    'Entities: ' + topNodes(graph, 'entity', 6).map(n => n.label).join('; '),
-    'Goals: ' + topNodes(graph, 'goal', 4).map(n => n.label).join('; '),
-    'Expertise: ' + topNodes(graph, 'expertise', 5).map(n => n.label + (n.level ? ` (${n.level})` : '')).join('; '),
-    'Style: ' + topNodes(graph, 'style', 3).map(n => n.label).join('; '),
-    'Recent intents: ' + graph.intents.slice(0, 4).map(i => i.text).join(' | '),
-  ].join('\n');
+  const [threads, built] = await Promise.all([
+    db().select({ title: schema.threads.title, updatedAt: schema.threads.updatedAt }).from(schema.threads).where(eq(schema.threads.userId, user.id)).orderBy(desc(schema.threads.updatedAt)).limit(12),
+    db().select({ title: schema.builds.title, kind: schema.builds.kind }).from(schema.builds).where(eq(schema.builds.userId, user.id)).orderBy(desc(schema.builds.updatedAt)).limit(10),
+  ]);
+  const brief = graphBrief(graph, threads.map(t => t.title), [...new Set(built.map(x => x.title))]);
   const focus = CATEGORY_BRIEF[cat];
-  const data = await quickJson<Idea[]>(`You help a person see what their personal identity graph makes possible. The graph below was learned from their own questions. Propose exactly 6 things they could create from it${focus}. Reply with only a JSON array of 6 objects: {"kind": short label for the type of thing (e.g. "Agent", "dApp", "Tool", "Credential", "Dataset", "Course"), "title": a specific name or headline under 70 characters, "what": one or two sentences (under 160 characters) saying what it is and what it does for them, "builds": 2 to 4 short labels naming the graph nodes it draws on, "prompt": the first question they should ask Ricorsa to start specifying or building it (a complete sentence), "preview": what its main screen would show, as {"layout": one of dashboard|list|chat|form|table|map|editor|cards|profile|timeline (the screen shape that fits it best), "name": the product's own short name (under 18 characters, no quotes), "nav": 3 short menu labels it would have, "items": 3 to 5 short, specific things that would appear on that screen (real row titles, message snippets, field names, card names or headings, drawn from the graph, under 30 characters each), "stat": for dashboards only, {"label", "value"} for the headline number, else null, "cta": the main button label (one or two words)}}. Make each idea concrete and grounded in the graph, not generic. Vary the ideas and the layouts. No markdown, valid JSON only.\n\nIdentity graph:\n${summary}`, 2600);
+  const avoid = cached[0] && b.data.refresh ? (cached[0].items as Idea[]).map(i => i.title).filter(Boolean) : [];
+  const data = await quickJson<Idea[]>(`You propose things a person could build from their personal identity graph, inside Ricorsa. Ricorsa's builder turns any idea you propose into a working, self-contained web app (one HTML file: screens, data, logic, persistence in the browser, exports; no server, no live network), so every idea must be something that works well in that form and is worth using every week.
+
+The graph below was learned from the person's own questions. Read it as a whole: what they keep coming back to, what they are trying to achieve, where they are strong, what they use, how they like things. Propose exactly 6 ideas${focus}. Each idea must be specific to this person (named after their real topics, entities and goals, never generic), clearly different from the others, and genuinely useful to someone in their position now. Prefer ideas that combine two or three parts of the graph over ideas that use one. Do not propose anything on the "already built" list${avoid.length ? ' or on the "shown before" list' : ''}, nor anything that only makes sense with a live backend.
+
+Reply with only a JSON array of 6 objects:
+{"kind": short label for the type of thing (e.g. "App", "Agent", "Tool", "dApp", "Credential", "Dataset", "Course", "Playbook"),
+ "title": a specific name or headline under 70 characters, in plain words,
+ "what": one or two sentences (under 170 characters) saying what it does for them, naming the real things from the graph it works with,
+ "why": one line (under 90 characters) saying why this fits them now, pointing at a specific topic, goal, intent or entity from the graph,
+ "builds": 2 to 4 labels naming the graph nodes it draws on, copied exactly as they appear in the graph,
+ "prompt": the first request they should send to start building it: one complete sentence, in their voice, that says what to build and the two or three things it must do,
+ "preview": what its main screen would show, as {"layout": one of dashboard|list|chat|form|table|map|editor|cards|profile|timeline (the screen shape that fits it best), "name": the product's own short name (under 18 characters, no quotes), "nav": 3 short menu labels it would have, "items": 3 to 5 short, specific things that would appear on that screen (real row titles, message snippets, field names, card names or headings drawn from the graph, with real names and numbers where they fit, under 30 characters each), "stat": for dashboards only, {"label", "value"} for the headline number, else null, "cta": the main button label (one or two words)}}.
+Vary the kinds and the layouts across the six. No markdown, valid JSON only.
+
+${brief}${avoid.length ? `\n\nShown before (propose different ideas): ${avoid.slice(0, 12).join('; ')}` : ''}`, 5000, 'ideas');
   const items = (Array.isArray(data) ? data : []).filter(x => x && typeof x.title === 'string' && typeof x.what === 'string').slice(0, 6).map(x => ({
-    kind: truncate(x.kind || cat, 24), title: truncate(x.title, 90), what: truncate(x.what, 200),
+    kind: truncate(x.kind || cat, 24), title: truncate(x.title, 90), what: truncate(x.what, 200), why: truncate(String(x.why || ''), 120) || undefined,
     builds: Array.isArray(x.builds) ? x.builds.map(s => truncate(String(s), 40)).filter(Boolean).slice(0, 4) : [],
-    prompt: truncate(x.prompt || x.title, 300),
+    prompt: truncate(x.prompt || x.title, 400),
     preview: cleanPreview(x.preview),
   }));
-  if (items.length < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, fallback: true, graphHash: await graphFingerprint(graph) });
+  if (items.length < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, fallback: true, graphHash: hash });
   const stamped = await stamp(items, user.id, graph, cat, false);
   await db().insert(schema.discoverCache).values({ category: key, day, items: stamped })
     .onConflictDoUpdate({ target: [schema.discoverCache.category, schema.discoverCache.day], set: { items: stamped } });
-  return json({ items: stamped, personal: true, graphHash: stamped[0]?.graphHash });
+  // Older sets for this category (earlier graph states) are no longer needed.
+  await db().delete(schema.discoverCache).where(and(eq(schema.discoverCache.category, key), ne(schema.discoverCache.day, day)));
+  return json({ items: stamped, personal: true, graphHash: hash });
 });
+
+/**
+ * The graph as the idea writer reads it: every kind of node with its weight and how often it came up, the
+ * strongest connections between nodes, the recent intents, the titles of recent threads, and what has already
+ * been built, so the ideas land on what the person actually cares about and do not repeat.
+ */
+function graphBrief(g: GraphData, threadTitles: string[], builtTitles: string[]): string {
+  const fmt = (type: string, n: number) => topNodes(g, type, n).map(x => `${x.label}${x.level ? ` (${x.level})` : ''}${x.weight > 0.7 ? ' [strong]' : ''}${x.count > 1 ? ` x${x.count}` : ''}`).join('; ');
+  const label = (id: string) => g.nodes[id]?.label || id.split(':').slice(1).join(':');
+  const edges = Object.values(g.edges).filter(e => g.nodes[e.a] && g.nodes[e.b]).sort((a, b) => b.weight - a.weight).slice(0, 10).map(e => `${label(e.a)} <-> ${label(e.b)}`);
+  const lines = [
+    'Identity graph:',
+    `Topics they care about: ${fmt('topic', 14) || 'none yet'}`,
+    `Entities in their world (tools, companies, places, projects): ${fmt('entity', 10) || 'none yet'}`,
+    `Goals: ${fmt('goal', 6) || 'none yet'}`,
+    `Expertise: ${fmt('expertise', 6) || 'none yet'}`,
+    `How they like things: ${fmt('style', 4) || 'no preference recorded'}`,
+    edges.length ? `Strongest connections: ${edges.join('; ')}` : '',
+    g.intents.length ? `Recent intents (newest first): ${g.intents.slice(0, 8).map(i => i.text).join(' | ')}` : '',
+    threadTitles.length ? `Recent threads: ${threadTitles.slice(0, 12).map(t => truncate(t, 80)).join(' | ')}` : '',
+    builtTitles.length ? `Already built (do not repeat): ${builtTitles.slice(0, 10).join('; ')}` : '',
+  ].filter(Boolean);
+  return lines.join('\n').slice(0, 6000);
+}
 
 const CATEGORY_BRIEF: Record<Cat, string> = {
   'For you': ', mixing applications, agents, tools, decentralized services, portable data and content',

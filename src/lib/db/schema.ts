@@ -139,6 +139,23 @@ export const discoverCache = sqliteTable('discover_cache', {
   createdAt: tsNow('created_at'),
 }, (t) => [primaryKey({ columns: [t.category, t.day] })]);
 
+/**
+ * Plans granted by email before (or without) a subscription: a consultant, a partner, a pilot customer. Applied to
+ * the person's row the first time they sign in with that address (or the next time, if they already have a
+ * Free account), as a LICENSED or TRIAL status with an optional end date. Written by admins from Settings.
+ */
+export const grants = sqliteTable('grants', {
+  email: text('email').primaryKey(),               // lower-cased
+  plan: text('plan').notNull(),                     // pro | team
+  status: text('status').notNull().default('LICENSED'), // LICENSED | TRIAL
+  endsAt: ts('ends_at'),
+  note: text('note'),
+  createdBy: text('created_by'),
+  appliedTo: text('applied_to'),                    // the user id it was applied to
+  appliedAt: ts('applied_at'),
+  createdAt: tsNow('created_at'),
+});
+
 /** Webhook receipts, so a redelivered PayPal event is applied once. */
 export const webhookEvents = sqliteTable('webhook_events', {
   id: text('id').primaryKey(),
@@ -189,7 +206,9 @@ export const connectors = sqliteTable('connectors', {
 export type BuildStatus = 'building' | 'done' | 'error';
 /** One line of the build conversation, kept on the session's root row. */
 /** A message in a build chat. A plan message may carry `next`: suggested next-step requests for that version. */
-export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; next?: string[]; at: number };
+/** What the check of a version found: whether a real browser ran it, how much it pressed, and what was left. */
+export type BuildCheck = { ran: boolean; clicked: number; controls: number; screens: number; seconds: number; left: number; rounds?: number };
+export type BuildMessage = { id: string; role: 'user' | 'assistant'; text: string; kind?: 'request' | 'plan' | 'reply' | 'error'; buildId?: string | null; version?: number | null; next?: string[]; at: number; model?: string; check?: BuildCheck; left?: string[] };
 /**
  * Files attached to questions. The extracted text lives here (what the model reads); the file itself is kept
  * as uploaded in the FILES bucket under `r2Key` so it can be opened in the viewer (null when storage was

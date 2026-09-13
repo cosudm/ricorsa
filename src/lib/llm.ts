@@ -1,53 +1,83 @@
 /**
- * The model layer. Ricorsa runs on Kimi (Moonshot AI) through its OpenAI-compatible API: streamed
- * chat completions, function calling for connector tools, and partial-mode continuation when an answer
- * runs past the output limit. Web retrieval happens before the call (src/lib/search.ts) and the sources
- * are handed to the model as numbered context; connectors are called by Ricorsa itself through MCP.
+ * The model layer. Two providers sit behind one streaming interface:
+ *  - Kimi (Moonshot AI) through its OpenAI-compatible API: streamed chat completions, function calling for
+ *    connector tools, and partial-mode continuation when an answer runs past the output limit.
+ *  - Claude (Anthropic Messages API): streamed messages with adaptive thinking and an effort level, prompt
+ *    caching on the system prompt, and tool use for connectors.
+ * A tier's configured MODEL_* id picks the provider by its name (claude-* goes to Anthropic). When that
+ * provider cannot serve (no key, key rejected, unknown model, overloaded) the next candidate for the tier
+ * takes over, so the product keeps answering. Web retrieval happens before the call (src/lib/search.ts) and
+ * the sources are handed to the model as numbered context; connectors are called by Ricorsa itself through MCP.
  */
 import type { Source } from './search';
 import { callMcpTool } from './mcp';
 
-/** quick: planning and small structured calls · default: answers · complex: Reasoning answers · build: writing apps in the Build studio. */
-export type Tier = 'quick' | 'default' | 'complex' | 'build';
+/**
+ * quick: planning and small structured calls · default: answers · complex: Reasoning answers ·
+ * build: writing apps in the Build studio · ideas: Discover ideas (the build model unless MODEL_IDEAS says otherwise).
+ */
+export type Tier = 'quick' | 'default' | 'complex' | 'build' | 'ideas';
 
-const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k3', default: 'kimi-k3', complex: 'kimi-k3', build: 'kimi-k2.7-code-highspeed' };
+const DEFAULT_MODELS: Record<Tier, string> = { quick: 'kimi-k3', default: 'kimi-k3', complex: 'kimi-k3', build: 'claude-fable-5-1', ideas: 'claude-fable-5-1' };
 /** Model ids to try for each tier, best first. The configured MODEL_* id always comes first. */
 const CANDIDATES: Record<Tier, string[]> = {
   quick: ['kimi-k3-turbo', 'kimi-k3', 'kimi-k2-turbo-preview', 'kimi-k2.5-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-8k'],
   default: ['kimi-k3', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-k2-turbo-preview', 'kimi-latest', 'moonshot-v1-32k'],
   complex: ['kimi-k3', 'kimi-k2-thinking', 'kimi-k2-thinking-turbo', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-0711-preview', 'kimi-latest', 'moonshot-v1-128k'],
-  // Apps are long documents: the code models write them several times faster than K3 with thinking.
-  build: ['kimi-k2.7-code-highspeed', 'kimi-k2.7-code', 'kimi-k3', 'kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
+  // Apps are long, exacting documents: Claude first, then the strongest Kimi models thinking hard, then the code models.
+  build: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
+  ideas: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'kimi-k3', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
 };
+
+/** Claude models are served by Anthropic; everything else by Kimi. */
+export function isClaude(model: string): boolean { return /^claude-/i.test(model); }
+
 /**
- * Thinking effort per tier for models that take `reasoning_effort` (Kimi K3 and the thinking models):
- * Fast thinks little, Best a moderate amount, Reasoning as much as it can, builds a little (the plan the
- * builder writes first is its thinking). Override with REASONING_QUICK, REASONING_DEFAULT,
- * REASONING_COMPLEX and REASONING_BUILD; set one to "off" to send nothing.
+ * Thinking effort per tier. Kimi K3 and the thinking models take `reasoning_effort`; Claude takes
+ * `output_config.effort` (low, medium, high, xhigh, max) with adaptive thinking. Fast thinks little, Best a
+ * moderate amount, Reasoning as much as it can, builds and ideas a lot. Override per tier with
+ * REASONING_QUICK, REASONING_DEFAULT, REASONING_COMPLEX, REASONING_BUILD, REASONING_IDEAS (Kimi) and
+ * EFFORT_QUICK, EFFORT_DEFAULT, EFFORT_COMPLEX, EFFORT_BUILD, EFFORT_IDEAS (Claude); "off" sends nothing.
  */
-/** Thinking models (Kimi K3, K2.6, K2.7 code and the K2 thinking variants) accept only the default temperature; leave it out for them. */
+const DEFAULT_REASONING: Record<Tier, string> = { quick: 'low', default: 'medium', complex: 'max', build: 'max', ideas: 'high' };
+const DEFAULT_EFFORT: Record<Tier, string> = { quick: 'low', default: 'medium', complex: 'max', build: 'high', ideas: 'high' };
+const CLAUDE_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+function envFor(prefix: string, tier: Tier): string | undefined {
+  const key = `${prefix}_${tier.toUpperCase()}`;
+  return process.env[key];
+}
+/** Thinking models (Kimi K3, K2.6, K2.7 code and the K2 thinking variants) accept only the default temperature; leave it out for them. Claude with thinking takes none either. */
 function temperatureFor(model: string, wanted: number | undefined): number | undefined {
-  if (/k3|k2\.[6-9]|k2-?thinking|thinking|reason/i.test(model)) return undefined;
+  if (isClaude(model) || /k3|k2\.[6-9]|k2-?thinking|thinking|reason/i.test(model)) return undefined;
   return wanted ?? 0.6;
 }
 function reasoningFor(tier: Tier, model: string): string | null {
-  const env = tier === 'quick' ? process.env.REASONING_QUICK : tier === 'complex' ? process.env.REASONING_COMPLEX : tier === 'build' ? process.env.REASONING_BUILD : process.env.REASONING_DEFAULT;
-  const v = env || (tier === 'quick' ? 'low' : tier === 'complex' ? 'max' : tier === 'build' ? 'low' : 'medium');
+  if (isClaude(model)) return null;
+  const v = envFor('REASONING', tier) || DEFAULT_REASONING[tier];
   if (v === 'off' || v === 'none') return null;
   return /k3|thinking|reason/i.test(model) || process.env.REASONING_ALWAYS === '1' ? v : null;
+}
+function effortFor(tier: Tier, model: string): string | null {
+  if (!isClaude(model)) return null;
+  const v = (envFor('EFFORT', tier) || DEFAULT_EFFORT[tier]).toLowerCase();
+  if (v === 'off' || v === 'none') return null;
+  return CLAUDE_EFFORTS.has(v) ? v : 'high';
 }
 function configured(tier: Tier): string {
   if (tier === 'quick') return process.env.MODEL_QUICK || DEFAULT_MODELS.quick;
   if (tier === 'complex') return process.env.MODEL_COMPLEX || DEFAULT_MODELS.complex;
   if (tier === 'build') return process.env.MODEL_BUILD || DEFAULT_MODELS.build;
+  if (tier === 'ideas') return process.env.MODEL_IDEAS || process.env.MODEL_BUILD || DEFAULT_MODELS.ideas;
   return process.env.MODEL_DEFAULT || DEFAULT_MODELS.default;
 }
-/** The configured id for a tier (what the settings say); `resolveModel` checks it against what the account can actually use. */
+/** The configured id for a tier (what the settings say); `resolveModel` checks it against what the accounts can actually use. */
 export function modelFor(tier: Tier): string { return configured(tier); }
 export const PROVIDER_NAME = 'Kimi';
+/** The provider a model id belongs to, for logs and the admin screen. */
+export function providerOf(model: string): 'Anthropic' | 'Kimi' { return isClaude(model) ? 'Anthropic' : 'Kimi'; }
 
 let modelList: { ids: string[]; at: number } | null = null;
-/** The model ids the provider account can use, cached for ten minutes. Empty when the list cannot be fetched. */
+/** The Kimi model ids the provider account can use, cached for ten minutes. Empty when the list cannot be fetched. */
 export async function availableModels(force = false): Promise<string[]> {
   if (!force && modelList && Date.now() - modelList.at < 600_000) return modelList.ids;
   try {
@@ -59,16 +89,25 @@ export async function availableModels(force = false): Promise<string[]> {
     return ids;
   } catch (e) { console.warn('[provider] models list failed', String((e as Error)?.message || e)); return modelList?.ids || []; }
 }
-/** The best model this account can use for a tier: the configured id when available, otherwise the next known one. */
+
+/** Anthropic is skipped for a while after its key is rejected or the account has no credit, so builds do not wait on a dead door. A changed key is tried at once. */
+let anthropicDown: { key: string; until: number } | null = null;
+function anthropicUsable(): boolean { const k = anthropicKey(); return !!k && !(anthropicDown && anthropicDown.key === k && Date.now() < anthropicDown.until); }
+function markAnthropicDown(why: string) { anthropicDown = { key: anthropicKey() || '', until: Date.now() + 600_000 }; console.warn('[provider] anthropic set aside for ten minutes:', why); }
+/** Whether Claude models can be used right now (a key is set and it has not been rejected recently). */
+export function anthropicConfigured(): boolean { return !!anthropicKey(); }
+
+/** The best model an account can use for a tier: the configured id when available, otherwise the next known one. */
 export async function resolveModel(tier: Tier, exclude: string[] = []): Promise<string> {
   const want = [configured(tier), ...CANDIDATES[tier]].filter((v, i, a) => a.indexOf(v) === i && !exclude.includes(v));
   const ids = await availableModels();
-  if (!ids.length) return want[0];
-  const hit = want.find(w => ids.includes(w));
-  if (hit) return hit;
+  for (const w of want) {
+    if (isClaude(w)) { if (anthropicUsable()) return w; continue; }
+    if (!ids.length || ids.includes(w)) return w;
+  }
   // Nothing from the list: take any kimi model the account has, newest-looking first.
   const kimi = ids.filter(id => /kimi/i.test(id) && !exclude.includes(id)).sort().reverse();
-  return kimi[0] || ids.find(id => !exclude.includes(id)) || want[0];
+  return kimi[0] || ids.find(id => !exclude.includes(id)) || want.find(w => !isClaude(w)) || want[0];
 }
 
 export function mockMode(): boolean {
@@ -81,6 +120,9 @@ function apiKey(): string {
   if (!k) throw Object.assign(new Error('KIMI_API_KEY is not set'), { status: 401 });
   return k;
 }
+function anthropicBase(): string { return (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, ''); }
+function anthropicKey(): string | null { return process.env.ANTHROPIC_API_KEY || null; }
+const ANTHROPIC_VERSION = '2023-06-01';
 
 export type ProviderErrorCode = 'provider_billing' | 'provider_auth' | 'rate_limited' | 'overloaded' | 'prompt_too_large' | 'invalid_request' | 'upstream_error';
 export type ProviderError = { code: ProviderErrorCode; status: number | null; type: string; message: string; forAdmin: string; forUser: string };
@@ -91,9 +133,9 @@ export class ProviderRequestError extends Error {
 }
 
 /**
- * Read what the model provider actually said. Moonshot answers in the OpenAI error shape
- * ({ error: { message, type, code } }) with a status: 401 bad key, 403 no balance or quota, 404 unknown
- * model, 429 rate limit, 5xx overloaded. Surface the message, and give the person something true to read.
+ * Read what the model provider actually said. Both providers answer in the same error shape
+ * ({ error: { message, type } }) with a status: 401 bad key, 402/403 no balance or quota, 404 unknown
+ * model, 429 rate limit, 5xx or 529 overloaded. Surface the message, and give the person something true to read.
  */
 export function describeProviderError(e: unknown): ProviderError {
   const err = e as { status?: number; message?: string; type?: string; body?: unknown; error?: { message?: string; type?: string } };
@@ -103,11 +145,11 @@ export function describeProviderError(e: unknown): ProviderError {
   const message = String(body?.error?.message || err?.error?.message || err?.message || e || '').slice(0, 400);
   const m = message.toLowerCase();
   let code: ProviderErrorCode = 'upstream_error';
-  if (/balance|insufficient|quota|billing|recharge|top up|credit/.test(m) || (status === 403 && /quota|balance/.test(type))) code = 'provider_billing';
-  else if (status === 401 || status === 403 || /invalid api key|authentication|unauthorized/.test(m)) code = 'provider_auth';
+  if (status === 402 || /balance|insufficient|quota|billing|recharge|top up|credit/.test(m) || (status === 403 && /quota|balance/.test(type))) code = 'provider_billing';
+  else if (status === 401 || status === 403 || /invalid api key|authentication|unauthorized|invalid x-api-key/.test(m)) code = 'provider_auth';
   else if (status === 429 || /rate limit|too many requests|concurrency/.test(m)) code = 'rate_limited';
   else if (status === 503 || status === 502 || status === 529 || /overloaded|server busy|engine overloaded/.test(m)) code = 'overloaded';
-  else if (status === 400 && /context length|too long|maximum context|max_tokens|token limit/.test(m)) code = 'prompt_too_large';
+  else if (status === 400 && /context length|too long|maximum context|max_tokens|token limit|prompt is too long/.test(m)) code = 'prompt_too_large';
   else if (status === 400 || status === 404 || status === 422) code = 'invalid_request';
   const forUser = {
     provider_billing: 'Ricorsa cannot reach its AI provider right now because the account behind it needs attention. The site owner has been notified; please try again later.',
@@ -134,11 +176,13 @@ export type StreamResult = {
   tools: ToolCall[];
 };
 
-type ChatMessage = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>; tool_call_id?: string; name?: string; partial?: boolean };
+type ChatMessage = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>; tool_call_id?: string; name?: string; partial?: boolean; /** The assistant turn exactly as Anthropic produced it (thinking blocks included), replayed verbatim in tool loops. */ blocks?: ABlock[] };
 type FunctionTool = { type: 'function'; function: { name: string; description?: string; parameters: Record<string, unknown> } };
 
 const MAX_TOOL_ROUNDS = 6;
 const MAX_CONTINUATIONS = 3;
+/** Output budgets a Kimi model may refuse; the next one down is tried. */
+const KIMI_MAX_TOKENS_STEPS = [32000, 16000];
 
 /** Function names the API accepts: letters, digits, underscore, dash, at most 64 characters. */
 function fnName(server: string, tool: string, taken: Set<string>): string {
@@ -166,8 +210,8 @@ function toolsFor(mcp: McpServerSpec[] | undefined): { tools: FunctionTool[]; lo
 /**
  * Stream a completion. `onText` receives each delta of the answer text. With `mcp` set, the connectors'
  * tools are offered to the model and called on its behalf (results go back to the model, the loop continues
- * until it answers). When the output limit cuts an answer short, the text so far is handed back in partial
- * mode and the model carries on where it stopped.
+ * until it answers). When the output limit cuts an answer short, the text so far is handed back and the
+ * model carries on where it stopped.
  */
 export async function streamAnswer(opts: {
   tier: Tier; system: SystemBlock[]; messages: Msg[]; maxTokens: number; signal?: AbortSignal;
@@ -182,32 +226,50 @@ export async function streamAnswer(opts: {
   onTool?: (call: ToolCall) => void;
   /** Sees every tool result before the model does; may hand back replacement text (used to number Vault pages as sources). */
   onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void;
+  /** Told which model is writing, including when a fallback takes over mid-way. */
+  onModel?: (model: string) => void;
 }): Promise<StreamResult> {
   if (mockMode()) return mockStream(opts, modelFor(opts.tier));
   let model = await resolveModel(opts.tier);
-  const system = opts.system.map(b => b.text).join('\n\n');
-  const convo: ChatMessage[] = [{ role: 'system', content: system }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
+  opts.onModel?.(model);
+  const systemText = opts.system.map(b => b.text).join('\n\n');
+  const convo: ChatMessage[] = [{ role: 'system', content: systemText }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
   const { tools, lookup } = toolsFor(opts.mcp || undefined);
   const labelOf = new Map((opts.mcp || []).map(m => [m.name, m.label]));
   const usage = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0, searches: 0 };
   const toolCalls: ToolCall[] = [];
   let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
+  const tried: string[] = [model];
 
-  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let noPartial = false; let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens;
+  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let effort = effortFor(opts.tier, model); let noPartial = isClaude(model); let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens; let overloadRetries = 0;
+  const switchTo = (next: string) => { model = next; tried.push(next); reasoning = reasoningFor(opts.tier, next); effort = effortFor(opts.tier, next); temperature = temperatureFor(next, opts.temperature); noPartial = noPartial || isClaude(next); maxTokens = opts.maxTokens; opts.onModel?.(next); };
   for (;;) {
     let res: ChatOut;
     try {
-      res = await chatStream({ model, messages: convo, maxTokens, tools: tools.length ? tools : undefined, temperature, reasoning, signal: opts.signal,
-        onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking });
+      res = isClaude(model)
+        ? await anthropicStream({ model, system: opts.system, messages: convo, maxTokens, tools: tools.length ? tools : undefined, effort, signal: opts.signal, onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking })
+        : await chatStream({ model, messages: convo, maxTokens, tools: tools.length ? tools : undefined, temperature, reasoning, signal: opts.signal, onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking });
     } catch (e) {
+      if (opts.signal?.aborted) throw e;
+      if (isClaude(model) && e instanceof ProviderRequestError) {
+        // Anthropic overloaded or rate limited: one short pause and a second try before anything else.
+        if ((e.status === 429 || e.status === 529 || e.status === 503) && overloadRetries < 1) { overloadRetries++; await new Promise(r => setTimeout(r, 2000)); continue; }
+        if (e.status === 401 || e.status === 402 || e.status === 403 || (e.status === 400 && /credit|billing|balance/i.test(e.message))) markAnthropicDown(`HTTP ${e.status}: ${e.message.slice(0, 120)}`);
+        // Anything the Anthropic side refuses: hand the tier to the next candidate (a Kimi model) so the person still gets a result.
+        const next = await resolveModel(opts.tier, tried);
+        if (next !== model && out.length === 0) { console.warn('[provider] anthropic failed, switching', model, '->', next, `HTTP ${e.status}: ${e.message.slice(0, 160)}`); switchTo(next); continue; }
+      }
       // A temperature this model does not take: send none and try again.
       if (e instanceof ProviderRequestError && e.status === 400 && temperature !== undefined && /temperature/i.test(e.message)) { console.warn('[provider] temperature not accepted by', model); temperature = undefined; continue; }
-      // An output budget above what this model allows: come down to the documented floor for thinking models and try again.
-      if (e instanceof ProviderRequestError && e.status === 400 && maxTokens > 16000 && /max_tokens/i.test(e.message)) { console.warn('[provider] max_tokens', maxTokens, 'not accepted by', model); maxTokens = 16000; continue; }
+      // An output budget above what this model allows: come down a step and try again.
+      if (e instanceof ProviderRequestError && e.status === 400 && /max_tokens/i.test(e.message)) {
+        const lower = KIMI_MAX_TOKENS_STEPS.find(s => s < maxTokens);
+        if (lower) { console.warn('[provider] max_tokens', maxTokens, 'not accepted by', model, '; trying', lower); maxTokens = lower; continue; }
+      }
       // An id this account cannot use: refresh the list and try the next candidate once.
       if (!retriedModel && e instanceof ProviderRequestError && e.status === 404 && /model/i.test(e.message)) {
-        retriedModel = true; await availableModels(true); const next = await resolveModel(opts.tier, [model]);
-        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { model = next; reasoning = reasoningFor(opts.tier, model); temperature = temperatureFor(model, opts.temperature); continue; }
+        retriedModel = true; await availableModels(true); const next = await resolveModel(opts.tier, tried);
+        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { switchTo(next); continue; }
       }
       // A parameter this model does not take: drop it and try again.
       if (e instanceof ProviderRequestError && e.status === 400 && reasoning && /reasoning/i.test(e.message)) { console.warn('[provider] reasoning_effort not accepted by', model); reasoning = null; continue; }
@@ -218,12 +280,12 @@ export async function streamAnswer(opts: {
       }
       throw e;
     }
-    usage.in += res.usage.in; usage.out += res.usage.out; usage.cacheRead += res.usage.cacheRead;
-    console.log('[answer]', JSON.stringify({ model, finish: res.finish, tools: res.toolCalls.length, chars: out.length, in: res.usage.in, out: res.usage.out }));
+    usage.in += res.usage.in; usage.out += res.usage.out; usage.cacheRead += res.usage.cacheRead; usage.cacheWrite += res.usage.cacheWrite || 0;
+    console.log('[answer]', JSON.stringify({ model, finish: res.finish, tools: res.toolCalls.length, chars: out.length, in: res.usage.in, out: res.usage.out, cacheRead: res.usage.cacheRead }));
 
     if (res.finish === 'tool_calls' && res.toolCalls.length && rounds < MAX_TOOL_ROUNDS) {
       rounds++;
-      convo.push({ role: 'assistant', content: res.text || null, tool_calls: res.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })) });
+      convo.push({ role: 'assistant', content: res.text || null, tool_calls: res.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })), blocks: res.blocks });
       for (const c of res.toolCalls) {
         const hit = lookup.get(c.name);
         const call: ToolCall = { server: hit ? hit.spec.name : c.name, name: hit ? hit.tool : c.name };
@@ -244,10 +306,14 @@ export async function streamAnswer(opts: {
       continue;
     }
     if (res.finish === 'length' && continuations < MAX_CONTINUATIONS && out.trim().length > 0 && !/<\/learned>\s*$|<\/app>\s*$|<\/reply>\s*$/.test(out)) {
-      // Ran out of room mid-answer: hand the text back as a partial assistant message and let the model carry on.
+      // Ran out of room mid-answer: hand the text back and let the model carry on. Kimi takes it as a partial
+      // assistant message; Claude gets the text as the previous turn and a request to continue.
       continuations++;
       const last = convo[convo.length - 1];
-      if (last.role === 'assistant' && last.partial) last.content = out; else convo.push({ role: 'assistant', content: out, partial: true });
+      if (noPartial) {
+        if (last.role === 'user' && /^Continue exactly where you left off/.test(last.content || '')) { const prev = convo[convo.length - 2]; if (prev.role === 'assistant') prev.content = out; }
+        else { convo.push({ role: 'assistant', content: out }); convo.push({ role: 'user', content: 'Continue exactly where you left off, without repeating anything.' }); }
+      } else if (last.role === 'assistant' && last.partial) last.content = out; else convo.push({ role: 'assistant', content: out, partial: true });
       continue;
     }
     truncated = res.finish === 'length';
@@ -256,27 +322,21 @@ export async function streamAnswer(opts: {
   return { text: out, truncated, model, sources: [], usage, tools: toolCalls };
 }
 
-type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number } };
+type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number; cacheWrite?: number }; blocks?: ABlock[] };
 
-/** One streamed chat completion. Parses the SSE stream, collects text, tool calls and usage. */
+/** One streamed chat completion on Kimi. Parses the SSE stream, collects text, tool calls and usage. */
 async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature?: number; reasoning?: string | null; signal?: AbortSignal; onText: (d: string) => void; onThinking?: (d: string) => void }): Promise<ChatOut> {
   const body: Record<string, unknown> = { model: o.model, messages: o.messages, max_tokens: o.maxTokens, stream: true, stream_options: { include_usage: true } };
   if (o.temperature !== undefined) body.temperature = o.temperature;
   if (o.tools?.length) { body.tools = o.tools; body.tool_choice = 'auto'; }
   if (o.reasoning) body.reasoning_effort = o.reasoning;
   const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body), signal: o.signal });
-  if (!res.ok) {
-    const raw = await res.text().catch(() => '');
-    let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* not json */ }
-    const msg = (parsed as { error?: { message?: string } })?.error?.message || raw.slice(0, 300) || `HTTP ${res.status}`;
-    throw new ProviderRequestError(res.status, msg, parsed, String((parsed as { error?: { type?: string } })?.error?.type || ''));
-  }
+  if (!res.ok) throw await providerError(res);
   if (!res.body) throw new ProviderRequestError(502, 'Empty response from the model provider');
-  const reader = res.body.getReader(); const dec = new TextDecoder();
-  let buf = ''; let text = ''; let finish = 'stop';
+  let text = ''; let finish = 'stop';
   const calls = new Map<number, { id: string; name: string; arguments: string }>();
   const usage = { in: 0, out: 0, cacheRead: 0 };
-  const handle = (data: string) => {
+  await readSse(res.body, (data) => {
     if (data === '[DONE]') return;
     let j: { choices?: Array<{ delta?: { content?: string; reasoning_content?: string; tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }> }; finish_reason?: string | null }>; usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } };
     try { j = JSON.parse(data); } catch { return; }
@@ -290,38 +350,164 @@ async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens
     }
     if (ch?.finish_reason) finish = ch.finish_reason;
     if (j.usage) { usage.in = j.usage.prompt_tokens || usage.in; usage.out = j.usage.completion_tokens || usage.out; usage.cacheRead = j.usage.prompt_tokens_details?.cached_tokens || j.usage.cached_tokens || usage.cacheRead; }
+  });
+  const toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c], k) => ({ id: c.id || `call_${k}`, name: c.name, arguments: c.arguments }));
+  if (toolCalls.length && finish !== 'tool_calls') finish = 'tool_calls';
+  return { text, finish, toolCalls, usage };
+}
+
+/** The Anthropic Messages API's shape of a conversation. */
+type ABlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } } | { type: 'thinking'; thinking: string; signature: string } | { type: 'redacted_thinking'; data: string } | { type: 'tool_use'; id: string; name: string; input: unknown } | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+type AMessage = { role: 'user' | 'assistant'; content: ABlock[] };
+
+/** Our conversation, as Anthropic wants it: no system entries, tool results inside user turns, strict alternation. */
+function toAnthropicMessages(convo: ChatMessage[]): AMessage[] {
+  const out: AMessage[] = [];
+  const push = (role: 'user' | 'assistant', blocks: ABlock[]) => {
+    if (!blocks.length) return;
+    const last = out[out.length - 1];
+    if (last && last.role === role) last.content.push(...blocks); else out.push({ role, content: blocks });
   };
+  for (const m of convo) {
+    if (m.role === 'system') continue;
+    if (m.role === 'tool') { push('user', [{ type: 'tool_result', tool_use_id: m.tool_call_id || '', content: m.content || '', is_error: /^ERROR:/.test(m.content || '') || undefined }]); continue; }
+    if (m.role === 'assistant') {
+      if (m.blocks && m.blocks.length) { push('assistant', m.blocks); continue; }
+      const blocks: ABlock[] = [];
+      if (m.content && m.content.trim()) blocks.push({ type: 'text', text: m.content });
+      for (const c of m.tool_calls || []) { let input: unknown = {}; try { input = c.function.arguments ? JSON.parse(c.function.arguments) : {}; } catch { input = {}; } blocks.push({ type: 'tool_use', id: c.id, name: c.function.name, input }); }
+      push('assistant', blocks); continue;
+    }
+    if (m.content && m.content.trim()) push('user', [{ type: 'text', text: m.content }]);
+  }
+  // A conversation must start with the person; an assistant turn cannot be the last thing said unless it is a prefill, which thinking forbids.
+  while (out.length && out[0].role !== 'user') out.shift();
+  return out;
+}
+
+/**
+ * One streamed message on Anthropic: adaptive thinking with the tier's effort, the system prompt cached, tools
+ * offered when connectors are present. Parses the event stream into text, thinking, tool calls and usage.
+ */
+async function anthropicStream(o: { model: string; system: SystemBlock[]; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; effort: string | null; signal?: AbortSignal; onText: (d: string) => void; onThinking?: (d: string) => void }): Promise<ChatOut> {
+  const key = anthropicKey(); if (!key) throw new ProviderRequestError(401, 'ANTHROPIC_API_KEY is not set');
+  const system: ABlock[] = o.system.filter(b => b.text.trim()).map(b => b.cache ? { type: 'text', text: b.text, cache_control: { type: 'ephemeral' } } : { type: 'text', text: b.text });
+  const body: Record<string, unknown> = { model: o.model, max_tokens: o.maxTokens, stream: true, system, messages: toAnthropicMessages(o.messages), thinking: { type: 'adaptive' } };
+  if (o.effort) body.output_config = { effort: o.effort };
+  if (o.tools?.length) body.tools = o.tools.map(t => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters }));
+  const res = await fetch(`${anthropicBase()}/v1/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION }, body: JSON.stringify(body), signal: o.signal });
+  if (!res.ok) throw await providerError(res);
+  if (!res.body) throw new ProviderRequestError(502, 'Empty response from the model provider');
+  let text = ''; let stop = 'end_turn';
+  const blocks = new Map<number, { type: string; id: string; name: string; json: string; text: string; signature: string; data: string }>();
+  const usage = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 };
+  await readSse(res.body, (data) => {
+    let j: { type?: string; index?: number; message?: { usage?: AUsage }; content_block?: { type?: string; id?: string; name?: string; data?: string }; delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; signature?: string; stop_reason?: string }; usage?: AUsage; error?: { type?: string; message?: string } };
+    try { j = JSON.parse(data); } catch { return; }
+    switch (j.type) {
+      case 'message_start': { const u = j.message?.usage; if (u) readUsage(usage, u); break; }
+      case 'content_block_start': { const b = j.content_block; blocks.set(j.index ?? 0, { type: b?.type || 'text', id: b?.id || '', name: b?.name || '', json: '', text: '', signature: '', data: b?.data || '' }); break; }
+      case 'content_block_delta': {
+        const d = j.delta; const b = blocks.get(j.index ?? 0);
+        if (d?.type === 'text_delta' && d.text) { text += d.text; if (b) b.text += d.text; o.onText(d.text); }
+        else if (d?.type === 'thinking_delta' && d.thinking) { if (b) b.text += d.thinking; o.onThinking?.(d.thinking); }
+        else if (d?.type === 'signature_delta' && d.signature) { if (b) b.signature += d.signature; }
+        else if (d?.type === 'input_json_delta') { if (b) b.json += d.partial_json || ''; }
+        break;
+      }
+      case 'message_delta': { if (j.delta?.stop_reason) stop = j.delta.stop_reason; if (j.usage) readUsage(usage, j.usage); break; }
+      case 'error': throw new ProviderRequestError(502, j.error?.message || 'The model stream failed', j, j.error?.type || '');
+      default: break;
+    }
+  });
+  const ordered = [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b);
+  const toolCalls = ordered.filter(b => b.type === 'tool_use').map((b, k) => ({ id: b.id || `toolu_${k}`, name: b.name, arguments: b.json || '{}' }));
+  // The turn as produced, for replay in a tool loop: thinking (with its signature), text and tool_use blocks in order.
+  const replay: ABlock[] = [];
+  for (const b of ordered) {
+    if (b.type === 'thinking' && b.text) replay.push({ type: 'thinking', thinking: b.text, signature: b.signature });
+    else if (b.type === 'redacted_thinking' && b.data) replay.push({ type: 'redacted_thinking', data: b.data });
+    else if (b.type === 'text' && b.text.trim()) replay.push({ type: 'text', text: b.text });
+    else if (b.type === 'tool_use') { let input: unknown = {}; try { input = b.json ? JSON.parse(b.json) : {}; } catch { input = {}; } replay.push({ type: 'tool_use', id: b.id, name: b.name, input }); }
+  }
+  const finish = stop === 'tool_use' || toolCalls.length ? 'tool_calls' : stop === 'max_tokens' ? 'length' : stop === 'refusal' ? 'refusal' : 'stop';
+  return { text, finish, toolCalls, usage, blocks: replay };
+}
+type AUsage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+function readUsage(u: { in: number; out: number; cacheRead: number; cacheWrite: number }, a: AUsage) {
+  if (typeof a.input_tokens === 'number') u.in = a.input_tokens;
+  if (typeof a.output_tokens === 'number') u.out = a.output_tokens;
+  if (typeof a.cache_read_input_tokens === 'number') u.cacheRead = a.cache_read_input_tokens;
+  if (typeof a.cache_creation_input_tokens === 'number') u.cacheWrite = a.cache_creation_input_tokens;
+}
+
+/** Read a server-sent-event body line by line, handing each data payload to `onData`. */
+async function readSse(body: ReadableStream<Uint8Array>, onData: (data: string) => void): Promise<void> {
+  const reader = body.getReader(); const dec = new TextDecoder();
+  let buf = '';
   for (;;) {
     const { value, done } = await reader.read(); if (done) break;
     buf += dec.decode(value, { stream: true });
     let i: number;
     while ((i = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, i).replace(/\r$/, ''); buf = buf.slice(i + 1);
-      if (line.startsWith('data:')) handle(line.slice(5).trim());
+      if (line.startsWith('data:')) onData(line.slice(5).trim());
     }
   }
-  if (buf.startsWith('data:')) handle(buf.slice(5).trim());
-  const toolCalls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c], k) => ({ id: c.id || `call_${k}`, name: c.name, arguments: c.arguments }));
-  if (toolCalls.length && finish !== 'tool_calls') finish = 'tool_calls';
-  return { text, finish, toolCalls, usage };
+  if (buf.startsWith('data:')) onData(buf.slice(5).trim());
 }
 
-/** Small structured call (query planning, rewrites, Discover ideas). Returns parsed JSON or null. */
-export async function quickJson<T = unknown>(prompt: string, maxTokens = 400): Promise<T | null> {
+/** The provider's error, with its status and the body it sent (both providers use { error: { message, type } }). */
+async function providerError(res: Response): Promise<ProviderRequestError> {
+  const raw = await res.text().catch(() => '');
+  let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* not json */ }
+  const err = (parsed as { error?: { message?: string; type?: string } })?.error;
+  return new ProviderRequestError(res.status, err?.message || raw.slice(0, 300) || `HTTP ${res.status}`, parsed, String(err?.type || ''));
+}
+
+/**
+ * Small structured call (query planning, rewrites, Home suggestions). Returns parsed JSON or null. The tier
+ * picks the model: `quick` by default; `ideas` for Discover, which goes to the build model.
+ */
+export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, tier: Tier = 'quick'): Promise<T | null> {
   if (mockMode()) return null;
-  try {
-    const model = await resolveModel('quick');
-    const body: Record<string, unknown> = { model, max_tokens: maxTokens, messages: [{ role: 'system', content: 'Reply with valid JSON only: no prose, no markdown fences.' }, { role: 'user', content: prompt }] };
-    const temp = temperatureFor(model, 0.4); if (temp !== undefined) body.temperature = temp;
-    const effort = reasoningFor('quick', model); if (effort) body.reasoning_effort = effort;
-    const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body) });
-    if (!res.ok) { const raw = await res.text().catch(() => ''); let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* */ } throw new ProviderRequestError(res.status, (parsed as { error?: { message?: string } })?.error?.message || raw.slice(0, 200) || `HTTP ${res.status}`, parsed); }
-    const j = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const text = j.choices?.[0]?.message?.content || '';
-    const a = text.indexOf('['), b = text.lastIndexOf(']'); const oa = text.indexOf('{'), ob = text.lastIndexOf('}');
-    const slice = a >= 0 && (oa < 0 || a < oa) ? text.slice(a, b + 1) : text.slice(oa, ob + 1);
-    return JSON.parse(slice) as T;
-  } catch (e) { const p = describeProviderError(e); console.warn('[provider] quickJson failed', JSON.stringify({ code: p.code, status: p.status, type: p.type, message: p.message })); return null; }
+  const system = 'Reply with valid JSON only: no prose, no markdown fences.';
+  const tried: string[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const model = await resolveModel(tier, tried); tried.push(model);
+    try {
+      let text = '';
+      if (isClaude(model)) {
+        const r = await anthropicStream({ model, system: [{ text: system }], messages: [{ role: 'user', content: prompt }], maxTokens, effort: effortFor(tier, model), onText: (d) => { text += d; } });
+        console.log('[json]', JSON.stringify({ model, tier, in: r.usage.in, out: r.usage.out, cacheRead: r.usage.cacheRead }));
+      } else {
+        const body: Record<string, unknown> = { model, max_tokens: maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
+        const temp = temperatureFor(model, 0.4); if (temp !== undefined) body.temperature = temp;
+        const effort = reasoningFor(tier, model); if (effort) body.reasoning_effort = effort;
+        const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body) });
+        if (!res.ok) throw await providerError(res);
+        const j = await res.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+        text = j.choices?.[0]?.message?.content || '';
+        console.log('[json]', JSON.stringify({ model, tier, in: j.usage?.prompt_tokens, out: j.usage?.completion_tokens }));
+      }
+      return parseJsonLoosely<T>(text);
+    } catch (e) {
+      const p = describeProviderError(e);
+      console.warn('[provider] quickJson failed', JSON.stringify({ model, tier, code: p.code, status: p.status, type: p.type, message: p.message }));
+      if (isClaude(model) && (p.code === 'provider_auth' || p.code === 'provider_billing')) markAnthropicDown(p.message);
+      // A Claude failure hands the call to the next candidate once; a Kimi failure is final.
+      if (!isClaude(model)) return null;
+    }
+  }
+  return null;
+}
+
+/** The first JSON array or object in a reply, fences and prose around it ignored. */
+export function parseJsonLoosely<T>(text: string): T | null {
+  const t = text.replace(/```(?:json)?/gi, '');
+  const a = t.indexOf('['), b = t.lastIndexOf(']'); const oa = t.indexOf('{'), ob = t.lastIndexOf('}');
+  const slice = a >= 0 && (oa < 0 || a < oa) ? t.slice(a, b + 1) : t.slice(oa, ob + 1);
+  try { return JSON.parse(slice) as T; } catch { return null; }
 }
 
 async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; mcp?: McpServerSpec[] | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; onTool?: (call: ToolCall) => void; onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
@@ -376,7 +562,7 @@ Where do exported files go?
 async function mockBuild(opts: { messages: Msg[]; onText: (d: string) => void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
   const title = (opts.messages[0]?.content.match(/Idea to build: (.*)/) || [])[1] || 'Your app';
   const last = opts.messages[opts.messages.length - 1]?.content || '';
-  const request = (last.match(/My request: ([\s\S]*?)\n\nIf this asks/) || [])[1] || '';
+  const request = (last.match(/My request: ([\s\S]*?)\n\nIf this asks/) || [])[1] || (last.match(/A review of this version found[\s\S]*/) || [])[0] || '';
   // The stub answers questions with a reply and treats everything else as a change (a new version with a note).
   if (request && /\?\s*$/.test(request.trim())) {
     const full = `<reply>\nThis is the development stub answering your question about "${title}": ${request.trim()} In production the builder reads the current version and answers from it.\n</reply>`;
@@ -403,7 +589,13 @@ function render(){var l=document.getElementById('l');l.innerHTML='';items.forEac
 document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var t=document.getElementById('t');items.push({text:t.value,done:false});t.value='';save();render()});
 render();
 </script></body></html>
-</app>`;
+</app>
+<next>
+Add a due date to each item
+Add a filter for done and open items
+Add export to CSV
+Make it work well on a phone
+</next>`;
   for (let i = 0; i < full.length; i += 40) {
     if (opts.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     await new Promise(r => setTimeout(r, 12));

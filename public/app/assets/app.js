@@ -1348,7 +1348,7 @@ function discoverCard(it, i, cat) {
   const builds = (it.builds || []).slice(0, 4).map(x => `<span class="nchip"><span class="dot circle" style="background:var(--accent)"></span><span>${esc(x)}</span></span>`).join('');
   const hash = it.id ? `<span class="hash" title="Provenance id ${esc(it.id)} · graph ${esc(it.graphHash || '')}">${icon('loop', 11)}${esc(shortHash(it.id))}</span>` : '';
   const buildTip = caps().discover === 'full' ? 'Build a working version of this, personalised with your graph' : 'Building from Discover is part of the Team plan';
-  return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}"><button type="button" class="disc-open" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Ask Ricorsa about this idea">${previewHtml(it, cat, i + 1, i === 0)}<div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button><div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Start a thread about this idea">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
+  return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}"><button type="button" class="disc-open" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Ask Ricorsa about this idea">${previewHtml(it, cat, i + 1, i === 0)}<div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${it.why ? `<span class="why">${icon('sparkles', 12)}<span>${esc(it.why)}</span></span>` : ''}${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button><div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(it.prompt || it.title)}" data-idx="${i}" title="Start a thread about this idea">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
 }
 async function fetchDiscover(cat, refresh) {
   const btn = $('[data-gen]'); if (btn) { btn.disabled = true; btn.innerHTML = icon('sparkles', 15) + '<span class="dots">Generating</span>'; }
@@ -1405,9 +1405,12 @@ async function runBuildRequest(body) {
     const live = st.live; if (!live) return;
     if (ev === 'meta') { if (!st.sessionId && data.sessionId) { st.sessionId = data.sessionId; if (location.hash === '#/build/live') { history.replaceState(null, '', '#/build/' + data.sessionId); state.route = parseRoute(); } } live.buildId = data.buildId; live.version = data.version; live.lineage = data.lineage; }
     else if (ev === 'status') { live.statusText = data.text || ''; paintStudio(); }
+    else if (ev === 'model') { live.model = data.model || ''; paintStudio(); }
     else if (ev === 'phase') {
-      // The review found parts that do not work: the builder rewrites the document, streamed from the top again.
-      if (data.text === 'repair') { live.raw = ''; live.html = ''; live.issues = data.issues || []; live.statusText = 'Fixing what the review found'; }
+      // review: the version is being opened in a browser; repair: the builder rewrites the document, streamed from the top again; final: the check's summary.
+      if (data.text === 'review') { live.checking = true; live.issues = null; live.statusText = data.round ? 'Checking the fixed version in a browser' : 'Checking the app in a browser'; }
+      if (data.text === 'repair') { live.checking = false; live.raw = ''; live.html = ''; live.issues = data.issues || []; live.round = data.round || 1; live.ran = !!data.ran; live.statusText = 'Fixing what the check found'; }
+      if (data.text === 'final') { live.checking = false; live.check = data.check || null; live.left = data.left || []; }
       paintStudio(true);
     }
     else if (ev === 'plan') { live.plan = data.text || ''; paintStudio(); }
@@ -1470,9 +1473,29 @@ function studioMessageHtml(m, st) {
   if (m.kind === 'plan') {
     const lines = String(m.text || '').split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean);
     const v = st.versions.find(x => x.id === m.buildId);
-    return `<div class="smsg bot"><div class="bubble"><div class="smsg-title">${icon('zap', 14)}Version ${esc(m.version || (v && v.version) || '')} ${v && v.status === 'done' ? 'is ready' : 'was written'}</div><ul class="build-plan">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul></div>${m.buildId ? `<div class="smsg-actions"><button type="button" class="btn sm${st.selected === (m.version || (v && v.version)) ? ' primary' : ''}" data-show-version="${esc(m.version || (v && v.version) || '')}">${icon('external', 13)}Show this version</button></div>` : ''}</div>`;
+    return `<div class="smsg bot"><div class="bubble"><div class="smsg-title">${icon('zap', 14)}Version ${esc(m.version || (v && v.version) || '')} ${v && v.status === 'done' ? 'is ready' : 'was written'}</div><ul class="build-plan">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>${checkLineHtml(m)}</div>${m.buildId ? `<div class="smsg-actions"><button type="button" class="btn sm${st.selected === (m.version || (v && v.version)) ? ' primary' : ''}" data-show-version="${esc(m.version || (v && v.version) || '')}">${icon('external', 13)}Show this version</button></div>` : ''}</div>`;
   }
   return `<div class="smsg bot"><div class="bubble">${md(m.text || '')}</div></div>`;
+}
+/** A readable name for the model that wrote a version. */
+function modelName(id) {
+  const m = String(id || '');
+  if (!m) return '';
+  if (/^claude-fable/i.test(m)) return 'Claude Fable ' + (m.match(/fable-(\d+)(?:-(\d+))?/i) ? m.match(/fable-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
+  if (/^claude-opus/i.test(m)) return 'Claude Opus ' + (m.match(/opus-(\d+)(?:-(\d+))?/i) ? m.match(/opus-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
+  if (/^claude-sonnet/i.test(m)) return 'Claude Sonnet ' + (m.match(/sonnet-(\d+)(?:-(\d+))?/i) ? m.match(/sonnet-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
+  if (/^kimi-k(\d[\d.]*)/i.test(m)) return 'Kimi K' + m.match(/^kimi-k(\d[\d.]*)/i)[1] + (/code/i.test(m) ? ' code' : '');
+  return m;
+}
+/** What the check of a version found, under its plan: how it was checked and what, if anything, is left. */
+function checkLineHtml(m) {
+  const c = m.check; if (!c) return m.model ? `<div class="smsg-sub">Written by ${esc(modelName(m.model))}</div>` : '';
+  const by = m.model ? `Written by ${esc(modelName(m.model))} · ` : '';
+  let line;
+  if (c.ran) line = `${by}Opened in a browser: ${c.clicked} control${c.clicked === 1 ? '' : 's'} pressed, ${c.screens} screen${c.screens === 1 ? '' : 's'} opened${c.rounds ? `, ${c.rounds} fix round${c.rounds === 1 ? '' : 's'}` : ''}${c.left ? ` · ${c.left} note${c.left === 1 ? '' : 's'} left` : ' · everything responded'}`;
+  else line = `${by}Checked by a code review${c.rounds ? ` with ${c.rounds} fix round${c.rounds === 1 ? '' : 's'}` : ''}${c.left ? ` · ${c.left} note${c.left === 1 ? '' : 's'} left` : ''}`;
+  const left = m.left && m.left.length ? `<details class="build-left"><summary>What is left</summary><ul>${m.left.map(l => `<li>${esc(l)}</li>`).join('')}</ul></details>` : '';
+  return `<div class="smsg-sub check">${icon('check', 12)}<span>${line}</span></div>${left}`;
 }
 function paintStudio(final) {
   const root = $('[data-studio]'); const st = state.studio; if (!root || !st) return;
@@ -1497,7 +1520,7 @@ function paintStudio(final) {
   let html = st.messages.map(m => studioMessageHtml(m, st)).join('');
   if (live) {
     if (live.reply) html += `<div class="smsg bot"><div class="bubble">${md(live.reply)}</div></div>`;
-    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing the review findings' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}Review: ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix before this version is done</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written</div>` : ''}</div></div>`;
+    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing what the check found' : live.checking ? 'checking it in a browser' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}${live.ran ? 'The browser check found' : 'The review found'} ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix${live.round > 1 ? ` (round ${live.round})` : ''}</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written${live.model ? ` · ${esc(modelName(live.model))}` : ''}</div>` : (live.model ? `<div class="smsg-sub">${esc(modelName(live.model))}</div>` : '')}</div></div>`;
   }
   msgs.innerHTML = html || `<div class="empty">${icon('zap', 24)}<div>Nothing here yet.</div></div>`;
   $$('[data-show-version]', msgs).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.showVersion)));
@@ -1764,7 +1787,8 @@ function openSettings() {
     <div class="setting"><div class="l"><b>Default focus</b><small>Shapes the framing and the kind of references used.</small></div>${sel('stFocus', FOCI, s.focus)}</div>
     <div class="setting"><div class="l"><b>Answer length</b><small>Applies to Search mode.</small></div>${sel('stLen', LENGTHS, s.length)}</div>
     <div class="setting"><div class="l"><b>Learning loop</b><small>Let each answer update your identity graph, which shapes how later questions are read.</small></div><select id="stLearn"><option value="on"${state.graph && state.graph.paused ? '' : ' selected'}>On</option><option value="paused"${state.graph && state.graph.paused ? ' selected' : ''}>Paused</option></select></div>
-    ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Pro or Team customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="pro"${s.demoPlan === 'pro' ? ' selected' : ''}>Pro</option><option value="team"${s.demoPlan === 'team' ? ' selected' : ''}>Team</option></select></div>` : ''}
+    ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Pro or Team customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="pro"${s.demoPlan === 'pro' ? ' selected' : ''}>Pro</option><option value="team"${s.demoPlan === 'team' ? ' selected' : ''}>Team</option></select></div>
+    <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Pro or Team without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>` : ''}
     <div class="setting"><div class="l"><b>Plan and usage</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. No question limits. Today ${state.usage.today} questions, this month ${state.usage.month}${state.usage.research ? `, Research ${state.usage.research}` : ''}.` : `${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.`}</small></div><a class="btn sm" href="/account">Account</a></div>
     <div class="setting"><div class="l"><b>Export everything</b><small>All threads, Spaces and your graph as one JSON file.</small></div><a class="btn sm" href="/api/account/export">${icon('download', 14)}Export</a></div>
     <div class="setting"><div class="l"><b>Sign out</b><small>Signed in as ${esc(state.user ? (state.user.email || state.user.name || '') : '')}. Sign out to switch to a different account.</small></div><a class="btn sm" href="/auth/logout">Sign out</a></div>
@@ -1775,6 +1799,27 @@ function openSettings() {
       bind('#stMode', 'mode'); bind('#stTier', 'tier'); bind('#stFocus', 'focus'); bind('#stLen', 'length');
       const demo = $('#stDemo'); if (demo) demo.addEventListener('change', async e => { s.demoPlan = e.target.value; try { await api('/api/me', { method: 'PATCH', body: { demoPlan: e.target.value } }); await bootstrap(); renderSidebar(); render(); toast(e.target.value ? `Showing Ricorsa as a ${state.plan ? state.plan.name : e.target.value} customer` : 'Back to full admin access'); } catch (err) { apiToast(err); } });
       $('#stLearn').addEventListener('change', async e => { try { await setGraphPaused(e.target.value === 'paused'); } catch (err) { apiToast(err); } });
+      const gr = $('[data-grants]', ov); if (gr) gr.addEventListener('click', () => grantsModal());
+    }
+  });
+}
+/** Admins: plans granted by email, and a form to add one. */
+async function grantsModal() {
+  let grants = [];
+  try { const r = await api('/api/admin/grants'); grants = r.grants || []; } catch (e) { apiToast(e, 'Could not load the grants'); return; }
+  const when = (v) => v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const rows = grants.length ? grants.map(g => `<tr><td>${esc(g.email)}</td><td>${esc(g.plan === 'team' ? 'Team' : 'Pro')}${g.status === 'TRIAL' ? ' trial' : ''}</td><td>${g.endsAt ? 'until ' + esc(when(g.endsAt)) : 'open-ended'}</td><td>${g.appliedTo ? `<span class="ok">Applied ${esc(when(g.appliedAt))}</span>` : '<span class="muted">Waiting for first sign-in</span>'}</td><td><button type="button" class="btn sm ghost" data-del-grant="${esc(g.email)}" title="Remove this grant">${icon('trash', 13)}</button></td></tr>`).join('') : '<tr><td colspan="5" class="muted">No grants yet.</td></tr>';
+  openModal(`<h2>${icon('key', 20)}Plans granted by email</h2><p class="sub">The plan lands on the account the first time the person signs in with that address, or right away if they already have one. Ends on the date you set, or never.</p>
+    <form id="grantForm" class="grant-form"><div class="field"><label for="grEmail">Email</label><input type="email" id="grEmail" required placeholder="name@company.com"></div><div class="field"><label for="grPlan">Plan</label><select id="grPlan"><option value="team">Team</option><option value="pro">Pro</option></select></div><div class="field"><label for="grKind">Kind</label><select id="grKind"><option value="LICENSED">Licence</option><option value="TRIAL">Trial</option></select></div><div class="field"><label for="grEnds">Ends (optional)</label><input type="date" id="grEnds"></div><div class="field wide"><label for="grNote">Note (optional)</label><input type="text" id="grNote" maxlength="200" placeholder="e.g. Marketing consultant"></div><button type="submit" class="btn primary sm">${icon('plus', 14)}Grant</button></form>
+    <div class="grant-list"><table class="grants"><thead><tr><th>Email</th><th>Plan</th><th>Ends</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="modal-actions"><button type="button" class="btn" data-close>Done</button></div>`, {
+    onMount: ov => {
+      $('#grantForm', ov).addEventListener('submit', async e => {
+        e.preventDefault();
+        const body = { email: $('#grEmail', ov).value.trim(), plan: $('#grPlan', ov).value, status: $('#grKind', ov).value, endsAt: $('#grEnds', ov).value || null, note: $('#grNote', ov).value.trim() };
+        try { const r = await api('/api/admin/grants', { body }); toast(r.applied ? `${body.email} now has ${body.plan === 'team' ? 'Team' : 'Pro'}` : `${body.email} gets ${body.plan === 'team' ? 'Team' : 'Pro'} at first sign-in`); grantsModal(); } catch (err) { apiToast(err, 'Could not save the grant'); }
+      });
+      $$('[data-del-grant]', ov).forEach(b => b.addEventListener('click', async () => { try { await api('/api/admin/grants?email=' + encodeURIComponent(b.dataset.delGrant), { method: 'DELETE' }); toast('Grant removed'); grantsModal(); } catch (err) { apiToast(err); } }));
     }
   });
 }
