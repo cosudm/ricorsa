@@ -656,7 +656,7 @@ async function runConsoleAction(a, thread, btn) {
       if (!state.catalog) { try { await loadConnectors(); } catch (e) { /* the modal copes without a catalog */ } }
       const key = String(a.id || ''); const preset = (state.catalog || []).find(p => p.key === key);
       if (!preset) { toast('That connector is not in the catalog', 'bad'); return; }
-      if (preset.flow === 'vault') vaultConnectModal(preset); else addConnectorModal(key);
+      addConnectorModal(key);
       return;
     }
     if (verb === 'app.open') {
@@ -1979,14 +1979,14 @@ function paintConnectors() {
   if (!list.length) {
     const picks = (state.catalog || []).filter(p => p.key !== 'custom').slice(0, 6);
     html += `<div class="conn-empty"><div class="empty">${icon('plug', 28)}<div>No connectors yet.</div><p>Start with one of these, or add any MCP server by URL.</p></div>
-      <div class="conn-cat">${picks.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}" ${limit <= 0 && !admin ? 'disabled' : ''}><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${p.flow === 'vault' ? 'One-time code by email' : esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div></div>`;
+      <div class="conn-cat">${picks.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}" ${limit <= 0 && !admin ? 'disabled' : ''}><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${p.flow === 'vault' ? 'One-time code by email' : p.flow === 'site' ? 'Reads the site for you' : esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div></div>`;
   } else {
     html += `<div class="conn-list">${list.map(c => {
-      const st = connStatus(c); const dom = c.preset === 'vdrpros' ? 'VDRPros Vault' : (domainOf(c.url) || c.url);
+      const st = connStatus(c); const dom = c.preset === 'vdrpros' ? 'VDRPros Vault' : c.preset === 'website' && c.site ? (domainOf(c.site.rootUrl) || c.site.rootUrl) : (domainOf(c.url) || c.url);
       return `<div class="conn-card${c.enabled ? '' : ' off'}" data-conn="${esc(c.id)}">
         <div class="conn-main">
-          <span class="conn-logo" style="background:${c.preset === 'vdrpros' ? '#0B6E63' : colorFor(c.name)}">${c.preset === 'vdrpros' ? 'V' : esc(c.name[0] || '?').toUpperCase()}</span>
-          <div class="conn-txt"><b>${esc(c.name)}</b><span class="conn-url" title="${esc(c.url)}">${esc(dom)} · ${c.preset === 'vdrpros' ? 'Connected with a one-time code' : esc(AUTH_LABEL[c.authType] || c.authType)}</span>
+          <span class="conn-logo" style="background:${c.preset === 'vdrpros' ? '#0B6E63' : colorFor(c.name)}">${c.preset === 'vdrpros' ? 'V' : c.preset === 'website' ? 'W' : esc(c.name[0] || '?').toUpperCase()}</span>
+          <div class="conn-txt"><b>${esc(c.name)}</b><span class="conn-url" title="${esc(c.preset === 'website' && c.site ? c.site.rootUrl : c.url)}">${esc(dom)} · ${c.preset === 'vdrpros' ? 'Connected with a one-time code' : c.preset === 'website' ? (c.site ? `${c.site.pages} page${c.site.pages === 1 ? '' : 's'} read${c.site.rendered ? ` (${c.site.rendered} in a browser)` : ''}${c.site.crawledAt ? ` · ${new Date(c.site.crawledAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}` : 'Website') : esc(AUTH_LABEL[c.authType] || c.authType)}</span>
             <span class="conn-status ${st.cls}">${esc(st.text)}${c.lastError && c.status !== 'ok' ? `: ${esc(truncate(c.lastError, 120))}` : ''}</span></div>
           <label class="switch${c.enabled ? ' on' : ''}" title="${c.enabled ? 'On: its tools are available to answers' : 'Off: kept, but not used'}" data-toggle><i></i><span>${c.enabled ? 'On' : 'Off'}</span></label>
         </div>
@@ -1994,7 +1994,8 @@ function paintConnectors() {
           ${c.authType === 'oauth' ? `<a class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" href="/api/connectors/${encodeURIComponent(c.id)}/oauth/start" title="Sign in to the app and approve access">${icon('key', 14)}<span>${c.status === 'needs_auth' ? 'Sign in' : 'Sign in again'}</span></a>` : ''}
           <button type="button" class="btn sm" data-test title="Reach the server and refresh its tool list">${icon('refresh', 14)}<span>Test</span></button>
           <button type="button" class="btn sm" data-tools title="Choose which of its tools Ricorsa may use" ${c.tools.length ? '' : 'disabled'}>${icon('check', 14)}<span>Tools</span></button>
-          ${c.preset === 'vdrpros' ? `<button type="button" class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" data-reconnect title="Connect the Vault again with a new code">${icon('key', 14)}<span>Reconnect</span></button>` : `<button type="button" class="btn sm" data-edit title="Rename, change the URL or the token">${icon('edit', 14)}<span>Edit</span></button>`}
+          ${c.preset === 'website' ? `<button type="button" class="btn sm" data-reread title="Read the site again and replace its pages">${icon('loop', 14)}<span>Read again</span></button>` : ''}
+          ${c.preset === 'vdrpros' ? `<button type="button" class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" data-reconnect title="Connect the Vault again with a new code">${icon('key', 14)}<span>Reconnect</span></button>` : c.preset === 'website' ? '' : `<button type="button" class="btn sm" data-edit title="Rename, change the URL or the token">${icon('edit', 14)}<span>Edit</span></button>`}
           <button type="button" class="btn sm danger" data-remove title="Remove this connector and its credentials">${icon('trash', 14)}<span>Remove</span></button>
         </div>
       </div>`; }).join('')}</div>`;
@@ -2009,6 +2010,7 @@ function paintConnectors() {
     const tb = $('[data-tools]', card); if (tb) tb.addEventListener('click', () => toolsModal(c));
     const eb = $('[data-edit]', card); if (eb) eb.addEventListener('click', () => editConnectorModal(c));
     const rb = $('[data-reconnect]', card); if (rb) rb.addEventListener('click', () => vaultConnectModal((state.catalog || []).find(p => p.key === 'vdrpros'), c));
+    const rr = $('[data-reread]', card); if (rr) rr.addEventListener('click', () => siteReadModal(c));
     $('[data-remove]', card).addEventListener('click', () => openModal(`<h2>Remove ${esc(c.name)}?</h2><p class="sub">Its credentials are deleted from your account. Past answers keep their notes.</p><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="cDel">Remove</button></div>`, {
       onMount: () => $('#cDel').addEventListener('click', async () => { try { await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'DELETE' }); state.connectors = state.connectors.filter(x => x.id !== c.id); closeModal(); paintConnectors(); toast('Connector removed'); } catch (err) { apiToast(err); } })
     }));
@@ -2019,13 +2021,14 @@ function addConnectorModal(presetKey) {
   const preset = presetKey ? cat.find(p => p.key === presetKey) : null;
   if (!preset) {
     openModal(`<h2>Add a connector</h2><p class="sub">Pick an app, or connect any MCP server by URL.</p>
-      <div class="conn-cat modal-cat">${cat.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}"><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${p.flow === 'vault' ? 'One-time code by email' : esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div>
+      <div class="conn-cat modal-cat">${cat.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}"><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${p.flow === 'vault' ? 'One-time code by email' : p.flow === 'site' ? 'Reads the site for you' : esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div>
       <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button></div>`, {
       onMount: ov => $$('[data-pick]', ov).forEach(b => b.addEventListener('click', () => addConnectorModal(b.dataset.pick)))
     });
     return;
   }
   if (preset.flow === 'vault') { vaultConnectModal(preset); return; }
+  if (preset.flow === 'site') { siteConnectModal(preset); return; }
   const custom = preset.key === 'custom';
   const authOpts = ['none', 'bearer', 'oauth'].map(a => `<option value="${a}"${a === preset.auth ? ' selected' : ''}>${AUTH_LABEL[a]}</option>`).join('');
   openModal(`<h2>${custom ? 'Custom MCP server' : 'Connect ' + esc(preset.name)}</h2><p class="sub">${esc(preset.blurb)}${preset.docs ? ` <a href="${esc(preset.docs)}" target="_blank" rel="noopener">Vendor docs</a>` : ''}</p>
@@ -2054,6 +2057,53 @@ function addConnectorModal(presetKey) {
       });
       $('#cName').focus();
     }
+  });
+}
+/**
+ * Connecting a website: the address and how many pages to read; Ricorsa reads the site (rendering pages that are
+ * applications) with progress shown as it goes, and the connector appears with its pages counted.
+ */
+function siteConnectModal(preset) {
+  openModal(`<h2>${icon('globe', 20)}Connect a website</h2><p class="sub">Ricorsa reads the site's pages, keeps their text in your account, and searches them when you ask; answers cite the pages. Pages that only show their content in a browser are opened in one.</p>
+    <div class="field"><label for="sUrl">Website address</label><input type="url" id="sUrl" maxlength="500" placeholder="https://example.com" autocomplete="off"></div>
+    <div class="field"><label for="sPages">Pages to read</label><select id="sPages"><option value="10">Up to 10</option><option value="25">Up to 25</option><option value="40" selected>Up to 40</option><option value="60">Up to 60</option></select></div>
+    <div class="site-progress" id="sProg" hidden><span class="spinner tiny"></span><span id="sProgText">Opening the site</span></div>
+    <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="sGo">Read the site</button></div>`, {
+    onMount: ov => {
+      const go = async () => {
+        const url = $('#sUrl', ov).value.trim(); if (!url) { $('#sUrl', ov).focus(); return; }
+        const b = $('#sGo', ov); b.disabled = true; $('#sProg', ov).hidden = false;
+        try {
+          const res = await fetch('/api/connectors/site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ url, maxPages: +$('#sPages', ov).value }) });
+          if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || 'The site could not be read'); }
+          let done = null, failed = null;
+          await readSse(res, (ev, data) => { if (ev === 'status') { const t = $('#sProgText', ov); if (t) t.textContent = data.text || 'Reading'; } else if (ev === 'done') done = data; else if (ev === 'error') failed = data; });
+          if (failed) throw new Error(failed.message || 'The site could not be read');
+          if (!done) throw new Error('The read was cut off');
+          state.connectors = [...(state.connectors || []), done.connector]; closeModal(); paintConnectors();
+          toast(`${done.connector.name}: ${done.pages} page${done.pages === 1 ? '' : 's'} read${done.rendered ? `, ${done.rendered} in a browser` : ''}`);
+        } catch (err) { $('#sProg', ov).hidden = true; b.disabled = false; toast(err.message || 'The site could not be read', 'bad'); }
+      };
+      $('#sGo', ov).addEventListener('click', go); $('#sUrl', ov).addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); $('#sUrl', ov).focus();
+    }
+  });
+}
+/** Read a connected site again, with progress, replacing its pages. */
+function siteReadModal(c) {
+  openModal(`<h2>${icon('globe', 20)}Read ${esc(c.name)} again</h2><p class="sub">${esc(c.site ? c.site.rootUrl : '')}<br>The pages on file are replaced by what the site says now.</p>
+    <div class="site-progress" id="sProg" hidden><span class="spinner tiny"></span><span id="sProgText">Opening the site</span></div>
+    <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="sGo">Read again</button></div>`, {
+    onMount: ov => $('#sGo', ov).addEventListener('click', async () => {
+      const b = $('#sGo', ov); b.disabled = true; $('#sProg', ov).hidden = false;
+      try {
+        const res = await fetch('/api/connectors/' + encodeURIComponent(c.id) + '/site', { method: 'POST', credentials: 'same-origin' });
+        if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || 'The site could not be read'); }
+        let done = null, failed = null;
+        await readSse(res, (ev, data) => { if (ev === 'status') { const t = $('#sProgText', ov); if (t) t.textContent = data.text || 'Reading'; } else if (ev === 'done') done = data; else if (ev === 'error') failed = data; });
+        if (failed) throw new Error(failed.message || 'The site could not be read');
+        if (done) { Object.assign(c, done.connector); closeModal(); paintConnectors(); toast(`${c.name}: ${done.pages} page${done.pages === 1 ? '' : 's'} read`); }
+      } catch (err) { $('#sProg', ov).hidden = true; b.disabled = false; toast(err.message || 'The site could not be read', 'bad'); }
+    })
   });
 }
 /**

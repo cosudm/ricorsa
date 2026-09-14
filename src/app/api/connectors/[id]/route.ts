@@ -42,6 +42,7 @@ export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const c = await getConnectorOwned(user.id, id);
   // A Vault connection is revoked on the Vault side too, so the token dies with the connector (best effort).
   if (isVaultConnector(c)) { try { const s = await openJson<ConnectorSecret>(c.secret); if (s?.vaultConnectionId) await vaultClient('/connect/revoke', { connectionId: s.vaultConnectionId }); } catch (e) { console.warn('[vault] revoke failed', String((e as Error)?.message || e)); } }
+  if (c.preset === 'website') { try { await db().delete(schema.sitePages).where(eq(schema.sitePages.connectorId, id)); await db().delete(schema.sites).where(eq(schema.sites.connectorId, id)); } catch (e) { console.warn('site rows not removed', e); } }
   await db().delete(schema.connectors).where(and(eq(schema.connectors.id, id), eq(schema.connectors.userId, user.id)));
   return json({ ok: true });
 });

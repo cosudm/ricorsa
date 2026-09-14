@@ -18,6 +18,7 @@ import { planFor } from '@/lib/plans';
 import { loadAttachments, claimAttachments, filesBlock, metaOf } from '@/lib/files';
 import { isVaultConnector, numberVaultHits, numberVaultPages } from '@/lib/vault';
 import { CONSOLE_GUIDE, consoleContext } from '@/lib/console';
+import { SITE_PRESET, numberSiteHits, numberSitePage } from '@/lib/sites';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -135,6 +136,8 @@ export async function POST(req: Request) {
         try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors); } catch (e) { console.warn('connectors unavailable', e); }
         // Vault connectors: their search hits and read pages become numbered sources the answer can cite and the reader can open.
         const vaultByServer = new Map(mcp.filter(m => isVaultConnector({ preset: m.preset, url: m.url })).map(m => [m.name, m.id]));
+        // Website connectors: their search hits and read pages become numbered sources with real page URLs.
+        const siteByServer = new Map(mcp.filter(m => m.preset === SITE_PRESET).map(m => [m.name, m.label]));
         // Consoles ride along with Search answers: the guide plus what the person actually has, so buttons act on real things.
         let consoles = '';
         if (turn.mode !== 'research') { try { consoles = `${CONSOLE_GUIDE}\n\n${await consoleContext(user.id, { canBuild: user.admin || planFor(user.plan).caps.discover === 'full' })}`; } catch (e) { console.warn('console context unavailable', e); } }
@@ -151,6 +154,15 @@ export async function POST(req: Request) {
           maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' || attached.length ? 6000 : 4000),
           onStatus: (text) => { if (!wroteText) send('status', { text }); },
           onToolResult: (call, r) => {
+            const siteLabel = siteByServer.get(call.server);
+            if (siteLabel && !r.isError) {
+              const out = call.name === 'site_search' ? numberSiteHits(siteLabel, r.text, r.structured, sources.length, sources) : call.name === 'site_read' ? numberSitePage(siteLabel, r.text, r.structured, sources.length, sources) : null;
+              if (!out || !out.added.length) return out?.text;
+              sources = [...sources, ...out.added];
+              turn.sources = sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url }));
+              send('sources', turn.sources);
+              return out.text;
+            }
             const connId = vaultByServer.get(call.server); if (!connId) return;
             const out = call.name === 'vault_search' ? numberVaultHits(connId, r.text, r.structured, sources.length, sources) : (call.name === 'vault_read' || call.name === 'vault_document') ? numberVaultPages(connId, r.text, r.structured, sources.length, sources) : null;
             if (!out || !out.added.length) return out?.text;

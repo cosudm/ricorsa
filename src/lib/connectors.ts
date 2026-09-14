@@ -15,7 +15,7 @@ import { VAULT_PRESET, vaultConfigured, vaultMcpUrl } from './vault';
 export type ConnectorRow = typeof schema.connectors.$inferSelect;
 
 /** Well-known remote MCP servers. URLs are the vendors' published endpoints; each one can be edited before saving. */
-export type Preset = { key: string; name: string; url: string; auth: ConnectorAuth; blurb: string; tokenHint?: string; docs?: string; /** A first-party connect flow instead of a token or OAuth: 'vault' asks for the person's Vault email and a one-time code. */ flow?: 'vault'; available?: boolean };
+export type Preset = { key: string; name: string; url: string; auth: ConnectorAuth; blurb: string; tokenHint?: string; docs?: string; /** A first-party connect flow instead of a token or OAuth: 'vault' asks for the person's Vault email and a one-time code; 'site' asks for a website address and reads its pages. */ flow?: 'vault' | 'site'; available?: boolean };
 export const CATALOG: Preset[] = [
   { key: 'vdrpros', name: 'VDRPros Vault', url: 'https://vault.vdrpros.com/mcp', auth: 'bearer', flow: 'vault', blurb: 'Your Vault workspaces: depositions, transcripts, exhibits, records and correspondence, searched page by page with citations that open the page. Connect with a one-time code sent to your Vault email.', docs: 'https://vdrpros.com/' },
   { key: 'github', name: 'GitHub', url: 'https://api.githubcopilot.com/mcp/', auth: 'bearer', blurb: 'Repositories, issues, pull requests and code search.', tokenHint: 'A GitHub personal access token (fine-grained, with the repos you want to reach).', docs: 'https://github.com/github/github-mcp-server' },
@@ -31,6 +31,7 @@ export const CATALOG: Preset[] = [
   { key: 'cloudflare-docs', name: 'Cloudflare docs', url: 'https://docs.mcp.cloudflare.com/mcp', auth: 'none', blurb: 'Search Cloudflare documentation. No sign-in needed; a good first test.', docs: 'https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/' },
   { key: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', auth: 'bearer', blurb: 'Models, datasets, papers and Spaces.', tokenHint: 'A Hugging Face access token (read).', docs: 'https://huggingface.co/settings/mcp' },
   { key: 'zapier', name: 'Zapier', url: 'https://mcp.zapier.com/api/mcp/mcp', auth: 'bearer', blurb: 'Thousands of apps through the actions you enable in Zapier.', tokenHint: 'The token from your Zapier MCP server page (or paste the full URL Zapier gives you).', docs: 'https://zapier.com/mcp' },
+  { key: 'website', name: 'Website', url: '', auth: 'bearer', flow: 'site', blurb: 'Any public website or web app. Ricorsa reads its pages (in a browser when they need one), keeps the text, and searches it when you ask, citing the pages.' },
   { key: 'custom', name: 'Custom MCP server', url: '', auth: 'none', blurb: 'Any remote MCP server reachable over HTTPS: your own, your company’s, or one from a vendor not listed here.' },
 ];
 
@@ -67,16 +68,23 @@ export type ClientConnector = {
   id: string; name: string; serverName: string; preset: string | null; url: string; authType: ConnectorAuth; enabled: boolean;
   allowedTools: string[] | null; tools: ConnectorTool[]; status: ConnectorStatus; lastError: string | null; lastCheckedAt: number | null;
   hasCredential: boolean; createdAt: number; updatedAt: number;
+  /** Website connectors: the site behind it and how much of it has been read. */
+  site?: { rootUrl: string; pages: number; chars: number; rendered: number; status: string; error: string | null; crawledAt: number | null } | null;
 };
 
 export async function toClient(c: ConnectorRow): Promise<ClientConnector> {
   const s = await openJson<ConnectorSecret>(c.secret);
-  return {
+  const out: ClientConnector = {
     id: c.id, name: c.name, serverName: c.serverName, preset: c.preset, url: c.url, authType: c.authType, enabled: !!c.enabled,
     allowedTools: c.allowedTools || null, tools: (c.tools || []).slice(0, MAX_TOOLS_SHOWN), status: c.status, lastError: c.lastError,
     lastCheckedAt: c.lastCheckedAt ? new Date(c.lastCheckedAt).getTime() : null,
     hasCredential: !!(s && (s.token || s.accessToken)), createdAt: new Date(c.createdAt).getTime(), updatedAt: new Date(c.updatedAt).getTime(),
   };
+  if (c.preset === 'website') {
+    const site = (await db().select().from(schema.sites).where(eq(schema.sites.connectorId, c.id)).limit(1))[0];
+    out.site = site ? { rootUrl: site.rootUrl, pages: site.pages, chars: site.chars, rendered: site.rendered, status: site.status, error: site.error, crawledAt: site.crawledAt ? new Date(site.crawledAt).getTime() : null } : null;
+  }
+  return out;
 }
 
 export async function listConnectors(userId: string): Promise<ConnectorRow[]> {
@@ -140,5 +148,5 @@ export function connectorsPromptBlock(list: ModelConnector[]): string {
     const names = (c.allowedTools || c.tools.map(t => t.name)).slice(0, 12);
     return `- ${c.label} (server "${c.name}")${names.length ? `: ${names.join(', ')}${(c.allowedTools || c.tools).length > 12 ? ', …' : ''}` : ''}`;
   });
-  return `Connected apps. The person has linked these outside apps and MCP servers; their tools are available to you in this conversation:\n${lines.join('\n')}\nUse them when the question is about the person's own data, records or work in those apps (their issues, pages, deals, files, customers, projects, code), and when a tool would give a more exact answer than the web. Do not use them for general knowledge. Call the tool, read the result, then answer in your own words; never dump raw tool output, and never mention server names or tool names in the answer.${list.some(c => c.label === 'VDRPros Vault' || /vdrpros|vault/i.test(c.name)) ? `\nVDRPros Vault holds the person's own documents (depositions, transcripts, summaries, exhibits, records). For questions about a witness, a matter, a defendant, a site, a product or anything that would be in those files, search the Vault first (vault_search), read the pages you will rely on (vault_read), and cite them with the bracketed numbers the results carry, exactly like web sources: a claim from a Vault page ends with its [n]. When a matching folder is still on paper, say so and offer to request a scan; do not request one unless the person asks.` : ''}`;
+  return `Connected apps. The person has linked these outside apps and MCP servers; their tools are available to you in this conversation:\n${lines.join('\n')}\nUse them when the question is about the person's own data, records or work in those apps (their issues, pages, deals, files, customers, projects, code), and when a tool would give a more exact answer than the web. Do not use them for general knowledge. Call the tool, read the result, then answer in your own words; never dump raw tool output, and never mention server names or tool names in the answer.${list.some(c => c.preset === 'website') ? `\nWebsite connectors hold the pages of sites the person connected (${list.filter(c => c.preset === 'website').map(c => c.label).join(', ')}). For anything those sites would say (their listings, roles, programs, products, documentation, people), search them first (site_search), read the pages you rely on (site_read), and cite each page with the bracketed number the results carry, exactly like web sources; go to the web only for what the site does not cover.` : ''}${list.some(c => c.label === 'VDRPros Vault' || /vdrpros|vault/i.test(c.name)) ? `\nVDRPros Vault holds the person's own documents (depositions, transcripts, summaries, exhibits, records). For questions about a witness, a matter, a defendant, a site, a product or anything that would be in those files, search the Vault first (vault_search), read the pages you will rely on (vault_read), and cite them with the bracketed numbers the results carry, exactly like web sources: a claim from a Vault page ends with its [n]. When a matching folder is still on paper, say so and offer to request a scan; do not request one unless the person asks.` : ''}`;
 }

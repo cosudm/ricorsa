@@ -156,6 +156,37 @@ export const grants = sqliteTable('grants', {
   createdAt: tsNow('created_at'),
 });
 
+/**
+ * Website connectors: a site the person pointed Ricorsa at. Its pages are read (rendered in a browser when the
+ * page is an application), kept as text, and searched through the connector's own MCP endpoint
+ * (/api/sites/mcp/<connector id>), so the model reaches them like any other connector and answers cite the pages.
+ */
+export const sites = sqliteTable('sites', {
+  connectorId: text('connector_id').primaryKey(),
+  userId: text('user_id').notNull(),
+  rootUrl: text('root_url').notNull(),
+  maxPages: integer('max_pages').notNull().default(40),
+  pages: integer('pages').notNull().default(0),
+  chars: integer('chars').notNull().default(0),
+  rendered: integer('rendered').notNull().default(0),   // pages that needed the browser
+  status: text('status').notNull().default('new'),      // new | reading | ready | error
+  error: text('error'),
+  crawledAt: ts('crawled_at'),
+  createdAt: tsNow('created_at'),
+});
+export const sitePages = sqliteTable('site_pages', {
+  id: text('id').primaryKey(),
+  connectorId: text('connector_id').notNull(),
+  userId: text('user_id').notNull(),
+  ordinal: integer('ordinal').notNull().default(0),
+  url: text('url').notNull(),
+  title: text('title').notNull().default(''),
+  text: text('text').notNull().default(''),
+  chars: integer('chars').notNull().default(0),
+  rendered: integer('rendered', { mode: 'boolean' }).notNull().default(false),
+  fetchedAt: tsNow('fetched_at'),
+}, (t) => [index('site_pages_connector').on(t.connectorId)]);
+
 /** Webhook receipts, so a redelivered PayPal event is applied once. */
 export const webhookEvents = sqliteTable('webhook_events', {
   id: text('id').primaryKey(),

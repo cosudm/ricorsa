@@ -767,6 +767,7 @@
   @media (max-width: 640px) { .grant-form { grid-template-columns: 1fr 1fr; } }
   .smsg-sub.check { display: flex; gap: 5px; align-items: flex-start; margin-top: 8px; } .smsg-sub.check svg { flex: none; margin-top: 2px; color: var(--good); }
   .smsg-sub.fallback { display: flex; gap: 5px; align-items: flex-start; margin-top: 6px; color: var(--warn); } .smsg-sub.fallback svg { flex: none; margin-top: 2px; }
+  .site-progress { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 13px; color: var(--ink-3); }
   .admin-bar { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: var(--warn-soft); color: var(--warn); font-size: 13px; border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); } .admin-bar svg { flex: none; } .admin-bar span { flex: 1; min-width: 0; } .admin-bar .btn.ghost { padding: 4px 6px; }
   /* Consoles: interactive cards inside an answer (rows of the person's own things with a status and buttons). */
   .console { margin: 14px 0; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--card); overflow: hidden; }
