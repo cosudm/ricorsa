@@ -81,7 +81,7 @@ const RENDER_SRC = `(async () => {
   const base = textOf(); seen.add(base.slice(0, 4000)); screens.push({ label: '', text: base, href: location.href });
   // In-page navigation: tabs, menu items and buttons that name a section (not links, which are followed separately).
   const controls = Array.from(document.querySelectorAll('[role="tab"], [role="menuitem"], nav button, header button, button[data-screen], button[data-tab], button[data-view], [role="tablist"] button, .tabs button, .nav button'))
-    .filter(el => el.offsetParent !== null && (el.innerText || '').trim().length > 0 && (el.innerText || '').trim().length < 60).slice(0, 14);
+    .filter(el => el.offsetParent !== null && (el.innerText || '').trim().length > 0 && (el.innerText || '').trim().length < 60).slice(0, 24);
   for (const el of controls) {
     try { el.click(); } catch (e) { continue; }
     await sleep(500);
@@ -91,7 +91,11 @@ const RENDER_SRC = `(async () => {
   return { title: document.title || '', screens, links: Array.from(new Set(links())).slice(0, 200) };
 })()`;
 
-async function renderPage(browser: Browser, url: string): Promise<{ title: string; text: string; links: string[] } | null> {
+/**
+ * A rendered page: the text on screen, plus one entry per screen its own navigation revealed (an explorer's
+ * tabs, a dashboard's sections), each without the lines the first screen already showed (header, menu, footer).
+ */
+async function renderPage(browser: Browser, url: string): Promise<{ title: string; text: string; links: string[]; screens: Array<{ label: string; text: string }> } | null> {
   const page = await browser.newPage();
   try {
     await page.setUserAgent(UA);
@@ -100,14 +104,13 @@ async function renderPage(browser: Browser, url: string): Promise<{ title: strin
     await new Promise(r => setTimeout(r, 800));
     const r = await Promise.race([
       page.evaluate(RENDER_SRC) as Promise<{ title: string; screens: Array<{ label: string; text: string; href: string }>; links: string[] }>,
-      new Promise<null>((_, rej) => setTimeout(() => rej(new Error('render took too long')), 25_000)),
+      new Promise<null>((_, rej) => setTimeout(() => rej(new Error('render took too long')), 40_000)),
     ]);
-    if (!r) return null;
-    const parts = r.screens.map((s, i) => (i === 0 || !s.label) ? s.text : `## ${s.label}\n${s.text}`);
-    // Screens repeat the shell (header, nav); keep each screen's text but drop lines already seen on the first.
-    const firstLines = new Set(parts[0].split('\n').map(l => l.trim()).filter(l => l.length > 20));
-    const text = parts.map((p, i) => i === 0 ? p : p.split('\n').filter(l => !firstLines.has(l.trim())).join('\n')).join('\n\n');
-    return { title: r.title, text, links: r.links };
+    if (!r || !r.screens.length) return null;
+    const first = r.screens[0].text;
+    const firstLines = new Set(first.split('\n').map(l => l.trim()).filter(l => l.length > 20));
+    const screens = r.screens.slice(1).filter(s => s.label).map(s => ({ label: s.label, text: s.text.split('\n').filter(l => !firstLines.has(l.trim())).join('\n').trim() })).filter(s => s.text.length > 120);
+    return { title: r.title, text: first, links: r.links, screens };
   } finally { try { await page.close(); } catch { /* gone */ } }
 }
 
@@ -143,21 +146,29 @@ export async function crawlSite(rootUrl: string, opts: { maxPages: number; budge
       let title = plain.ok ? titleFromHtml(plain.html) : '';
       let text = plain.ok ? htmlToText(plain.html) : '';
       let links = plain.ok ? linksFromHtml(plain.html, new URL(url)) : [];
-      let wasRendered = false;
+      let wasRendered = false; let screens: Array<{ label: string; text: string }> = [];
       // An application shell (little text once scripts are stripped) or a page that would not fetch: open it in the browser.
       if ((plain.ok && text.length < THIN_TEXT && /<script/i.test(plain.html)) || (!plain.ok && plain.status !== 404 && !plain.type)) {
         const b = await getBrowser();
         if (b) {
           try {
             const r = await renderPage(b, url);
-            if (r && r.text.length > text.length) { text = r.text; title = r.title || title; wasRendered = true; rendered++; links = [...new Set([...links, ...r.links.map(normalize)])].filter(l => { try { const u = new URL(l); return sameSite(u, root) && !SKIP_EXT.test(u.pathname); } catch { return false; } }); }
+            if (r && r.text.length > text.length) { text = r.text; title = r.title || title; wasRendered = true; rendered++; screens = r.screens; links = [...new Set([...links, ...r.links.map(normalize)])].filter(l => { try { const u = new URL(l); return sameSite(u, root) && !SKIP_EXT.test(u.pathname); } catch { return false; } }); }
           } catch (e) { console.warn('[sites] render failed', url, String((e as Error)?.message || e)); }
         }
       }
       if (!text.trim()) { skipped.push(url); continue; }
       text = text.slice(0, PAGE_TEXT_CAP);
-      pages.push({ url, title: title || url.replace(/^https?:\/\//, ''), text, rendered: wasRendered });
+      const pageTitle = title || url.replace(/^https?:\/\//, '');
+      pages.push({ url, title: pageTitle, text, rendered: wasRendered });
       chars += text.length;
+      // Each screen the app revealed on a click is kept as a page of its own (url#screen), so a search lands on the right screen.
+      for (const sc of screens) {
+        if (pages.length >= opts.maxPages || chars >= TOTAL_TEXT_CAP) break;
+        const t = sc.text.slice(0, PAGE_TEXT_CAP);
+        pages.push({ url: `${url}#${sc.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}`, title: `${pageTitle} · ${sc.label}`, text: t, rendered: true });
+        chars += t.length;
+      }
       for (const l of links) { if (!seen.has(l) && seen.size < 400) { seen.add(l); queue.push(l); } }
     }
   } finally { if (browser) { try { await browser.close(); } catch { /* gone */ } } }
@@ -220,9 +231,10 @@ export async function searchSite(connectorId: string, query: string, limit = 6):
 
 /** One page's text (capped), by URL. */
 export async function readSitePage(connectorId: string, url: string, maxChars = 14_000): Promise<{ url: string; title: string; text: string; total: number } | null> {
-  const want = normalize(url);
+  const raw = String(url || '').trim(); const want = normalize(raw);
   const rows = await db().select({ url: schema.sitePages.url, title: schema.sitePages.title, text: schema.sitePages.text }).from(schema.sitePages).where(eq(schema.sitePages.connectorId, connectorId));
-  const row = rows.find(r => r.url === want) || rows.find(r => normalize(r.url) === want) || rows.find(r => r.url.startsWith(want));
+  // Exact first (a screen page keeps its #screen), then the page without the hash, then a prefix.
+  const row = rows.find(r => r.url === raw) || rows.find(r => r.url === want) || rows.find(r => normalize(r.url) === want) || rows.find(r => r.url.startsWith(want));
   if (!row) return null;
   return { url: row.url, title: row.title, text: row.text.slice(0, maxChars), total: row.text.length };
 }
