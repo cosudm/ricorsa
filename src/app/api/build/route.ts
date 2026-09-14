@@ -122,7 +122,8 @@ export async function POST(req: Request) {
       let modelUsed = '';
       // Set when the tier's configured model (Claude) could not be used and a Kimi model wrote instead; shown in the studio and kept on the message.
       let fallback: { wanted: string; why: string } | null = null;
-      const onModel = (m: string, fb?: { wanted: string; why: string }) => { modelUsed = m; if (fb) fallback = fb; send('model', { model: m, fallback: fb || null }); };
+      // Which provider wrote a version, and why the configured one could not, is operator information: admins see it, customers never do.
+      const onModel = (m: string, fb?: { wanted: string; why: string }) => { modelUsed = m; if (fb) fallback = fb; send('model', { model: user.admin ? m : '', fallback: user.admin ? (fb || null) : null }); };
       const save = async (patch: Partial<typeof schema.builds.$inferInsert>) => { if (!rowMade) return; try { await d.update(schema.builds).set({ ...patch, updatedAt: new Date() }).where(eq(schema.builds.id, id)); } catch (e) { console.error('build save failed', e); } };
       const addMessage = async (m: Omit<BuildMessage, 'id' | 'at'>) => {
         const msg: BuildMessage = { id: uid(), at: Date.now(), ...m };
@@ -277,7 +278,7 @@ export async function POST(req: Request) {
         const summary = p.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean)[0] || spec.what;
         const next = p.next.length ? p.next : nextStepsFallback(spec.kind);
         await save({ status: 'done', plan: p.plan, html, summary });
-        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next, model: modelUsed, fallback: fallback || undefined, check, left: rev.findings.slice(0, 8) });
+        const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next, model: modelUsed, fallback: user.admin && fallback ? fallback : undefined, check, left: rev.findings.slice(0, 8) });
         send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId, check, model: modelUsed });
       } catch (e) {
         const err = e as { name?: string; message?: string };

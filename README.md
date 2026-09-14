@@ -96,6 +96,10 @@ Each answer ends with a `<learned>` block the model writes about the person: int
 
 Nodes carry an optional `geo` anchor (a GeoJSON point, line or polygon) so the same graph can hold spatial identities. Nothing populates it yet; a geocoding step in `mergeLearned` for entity nodes is the natural place to start.
 
+## Running it as a service
+
+Customers never see which provider wrote an answer or a version, nor any provider error or billing state; that is operator information, shown to admins only (the studio's model and fallback lines, Settings → Model accounts). When a provider refuses, answers and builds fall back to the next model and the customer sees a normal result. `GET /api/health/models` (no sign-in) answers 200 when every configured model account responds and 503 when one refuses (no credit, rejected key, unknown model), with no details: point an uptime monitor at it (Cloudflare Health Checks, UptimeRobot, Better Stack) with an email or phone alert, and the operator hears before a customer does; the probe is cached for five minutes. Admins also get a banner in the app while an account is refusing. On the Anthropic side, turn on auto-reload with a spend limit in the Console so the balance never reaches zero; the key should live in a workspace of the same organization that holds the credit.
+
 ## Consoles in answers
 
 When an answer is about the person's own setup or something they can act on in Ricorsa (their connectors, the apps they built, an idea to build, what to ask next), the model may place one interactive console inside it: a fenced block tagged `console` holding a JSON card of rows, each with a status pill and up to three buttons. The guide and the context the model gets (connector ids and states, presets that can be added, recent apps) are in `src/lib/console.ts`; the app renders the card (`mountConsoles` in `public/app/assets/app.js`) and runs a fixed set of verbs: open a route, ask a follow-up, build an idea, turn a connector on or off, add a preset, open an app, open a link, copy text. Ids are checked against the person's account before anything happens, and the prose still carries the substance.

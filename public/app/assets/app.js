@@ -146,6 +146,7 @@ async function bootstrap() {
   state.ready = true;
   // What the picker accepts and how many files a question may carry on this plan (fetched once, off the critical path).
   api('/api/files').then(r => { state.fileLimits = { accept: r.accept || [], perQuestion: r.perQuestion || 1, maxMb: r.maxMb || 10 }; }).catch(() => {});
+  if (!state.healthChecked) { state.healthChecked = true; void checkProviderHealth(); }
 }
 async function refreshGraph() { try { const r = await api('/api/graph'); state.graph = r.graph; } catch {} }
 function persistSettings() { api('/api/me', { method: 'PATCH', body: state.settings }).catch(() => {}); }
@@ -1566,15 +1567,16 @@ function modelName(id) {
   return m;
 }
 /** The configured model could not be used and another wrote instead: say so, with what the provider answered, so a slow or weaker build is never a mystery. */
+function isAdmin() { return !!(state.user && state.user.admin); }
 function fallbackLineHtml(fb, model, live) {
-  if (!fb || !fb.wanted) return '';
+  if (!fb || !fb.wanted || !isAdmin()) return '';
   return `<div class="smsg-sub fallback">${icon('alert', 12)}<span>${esc(modelName(fb.wanted))} could not be used${fb.why ? ` (${esc(fb.why)})` : ''}${model ? `, so ${esc(modelName(model))} ${live ? 'is writing' : 'wrote'} this version` : ''}. An admin can check the model accounts under Settings.</span></div>`;
 }
 /** What the check of a version found, under its plan: how it was checked and what, if anything, is left. */
 function checkLineHtml(m) {
   const fb = fallbackLineHtml(m.fallback, m.model);
-  const c = m.check; if (!c) return (m.model ? `<div class="smsg-sub">Written by ${esc(modelName(m.model))}</div>` : '') + fb;
-  const by = m.model ? `Written by ${esc(modelName(m.model))} · ` : '';
+  const c = m.check; if (!c) return (m.model && isAdmin() ? `<div class="smsg-sub">Written by ${esc(modelName(m.model))}</div>` : '') + fb;
+  const by = m.model && isAdmin() ? `Written by ${esc(modelName(m.model))} · ` : '';
   let line;
   if (c.ran) line = `${by}Opened in a browser: ${c.clicked} control${c.clicked === 1 ? '' : 's'} pressed, ${c.screens} screen${c.screens === 1 ? '' : 's'} opened${c.rounds ? `, ${c.rounds} fix round${c.rounds === 1 ? '' : 's'}` : ''}${c.left ? ` · ${c.left} note${c.left === 1 ? '' : 's'} left` : ' · everything responded'}`;
   else line = `${by}Checked by a code review${c.rounds ? ` with ${c.rounds} fix round${c.rounds === 1 ? '' : 's'}` : ''}${c.left ? ` · ${c.left} note${c.left === 1 ? '' : 's'} left` : ''}`;
@@ -1604,7 +1606,7 @@ function paintStudio(final) {
   let html = st.messages.map(m => studioMessageHtml(m, st)).join('');
   if (live) {
     if (live.reply) html += `<div class="smsg bot"><div class="bubble">${md(live.reply)}</div></div>`;
-    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing what the check found' : live.checking ? 'checking it in a browser' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}${live.ran ? 'The browser check found' : 'The review found'} ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix${live.round > 1 ? ` (round ${live.round})` : ''}</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written${live.model ? ` · ${esc(modelName(live.model))}` : ''}</div>` : (live.model ? `<div class="smsg-sub">${esc(modelName(live.model))}</div>` : '')}${fallbackLineHtml(live.fallback, live.model, true)}</div></div>`;
+    else html += `<div class="smsg bot live"><div class="bubble">${live.plan ? `<div class="smsg-title">${icon('zap', 14)}Version ${esc(live.version || '')}: ${live.issues ? 'fixing what the check found' : live.checking ? 'checking it in a browser' : 'writing the app'}</div><ul class="build-plan">${live.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${live.issues && live.issues.length ? `<div class="build-review"><div class="smsg-title">${icon('alert', 14)}${live.ran ? 'The browser check found' : 'The review found'} ${live.issues.length} part${live.issues.length === 1 ? '' : 's'} to fix${live.round > 1 ? ` (round ${live.round})` : ''}</div><ul>${live.issues.slice(0, 6).map(i => `<li>${esc(i)}</li>`).join('')}${live.issues.length > 6 ? `<li>and ${live.issues.length - 6} more</li>` : ''}</ul></div>` : ''}<div class="dots">${esc(live.statusText || 'Working')}</div>${live.html ? `<div class="smsg-sub">${live.html.split('\n').length} lines written${live.model && isAdmin() ? ` · ${esc(modelName(live.model))}` : ''}</div>` : (live.model && isAdmin() ? `<div class="smsg-sub">${esc(modelName(live.model))}</div>` : '')}${fallbackLineHtml(live.fallback, live.model, true)}</div></div>`;
   }
   msgs.innerHTML = html || `<div class="empty">${icon('zap', 24)}<div>Nothing here yet.</div></div>`;
   $$('[data-show-version]', msgs).forEach(b => b.addEventListener('click', () => showVersion(+b.dataset.showVersion)));
@@ -2157,6 +2159,20 @@ function ensureBridge() {
   const sc = document.createElement('script'); sc.src = '/app/assets/bridge.js'; sc.dataset.bridge = '1';
   sc.onload = () => { if (state.route && state.route.name === 'build' && state.studio) paintStudio(true); };
   document.head.appendChild(sc);
+}
+/** Admins see a banner when a model account is refusing requests; customers never do (their builds simply run on the fallback). */
+async function checkProviderHealth() {
+  if (!isAdmin()) return;
+  try {
+    const r = await fetch('/api/health/models', { credentials: 'same-origin' }); const h = await r.json().catch(() => null);
+    if (!h || h.ok) return;
+    if (sessionStorage.getItem('ricorsa.health.dismissed') === String(h.checkedAt)) return;
+    const bar = document.createElement('div'); bar.className = 'admin-bar';
+    bar.innerHTML = `${icon('alert', 15)}<span>${esc(h.anthropic === 'refused' ? 'Anthropic is refusing requests (billing or key), so builds and ideas run on the fallback model.' : h.kimi === 'refused' ? 'Kimi is refusing requests (billing or key).' : 'A model account is not answering.')} Customers are not told.</span><button type="button" class="btn sm" data-health-check>Model accounts</button><button type="button" class="btn sm ghost" data-health-close aria-label="Dismiss">${icon('x', 13)}</button>`;
+    document.body.prepend(bar);
+    $('[data-health-check]', bar).addEventListener('click', () => modelsModal());
+    $('[data-health-close]', bar).addEventListener('click', () => { try { sessionStorage.setItem('ricorsa.health.dismissed', String(h.checkedAt)); } catch (e) {} bar.remove(); });
+  } catch (e) { /* the banner is a convenience */ }
 }
 function init() {
   setupSidebar();
