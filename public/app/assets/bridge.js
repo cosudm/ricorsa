@@ -16,7 +16,7 @@
     "window.ricorsa={available:true,version:1," +
     "ask:function(prompt,opts){opts=opts||{};var id='a'+(++seq)+'_'+Date.now();" +
     "return new Promise(function(resolve,reject){pending[id]={resolve:resolve,reject:reject,onText:typeof opts.onText==='function'?opts.onText:null,onSources:typeof opts.onSources==='function'?opts.onSources:null,text:'',sources:[]};" +
-    "send({ricorsa:1,type:'ask',id:id,prompt:String(prompt==null?'':prompt).slice(0,8000),system:opts.system?String(opts.system).slice(0,4000):'',search:!!opts.search,personal:opts.personal!==false," +
+    "send({ricorsa:1,type:'ask',id:id,prompt:String(prompt==null?'':prompt).slice(0,8000),system:opts.system?String(opts.system).slice(0,4000):'',search:!!opts.search,personal:opts.personal!==false,format:opts.format==='markdown'?'markdown':'text'," +
     "history:Array.isArray(opts.history)?opts.history.slice(-12).map(function(h){return{role:h&&h.role==='assistant'?'assistant':'user',content:String(h&&h.content!=null?h.content:'').slice(0,8000)}}):[]});" +
     "setTimeout(function(){var p=pending[id];if(p){delete pending[id];p.reject(new Error('The answer took too long'))}},180000)})}};" +
     "window.addEventListener('message',function(e){var m=e.data;if(!m||m.ricorsa!==1||typeof m.id!=='string')return;var p=pending[m.id];if(!p)return;" +
@@ -74,7 +74,7 @@
       var finished = false; var text = ''; var sources = [];
       try {
         var res = await fetch('/api/apps/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({
-          buildId: buildId, prompt: String(m.prompt || '').slice(0, 8000), system: String(m.system || '').slice(0, 4000), search: !!m.search, personal: m.personal !== false,
+          buildId: buildId, prompt: String(m.prompt || '').slice(0, 8000), system: String(m.system || '').slice(0, 4000), search: !!m.search, personal: m.personal !== false, format: m.format === 'markdown' ? 'markdown' : 'text',
           history: Array.isArray(m.history) ? m.history.slice(-12).map(function (h) { return { role: h && h.role === 'assistant' ? 'assistant' : 'user', content: String(h && h.content != null ? h.content : '').slice(0, 8000) }; }) : [],
         }) });
         if (!res.ok) { var msg = 'The answer could not be produced'; try { var j = await res.json(); msg = j.error || j.message || msg; } catch (err) {} reply({ type: 'error', message: msg }); finished = true; return; }

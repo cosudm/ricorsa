@@ -573,7 +573,13 @@ This is a mock answer for "${q}", streamed by the local development stub so the 
 | Retrieval | Brave Search | canned results |
 | Model | Kimi K2 | this text |
 | Graph | D1 | D1 |
-</answer>
+${/connector|console|my apps|what can i|set ?up/i.test(q) ? `
+A console, as the model would add when the answer is about your own setup:
+
+\`\`\`console
+{"title":"Your Ricorsa setup","subtitle":"Mock console from the development stub","items":[{"title":"GitHub","detail":"Repositories, issues, pull requests and code search.","status":"available","actions":[{"label":"Add","do":"connector.add","id":"github"}]},{"title":"Discover","detail":"Ideas to build from your identity graph.","actions":[{"label":"Open","do":"open","to":"#/discover"}]},{"title":"Keep going","detail":"Ask what else you could connect.","actions":[{"label":"Ask","do":"ask","text":"What else could I connect to Ricorsa?"}]}],"footer":"Buttons act on your account; nothing happens until you press one."}
+\`\`\`
+` : ''}</answer>
 <related>
 How does prompt caching lower the cost per answer?
 What happens when a subscription lapses mid-month?

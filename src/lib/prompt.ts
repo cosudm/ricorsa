@@ -44,10 +44,11 @@ const FOCUS_TEXT: Record<string, string> = {
   code: 'Focus: Code. Prefer complete, runnable code in fenced blocks with a language tag, explain briefly, and prefer official documentation among the results.',
 };
 
-export function dynamicSystem(opts: { mode: 'search' | 'research'; focus: string; length: string | null; profile: string; space?: { name: string; description: string; instructions: string } | null; connectors?: string; files?: string[] }): string {
+export function dynamicSystem(opts: { mode: 'search' | 'research'; focus: string; length: string | null; profile: string; space?: { name: string; description: string; instructions: string } | null; connectors?: string; files?: string[]; /** The console guide and context (src/lib/console.ts): interactive cards the answer may carry. */ consoles?: string }): string {
   const L: string[] = [];
   if (opts.profile) L.push(opts.profile);
   if (opts.connectors) L.push(opts.connectors);
+  if (opts.consoles) L.push(opts.consoles);
   if (opts.files?.length) L.push(`The person attached ${opts.files.length} file${opts.files.length === 1 ? '' : 's'} to this question (${opts.files.join(', ')}); their text is in the message. Work from the files first: quote or reference the specific passages, figures or rows that support each point, name the file they come from, and keep web sources for context the files do not give. If the files do not contain what was asked, say so before answering from elsewhere. For a review, be concrete: what is strong, what is missing or wrong, and what to change, in that order.`);
   const f = FOCUS_TEXT[opts.focus] || ''; if (f) L.push(f);
   if (opts.mode === 'research') {

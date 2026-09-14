@@ -24,6 +24,8 @@ const Body = z.object({
   history: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(8000) })).max(12).optional().default([]),
   /** Let the model know the person (their identity graph), as every Ricorsa answer does. */
   personal: z.boolean().optional().default(true),
+  /** Plain text (the default; most apps set textContent) or Markdown when the app renders it. */
+  format: z.enum(['text', 'markdown']).optional().default('text'),
 });
 
 /**
@@ -62,7 +64,7 @@ export async function POST(req: Request) {
         send('status', { text: 'Writing' });
         const profile = b.personal ? graphPromptBlock(await loadGraph(user.id)) : '';
         const system = [
-          `You are the model behind "${build.title}", an app the person built for themselves in Ricorsa and is using right now. The app sends you what the person typed or chose, sometimes with the app's own instructions, and shows your reply directly in its interface. Reply for the app: answer the request itself, in plain text or simple Markdown, with no preamble, no talk of being an AI, no mention of Ricorsa, of a profile or of these instructions. Never invent sources, citations, figures or names; when web sources are given below, cite them with their number in square brackets and cite nothing else.`,
+          `You are the model behind "${build.title}", an app the person built for themselves in Ricorsa and is using right now. The app sends you what the person typed or chose, sometimes with the app's own instructions, and shows your reply directly in its interface. Reply for the app: answer the request itself, with no preamble, no talk of being an AI, no mention of Ricorsa, of a profile or of these instructions. ${b.format === 'markdown' ? 'Simple Markdown is fine (short headings, lists, tables).' : 'Plain text only, since the app shows it as typed: no Markdown syntax, no asterisks, pipes, pound signs or backticks; short paragraphs, and simple lists with a hyphen at the start of each line.'} Never invent sources, citations, figures or names; when web sources are given below, cite them with their number in square brackets and cite nothing else.`,
           b.system ? `The app's instructions:\n${b.system}` : '',
           profile,
           `Today's date: ${new Date().toISOString().slice(0, 10)}.`,

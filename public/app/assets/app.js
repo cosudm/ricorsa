@@ -524,7 +524,9 @@ function md(src) {
     if ((m = /^\s*```\s*([\w+#-]*)\s*$/.exec(line))) {
       flush(); const lang = m[1]; const buf = []; i++;
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
-      i++;
+      const closed = i < lines.length; i++;
+      // A console: an interactive card the answer carries (mounted by mountConsoles); while it is still being written, a quiet line.
+      if (lang === 'console') { html += closed ? `<div class="console" data-console="${esc(buf.join('\n'))}"></div>` : `<div class="console pending"><span class="dots">Setting up a console</span></div>`; continue; }
       html += `<pre><code${lang ? ` class="lang-${esc(lang)}"` : ''}>${esc(buf.join('\n'))}</code></pre>`; continue;
     }
     if (!line.trim()) { flush(); i++; continue; }
@@ -586,9 +588,84 @@ function applyCites(root, sources) {
     node.parentNode.replaceChild(frag, node);
   }
 }
-function renderAnswerInto(el, markdown, sources, streaming) {
+function renderAnswerInto(el, markdown, sources, streaming, thread) {
   el.innerHTML = md(markdown) + (streaming ? '<span class="cursor-blink" aria-hidden="true"></span>' : '');
   applyCites(el, sources);
+  mountConsoles(el, thread);
+}
+
+// ---------- Consoles: interactive cards inside an answer ----------
+// The model writes one as a fenced `console` block of JSON (the guide is in src/lib/console.ts); every button runs
+// one of a fixed set of verbs, and ids are checked against what the person actually has before anything happens.
+const CONSOLE_ROUTES = /^#\/(discover|connectors|graph|spaces|library|build\/[\w-]+|thread\/[\w-]+)$|^\/(pricing|account)$/;
+const CONSOLE_STATUS = { on: ['On', 'ok'], off: ['Off', ''], available: ['Available', ''], done: ['Ready', 'ok'], building: ['Building', 'warn'], error: ['Needs attention', 'bad'], none: ['', ''] };
+function mountConsoles(root, thread) {
+  $$('.console[data-console]', root).forEach(box => {
+    let spec = null;
+    try { spec = JSON.parse(box.dataset.console); } catch (e) { /* the block was not valid JSON; the prose still carries the answer */ }
+    box.removeAttribute('data-console');
+    if (!spec || typeof spec !== 'object' || !Array.isArray(spec.items) || !spec.items.length) { box.remove(); return; }
+    const items = spec.items.slice(0, 8).filter(it => it && typeof it === 'object' && it.title);
+    box.innerHTML = `<div class="console-h">${icon('layers', 15)}<b>${esc(String(spec.title || 'Console'))}</b>${spec.subtitle ? `<span>${esc(String(spec.subtitle))}</span>` : ''}</div>
+      <div class="console-rows">${items.map((it, i) => {
+        const st = CONSOLE_STATUS[String(it.status || 'none')] || CONSOLE_STATUS.none;
+        const acts = (Array.isArray(it.actions) ? it.actions : []).slice(0, 3).filter(a => a && a.label && a.do);
+        return `<div class="console-row"><div class="console-txt"><b>${esc(String(it.title))}</b>${it.detail ? `<small>${esc(String(it.detail))}</small>` : ''}</div><div class="console-side">${st[0] ? `<span class="pill ${st[1]}">${st[0]}</span>` : ''}${acts.map((a, j) => `<button type="button" class="btn sm${j === 0 && !st[0] ? ' primary' : ''}" data-con="${i}:${j}">${esc(String(a.label))}</button>`).join('')}</div></div>`;
+      }).join('')}</div>${spec.footer ? `<div class="console-f">${esc(String(spec.footer))}</div>` : ''}`;
+    $$('[data-con]', box).forEach(b => b.addEventListener('click', () => {
+      const [i, j] = b.dataset.con.split(':').map(Number); const a = items[i].actions[j];
+      runConsoleAction(a, thread, b);
+    }));
+  });
+}
+async function runConsoleAction(a, thread, btn) {
+  const verb = String(a.do || '');
+  const busy = (on) => { btn.disabled = on; };
+  try {
+    if (verb === 'open') { const to = String(a.to || ''); if (!CONSOLE_ROUTES.test(to)) { toast('That place does not exist', 'bad'); return; } if (to.startsWith('#')) go(to); else location.href = to; return; }
+    if (verb === 'link') { const url = safeUrl(String(a.url || '')); if (!url) { toast('That link is not usable', 'bad'); return; } window.open(url, '_blank', 'noopener'); return; }
+    if (verb === 'copy') { try { await navigator.clipboard.writeText(String(a.text || '')); toast('Copied'); } catch (e) { toast('Could not copy', 'bad'); } return; }
+    if (verb === 'ask') {
+      const text = String(a.text || '').trim(); if (!text) return;
+      if (thread) { if (state.runs.has(thread.id)) { toast('Wait for the current answer to finish'); return; } followUp(thread, text, { mode: 'search', tier: state.settings.tier, focus: 'web' }); }
+      else startThread(text, { mode: 'search', tier: state.settings.tier, focus: 'web' });
+      return;
+    }
+    if (verb === 'build') {
+      const title = String(a.title || '').trim(); if (!title) return;
+      startBuild({ title, kind: String(a.kind || 'App'), what: String(a.what || title), prompt: String(a.what || title), builds: [] }, 'For you');
+      return;
+    }
+    if (verb === 'connector.on' || verb === 'connector.off') {
+      busy(true);
+      if (!state.connectors) await loadConnectors();
+      const c = (state.connectors || []).find(x => x.id === a.id);
+      if (!c) { toast('That connector is not on your account', 'bad'); return; }
+      const enabled = verb === 'connector.on';
+      const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body: { enabled } });
+      Object.assign(c, r.connector);
+      const row = btn.closest('.console-row'); const pill = row && row.querySelector('.pill'); if (pill) { pill.textContent = enabled ? 'On' : 'Off'; pill.className = 'pill' + (enabled ? ' ok' : ''); }
+      btn.textContent = enabled ? 'Turn off' : 'Turn on'; btn.dataset.flip = '1';
+      // The button now does the opposite; swap the verb in place so the next press works too.
+      a.do = enabled ? 'connector.off' : 'connector.on';
+      toast(`${c.name} ${enabled ? 'is on' : 'is off'}`);
+      return;
+    }
+    if (verb === 'connector.add') {
+      if (!state.catalog) { try { await loadConnectors(); } catch (e) { /* the modal copes without a catalog */ } }
+      const key = String(a.id || ''); const preset = (state.catalog || []).find(p => p.key === key);
+      if (!preset) { toast('That connector is not in the catalog', 'bad'); return; }
+      if (preset.flow === 'vault') vaultConnectModal(preset); else addConnectorModal(key);
+      return;
+    }
+    if (verb === 'app.open') {
+      const id = String(a.id || ''); if (!/^[\w-]{6,40}$/.test(id)) return;
+      window.open('/app/run#' + encodeURIComponent(id), '_blank', 'noopener');
+      return;
+    }
+    toast('That action is not available', 'bad');
+  } catch (e) { apiToast(e, 'That did not work'); }
+  finally { busy(false); }
 }
 
 // ---------- Stream parser (tolerant, progressive) ----------
@@ -1158,7 +1235,7 @@ function paintTurn(sec, thread, t) {
   else status.textContent = '';
 
   const ans = $('[data-answer]', sec);
-  if (t.answer) renderAnswerInto(ans, t.answer, sources, running);
+  if (t.answer) renderAnswerInto(ans, t.answer, sources, running, thread);
   else if (running) ans.innerHTML = `<div class="skel"><i></i><i></i><i></i><i></i></div>`;
   else if (t.status === 'pending') ans.innerHTML = `<div class="skel"><i></i><i></i><i></i></div>`;
   else ans.innerHTML = '';

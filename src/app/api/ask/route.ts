@@ -17,6 +17,7 @@ import { connectorsForModel, connectorsPromptBlock } from '@/lib/connectors';
 import { planFor } from '@/lib/plans';
 import { loadAttachments, claimAttachments, filesBlock, metaOf } from '@/lib/files';
 import { isVaultConnector, numberVaultHits, numberVaultPages } from '@/lib/vault';
+import { CONSOLE_GUIDE, consoleContext } from '@/lib/console';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -134,7 +135,10 @@ export async function POST(req: Request) {
         try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors); } catch (e) { console.warn('connectors unavailable', e); }
         // Vault connectors: their search hits and read pages become numbered sources the answer can cite and the reader can open.
         const vaultByServer = new Map(mcp.filter(m => isVaultConnector({ preset: m.preset, url: m.url })).map(m => [m.name, m.id]));
-        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp), files: attached.map(a => a.name) }));
+        // Consoles ride along with Search answers: the guide plus what the person actually has, so buttons act on real things.
+        let consoles = '';
+        if (turn.mode !== 'research') { try { consoles = `${CONSOLE_GUIDE}\n\n${await consoleContext(user.id, { canBuild: user.admin || planFor(user.plan).caps.discover === 'full' })}`; } catch (e) { console.warn('console context unavailable', e); } }
+        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp), files: attached.map(a => a.name), consoles }));
         const messages = buildMessages(history, turn.q, sourcesBlock(sources), fileText);
         turn.tools = [];
 

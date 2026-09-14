@@ -96,6 +96,10 @@ Each answer ends with a `<learned>` block the model writes about the person: int
 
 Nodes carry an optional `geo` anchor (a GeoJSON point, line or polygon) so the same graph can hold spatial identities. Nothing populates it yet; a geocoding step in `mergeLearned` for entity nodes is the natural place to start.
 
+## Consoles in answers
+
+When an answer is about the person's own setup or something they can act on in Ricorsa (their connectors, the apps they built, an idea to build, what to ask next), the model may place one interactive console inside it: a fenced block tagged `console` holding a JSON card of rows, each with a status pill and up to three buttons. The guide and the context the model gets (connector ids and states, presets that can be added, recent apps) are in `src/lib/console.ts`; the app renders the card (`mountConsoles` in `public/app/assets/app.js`) and runs a fixed set of verbs: open a route, ask a follow-up, build an idea, turn a connector on or off, add a preset, open an app, open a link, copy text. Ids are checked against the person's account before anything happens, and the prose still carries the substance.
+
 ## Answers and citations
 
 Each answer starts with retrieval: one Brave query for a normal question (none for Writing focus), four to six planned queries plus a read of the top pages in Research mode. The merged, numbered results are pushed to the browser before the model starts and handed to the model as context after the question; it cites them with `[n]` markers that the client renders as chips. Connectors are offered to the model as functions; when it calls one, Ricorsa calls the MCP server and returns the result, until the model answers. Answers that hit the output limit continue in partial mode. Earlier answers are fed back into follow-ups with the markers stripped.
