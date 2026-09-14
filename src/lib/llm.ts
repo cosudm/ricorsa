@@ -1,16 +1,19 @@
 /**
- * The model layer. Two providers sit behind one streaming interface:
- *  - Kimi (Moonshot AI) through its OpenAI-compatible API: streamed chat completions, function calling for
- *    connector tools, and partial-mode continuation when an answer runs past the output limit.
- *  - Claude (Anthropic Messages API): streamed messages with adaptive thinking and an effort level, prompt
+ * The model layer. Every provider sits behind one streaming interface, over one of two wire protocols:
+ *  - the OpenAI-compatible chat completions API (Moonshot's Kimi, OpenAI, Google Gemini, xAI, Mistral,
+ *    DeepSeek, Groq, OpenRouter, Together and any custom endpoint): streamed completions, function calling for
+ *    connector tools, and on Moonshot partial-mode continuation when an answer runs past the output limit;
+ *  - Anthropic's Messages API (Claude): streamed messages with adaptive thinking and an effort level, prompt
  *    caching on the system prompt, and tool use for connectors.
- * A tier's configured MODEL_* id picks the provider by its name (claude-* goes to Anthropic). When that
- * provider cannot serve (no key, key rejected, unknown model, overloaded) the next candidate for the tier
- * takes over, so the product keeps answering. Web retrieval happens before the call (src/lib/search.ts) and
- * the sources are handed to the model as numbered context; connectors are called by Ricorsa itself through MCP.
+ * A tier's active model is the admin's choice under Settings → Model accounts, else the MODEL_* variable, else
+ * the default; its provider is whoever has a key and lists it (src/lib/providers.ts). When that provider cannot
+ * serve (no key, key rejected, unknown model, overloaded) the next candidate for the tier takes over, so the
+ * product keeps answering. Web retrieval happens before the call (src/lib/search.ts) and the sources are handed
+ * to the model as numbered context; connectors are called by Ricorsa itself through MCP.
  */
 import type { Source } from './search';
 import { callMcpTool } from './mcp';
+import { loadProviders, providersNow, providerForModel, providerUsable, markProviderDown, providerSetAside, listProviderModels, probeProvider, modelSettings, modelSettingsNow, type Provider } from './providers';
 
 /**
  * quick: planning and small structured calls · default: answers · complex: Reasoning answers ·
@@ -31,8 +34,10 @@ const CANDIDATES: Record<Tier, string[]> = {
   ideas: ['claude-fable-5-1', 'claude-opus-5', 'claude-sonnet-5', 'kimi-k3', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-latest'],
 };
 
-/** Claude models are served by Anthropic; everything else by Kimi. */
-export function isClaude(model: string): boolean { return /^claude-/i.test(model); }
+/** Whether a model is served over Anthropic's Messages API (Claude); every other model speaks the OpenAI-compatible API. */
+export function isClaude(model: string): boolean { const p = providerForModel(model); return p ? p.kind === 'anthropic' : /^claude-/i.test(model); }
+/** The provider that serves a model right now, honouring the tier's chosen provider when one is set. */
+function providerFor(model: string, tier?: Tier): Provider | null { return providerForModel(model, tier ? configuredProvider(tier) : undefined); }
 
 /**
  * Thinking effort per tier. Kimi K3 and the thinking models take `reasoning_effort`; Claude takes
@@ -59,7 +64,11 @@ function reasoningFor(tier: Tier, model: string): string | null {
   if (isClaude(model)) return null;
   const v = envFor('REASONING', tier) || DEFAULT_REASONING[tier];
   if (v === 'off' || v === 'none') return null;
-  return /k3|thinking|reason/i.test(model) || process.env.REASONING_ALWAYS === '1' ? v : null;
+  const takes = /k3|thinking|reason|^o[1-9](-|$)|^gpt-5|^gemini-(2\.5|3)|^grok-.*mini|magistral/i.test(model) || process.env.REASONING_ALWAYS === '1';
+  if (!takes) return null;
+  // Only Moonshot takes "max"; everyone else tops out at "high".
+  const p = providerFor(model);
+  return v === 'max' && p && p.id !== 'moonshot' ? 'high' : v;
 }
 function effortFor(tier: Tier, model: string): string | null {
   if (!isClaude(model)) return null;
@@ -68,93 +77,83 @@ function effortFor(tier: Tier, model: string): string | null {
   return CLAUDE_EFFORTS.has(v) ? v : 'high';
 }
 function configured(tier: Tier): string {
+  const chosen = modelSettingsNow()[tier]; if (chosen?.model) return chosen.model;
   if (tier === 'quick') return process.env.MODEL_QUICK || DEFAULT_MODELS.quick;
   if (tier === 'complex') return process.env.MODEL_COMPLEX || DEFAULT_MODELS.complex;
   if (tier === 'build') return process.env.MODEL_BUILD || DEFAULT_MODELS.build;
   if (tier === 'ideas') return process.env.MODEL_IDEAS || process.env.MODEL_BUILD || DEFAULT_MODELS.ideas;
   return process.env.MODEL_DEFAULT || DEFAULT_MODELS.default;
 }
+/** The provider an admin chose for a tier under Settings → Model accounts, when they chose one. */
+function configuredProvider(tier: Tier): string | undefined { return modelSettingsNow()[tier]?.provider; }
 /** The configured id for a tier (what the settings say); `resolveModel` checks it against what the accounts can actually use. */
 export function modelFor(tier: Tier): string { return configured(tier); }
 export const PROVIDER_NAME = 'Kimi';
 /** The provider a model id belongs to, for logs and the admin screen. */
-export function providerOf(model: string): 'Anthropic' | 'Kimi' { return isClaude(model) ? 'Anthropic' : 'Kimi'; }
+export function providerOf(model: string, tier?: Tier): string { const p = providerFor(model, tier); return p ? p.name : (/^claude-/i.test(model) ? 'Anthropic (Claude)' : 'Moonshot (Kimi)'); }
 
-let modelList: { ids: string[]; at: number } | null = null;
-/** The Kimi model ids the provider account can use, cached for ten minutes. Empty when the list cannot be fetched. */
+/** The model ids the Kimi (Moonshot) account can use; kept for the admin readout. Empty when the list cannot be fetched. */
 export async function availableModels(force = false): Promise<string[]> {
-  if (!force && modelList && Date.now() - modelList.at < 600_000) return modelList.ids;
-  try {
-    const res = await fetch(`${apiBase()}/models`, { headers: { Authorization: `Bearer ${apiKey()}` } });
-    if (!res.ok) { console.warn('[provider] models list', res.status); return modelList?.ids || []; }
-    const j = await res.json() as { data?: Array<{ id?: string }> };
-    const ids = (j.data || []).map(m => String(m.id || '')).filter(Boolean);
-    modelList = { ids, at: Date.now() };
-    return ids;
-  } catch (e) { console.warn('[provider] models list failed', String((e as Error)?.message || e)); return modelList?.ids || []; }
+  const p = (await loadProviders()).find(x => x.id === 'moonshot');
+  return p && p.key ? listProviderModels(p, force) : [];
 }
 
-/** Anthropic is skipped for a while after its key is rejected or the account has no credit, so builds do not wait on a dead door. A changed key is tried at once. */
-let anthropicDown: { key: string; until: number; why: string } | null = null;
-function anthropicUsable(): boolean { const k = anthropicKey(); return !!k && !(anthropicDown && anthropicDown.key === k && Date.now() < anthropicDown.until); }
-function markAnthropicDown(why: string) { anthropicDown = { key: anthropicKey() || '', until: Date.now() + 600_000, why }; console.warn('[provider] anthropic set aside for ten minutes:', why); }
-/** Whether an Anthropic key is set at all. */
-export function anthropicConfigured(): boolean { return !!anthropicKey(); }
+/** Whether an Anthropic key is set at all (environment or account). */
+export function anthropicConfigured(): boolean { return !!providersNow().find(p => p.id === 'anthropic')?.key || !!process.env.ANTHROPIC_API_KEY; }
 /** Why a Claude tier is not on Claude right now: no key, or the last refusal that set Anthropic aside. Null when Claude is in use. */
 export function anthropicStatus(): { configured: boolean; usable: boolean; setAsideUntil: string | null; why: string | null } {
-  const k = anthropicKey();
-  if (!k) return { configured: false, usable: false, setAsideUntil: null, why: 'ANTHROPIC_API_KEY is not set on the server' };
-  const down = !!(anthropicDown && anthropicDown.key === k && Date.now() < anthropicDown.until);
-  return { configured: true, usable: !down, setAsideUntil: down ? new Date(anthropicDown!.until).toISOString() : null, why: down ? anthropicDown!.why : null };
+  const p = providersNow().find(x => x.id === 'anthropic');
+  if (!p || !p.key) return { configured: false, usable: false, setAsideUntil: null, why: 'No Anthropic API key on the server or the account' };
+  const aside = providerSetAside(p);
+  return { configured: true, usable: !aside, setAsideUntil: aside ? aside.until : null, why: aside ? aside.why : null };
 }
-/**
- * One tiny message on Anthropic so an admin can read exactly what the account answers (a bad key, an account
- * without credit, an unknown model id), instead of finding it in the logs. An accepted probe clears a set-aside
- * at once, so a fixed key or a top-up takes effect on the next build.
- */
+/** One tiny message on Anthropic so an admin can read exactly what the account answers; an accepted probe lifts a set-aside. */
 export async function probeAnthropic(model = configured('build')): Promise<{ ok: boolean; status: number; message: string; model: string; ms: number }> {
-  const key = anthropicKey(); const started = Date.now();
-  const m = isClaude(model) ? model : DEFAULT_MODELS.build;
-  if (!key) return { ok: false, status: 0, message: 'ANTHROPIC_API_KEY is not set on the server', model: m, ms: 0 };
-  try {
-    const res = await fetch(`${anthropicBase()}/v1/messages`, {
-      method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: m, max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] }), signal: AbortSignal.timeout(20_000),
-    });
-    const text = await res.text();
-    if (res.ok) { if (anthropicDown && anthropicDown.key === key) anthropicDown = null; return { ok: true, status: res.status, message: `Anthropic accepted a message on ${m}`, model: m, ms: Date.now() - started }; }
-    let message = text.slice(0, 300);
-    try { const j = JSON.parse(text) as { error?: { type?: string; message?: string } }; if (j.error?.message) message = `${j.error.type || 'error'}: ${j.error.message}`.slice(0, 300); } catch { /* not JSON */ }
-    return { ok: false, status: res.status, message, model: m, ms: Date.now() - started };
-  } catch (e) { return { ok: false, status: 0, message: String((e as Error)?.message || e).slice(0, 200), model: m, ms: Date.now() - started }; }
+  const p = (await loadProviders()).find(x => x.id === 'anthropic');
+  const m = /^claude-/i.test(model) ? model : DEFAULT_MODELS.build;
+  if (!p || !p.key) return { ok: false, status: 0, message: 'No Anthropic API key on the server or the account', model: m, ms: 0 };
+  const r = await probeProvider(p, m);
+  return { ok: r.ok, status: r.status, message: r.message, model: r.model, ms: r.ms };
 }
 
-/** The best model an account can use for a tier: the configured id when available, otherwise the next known one. */
+/**
+ * The best model for a tier right now: the admin's or the environment's choice when its provider has a key, is
+ * not set aside, and lists the model (a provider without a list is trusted); otherwise the next candidate whose
+ * provider can serve it; otherwise the best chat model any usable provider offers.
+ */
 export async function resolveModel(tier: Tier, exclude: string[] = []): Promise<string> {
-  const want = [configured(tier), ...CANDIDATES[tier]].filter((v, i, a) => a.indexOf(v) === i && !exclude.includes(v));
-  const ids = await availableModels();
+  await loadProviders(); await modelSettings();
+  const first = configured(tier);
+  const want = [first, ...CANDIDATES[tier]].filter((v, i, a) => a.indexOf(v) === i && !exclude.includes(v));
   for (const w of want) {
-    if (isClaude(w)) { if (anthropicUsable()) return w; continue; }
+    const p = providerFor(w, w === first ? tier : undefined);
+    if (!p || !providerUsable(p)) continue;
+    const ids = p.models.length ? p.models : await listProviderModels(p);
     if (!ids.length || ids.includes(w)) return w;
   }
-  // Nothing from the list: take any kimi model the account has, newest-looking first.
-  const kimi = ids.filter(id => /kimi/i.test(id) && !exclude.includes(id)).sort().reverse();
-  return kimi[0] || ids.find(id => !exclude.includes(id)) || want.find(w => !isClaude(w)) || want[0];
+  const chat = (id: string) => !exclude.includes(id) && !/embed|whisper|tts|image|dall|moderation|audio|realtime|rerank|vision-only/i.test(id);
+  // Nothing from the wanted list: the tier's chosen provider first, then Moonshot's newest Kimi, then any chat model from a usable provider.
+  const hint = configuredProvider(tier);
+  const usable = providersNow().filter(p => providerUsable(p) && !p.aggregator).sort((a, b) => (a.id === hint ? -1 : b.id === hint ? 1 : a.id === 'moonshot' ? -1 : b.id === 'moonshot' ? 1 : 0));
+  for (const p of usable) {
+    const ids = (p.models.length ? p.models : await listProviderModels(p)).filter(chat);
+    if (p.id === 'moonshot') { const kimi = ids.filter(id => /^kimi-k\d/i.test(id)).sort().reverse(); if (kimi[0]) return kimi[0]; }
+    const pick = ids.sort().reverse()[0]; if (pick) return pick;
+  }
+  return want.find(w => !isClaude(w)) || want[0];
 }
 
 export function mockMode(): boolean {
   return process.env.NODE_ENV !== 'production' && process.env.DEV_MOCK_LLM === '1';
 }
 
-function apiBase(): string { return (process.env.KIMI_BASE_URL || 'https://api.moonshot.ai/v1').replace(/\/$/, ''); }
-function apiKey(): string {
-  const k = process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY;
-  if (!k) throw Object.assign(new Error('KIMI_API_KEY is not set'), { status: 401 });
-  return k;
-}
-function anthropicBase(): string { return (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, ''); }
-function anthropicKey(): string | null { return process.env.ANTHROPIC_API_KEY || null; }
 const ANTHROPIC_VERSION = '2023-06-01';
+/** The provider for a model, or a clear error when no configured provider serves it. */
+function requireProvider(model: string, tier?: Tier): Provider {
+  const p = providerFor(model, tier);
+  if (!p || !p.key) throw new ProviderRequestError(401, `No API key for a provider that serves ${model}`);
+  return p;
+}
 
 export type ProviderErrorCode = 'provider_billing' | 'provider_auth' | 'rate_limited' | 'overloaded' | 'prompt_too_large' | 'invalid_request' | 'upstream_error';
 export type ProviderError = { code: ProviderErrorCode; status: number | null; type: string; message: string; forAdmin: string; forUser: string };
@@ -213,8 +212,19 @@ type FunctionTool = { type: 'function'; function: { name: string; description?: 
 
 const MAX_TOOL_ROUNDS = 6;
 const MAX_CONTINUATIONS = 3;
-/** Output budgets a Kimi model may refuse; the next one down is tried. */
-const KIMI_MAX_TOKENS_STEPS = [32000, 16000];
+/** How many models one call may move through before the error is handed back. */
+const MAX_SWITCHES = 4;
+/** Output budgets a model may refuse; the next one down is tried. */
+const MAX_TOKENS_STEPS = [32000, 16000, 8000, 4000];
+
+/** Why a tier's configured model is not the one answering, for the admin's fallback note. */
+function whyNot(model: string, tier: Tier): string {
+  const p = providerFor(model, tier);
+  if (!p || !p.key) return `No API key for a provider that serves ${model}`;
+  const aside = providerSetAside(p); if (aside) return aside.why;
+  if (p.models.length && !p.models.includes(model)) return `${p.name} does not list ${model} for this account`;
+  return `${p.name} could not be used`;
+}
 
 /** Function names the API accepts: letters, digits, underscore, dash, at most 64 characters. */
 function fnName(server: string, tool: string, taken: Set<string>): string {
@@ -263,8 +273,9 @@ export async function streamAnswer(opts: {
 }): Promise<StreamResult> {
   if (mockMode()) return mockStream(opts, modelFor(opts.tier));
   let model = await resolveModel(opts.tier);
+  let provider = requireProvider(model, opts.tier);
   const wanted = configured(opts.tier);
-  opts.onModel?.(model, isClaude(wanted) && !isClaude(model) ? { wanted, why: anthropicStatus().why || 'Anthropic could not be used' } : undefined);
+  opts.onModel?.(model, model !== wanted ? { wanted, why: whyNot(wanted, opts.tier) } : undefined);
   const systemText = opts.system.map(b => b.text).join('\n\n');
   const convo: ChatMessage[] = [{ role: 'system', content: systemText }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
   const { tools, lookup } = toolsFor(opts.mcp || undefined);
@@ -274,42 +285,55 @@ export async function streamAnswer(opts: {
   let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
   const tried: string[] = [model];
 
-  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let effort = effortFor(opts.tier, model); let noPartial = isClaude(model); let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens; let overloadRetries = 0;
-  const switchTo = (next: string, fallback?: { wanted: string; why: string }) => { model = next; tried.push(next); reasoning = reasoningFor(opts.tier, next); effort = effortFor(opts.tier, next); temperature = temperatureFor(next, opts.temperature); noPartial = noPartial || isClaude(next); maxTokens = opts.maxTokens; opts.onModel?.(next, fallback); };
+  let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let effort = effortFor(opts.tier, model); let noPartial = provider.id !== 'moonshot'; let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens; let overloadRetries = 0;
+  let streamUsage = true; let maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens';
+  const switchTo = (next: string, fallback?: { wanted: string; why: string }) => {
+    model = next; provider = requireProvider(next, opts.tier); tried.push(next);
+    reasoning = reasoningFor(opts.tier, next); effort = effortFor(opts.tier, next); temperature = temperatureFor(next, opts.temperature); noPartial = noPartial || provider.id !== 'moonshot'; maxTokens = opts.maxTokens; overloadRetries = 0; streamUsage = true; maxTokensParam = 'max_tokens';
+    opts.onModel?.(next, fallback);
+  };
   for (;;) {
     let res: ChatOut;
     try {
-      res = isClaude(model)
-        ? await anthropicStream({ model, system: opts.system, messages: convo, maxTokens, tools: tools.length ? tools : undefined, effort, signal: opts.signal, onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking })
-        : await chatStream({ model, messages: convo, maxTokens, tools: tools.length ? tools : undefined, temperature, reasoning, signal: opts.signal, onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking });
+      res = provider.kind === 'anthropic'
+        ? await anthropicStream({ provider, model, system: opts.system, messages: convo, maxTokens, tools: tools.length ? tools : undefined, effort, signal: opts.signal, onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking })
+        : await chatStream({ provider, model, messages: convo, maxTokens, maxTokensParam, tools: tools.length ? tools : undefined, temperature, reasoning, streamUsage, signal: opts.signal, onText: (d) => { out += d; opts.onText(d); }, onThinking: opts.onThinking });
     } catch (e) {
-      if (opts.signal?.aborted) throw e;
-      if (isClaude(model) && e instanceof ProviderRequestError) {
-        // Anthropic overloaded or rate limited: one short pause and a second try before anything else.
-        if ((e.status === 429 || e.status === 529 || e.status === 503) && overloadRetries < 1) { overloadRetries++; await new Promise(r => setTimeout(r, 2000)); continue; }
-        if (e.status === 401 || e.status === 402 || e.status === 403 || (e.status === 400 && /credit|billing|balance/i.test(e.message))) markAnthropicDown(`HTTP ${e.status}: ${e.message.slice(0, 120)}`);
-        // Anything the Anthropic side refuses: hand the tier to the next candidate (a Kimi model) so the person still gets a result.
-        const next = await resolveModel(opts.tier, tried);
-        if (next !== model && out.length === 0) { const why = `HTTP ${e.status}: ${e.message.slice(0, 160)}`; console.warn('[provider] anthropic failed, switching', model, '->', next, why); switchTo(next, isClaude(next) ? undefined : { wanted: model, why }); continue; }
+      if (opts.signal?.aborted || !(e instanceof ProviderRequestError)) throw e;
+      const msg = e.message;
+      if (e.status === 400) {
+        // A parameter this model does not take: fix the request and try the same model again.
+        if (temperature !== undefined && /temperature/i.test(msg)) { console.warn('[provider] temperature not accepted by', model); temperature = undefined; continue; }
+        if (maxTokensParam === 'max_tokens' && /max_completion_tokens/i.test(msg)) { console.warn('[provider]', model, 'takes max_completion_tokens'); maxTokensParam = 'max_completion_tokens'; continue; }
+        if (/max_tokens|max_completion_tokens|output.?tokens|completion.?tokens/i.test(msg)) {
+          // An output budget above what this model allows: come down a step and try again.
+          const lower = MAX_TOKENS_STEPS.find(s => s < maxTokens);
+          if (lower) { console.warn('[provider] max_tokens', maxTokens, 'not accepted by', model, '; trying', lower); maxTokens = lower; continue; }
+        }
+        if (reasoning && /reasoning/i.test(msg)) { console.warn('[provider] reasoning_effort not accepted by', model); reasoning = null; continue; }
+        if (streamUsage && /stream_options/i.test(msg)) { console.warn('[provider] stream_options not accepted by', model); streamUsage = false; continue; }
+        if (!noPartial && /partial/i.test(msg)) {
+          noPartial = true;
+          for (const m of convo) if (m.role === 'assistant' && m.partial) { delete m.partial; convo.push({ role: 'user', content: 'Continue exactly where you left off, without repeating anything.' }); }
+          continue;
+        }
+        // A conversation too long for any model: no other candidate will take it either.
+        if (/context length|too long|maximum context|token limit|prompt is too long/i.test(msg) && !/credit|billing|balance|quota/i.test(msg)) throw e;
       }
-      // A temperature this model does not take: send none and try again.
-      if (e instanceof ProviderRequestError && e.status === 400 && temperature !== undefined && /temperature/i.test(e.message)) { console.warn('[provider] temperature not accepted by', model); temperature = undefined; continue; }
-      // An output budget above what this model allows: come down a step and try again.
-      if (e instanceof ProviderRequestError && e.status === 400 && /max_tokens/i.test(e.message)) {
-        const lower = KIMI_MAX_TOKENS_STEPS.find(s => s < maxTokens);
-        if (lower) { console.warn('[provider] max_tokens', maxTokens, 'not accepted by', model, '; trying', lower); maxTokens = lower; continue; }
-      }
-      // An id this account cannot use: refresh the list and try the next candidate once.
-      if (!retriedModel && e instanceof ProviderRequestError && e.status === 404 && /model/i.test(e.message)) {
-        retriedModel = true; await availableModels(true); const next = await resolveModel(opts.tier, tried);
-        console.warn('[provider] model not available, switching', model, '->', next); if (next !== model) { switchTo(next); continue; }
-      }
-      // A parameter this model does not take: drop it and try again.
-      if (e instanceof ProviderRequestError && e.status === 400 && reasoning && /reasoning/i.test(e.message)) { console.warn('[provider] reasoning_effort not accepted by', model); reasoning = null; continue; }
-      if (e instanceof ProviderRequestError && e.status === 400 && !noPartial && /partial/i.test(e.message)) {
-        noPartial = true;
-        for (const m of convo) if (m.role === 'assistant' && m.partial) { delete m.partial; convo.push({ role: 'user', content: 'Continue exactly where you left off, without repeating anything.' }); }
-        continue;
+      // Overloaded or rate limited: one short pause and a second try on the same model before moving on.
+      if ((e.status === 429 || e.status === 529 || e.status === 503 || e.status === 502) && overloadRetries < 1) { overloadRetries++; await new Promise(r => setTimeout(r, 2000)); continue; }
+      // The account refused (bad key, no credit): set the provider aside so nothing else waits on it for a while.
+      if (e.status === 401 || e.status === 402 || e.status === 403 || (e.status === 400 && /credit|billing|balance|quota/i.test(msg))) markProviderDown(provider, `HTTP ${e.status}: ${msg.slice(0, 120)}`);
+      // An id this account cannot use: refresh the provider's list once so the next pick is a listed model.
+      if (e.status === 404 && !retriedModel) { retriedModel = true; await listProviderModels(provider, true); }
+      // Anything the provider refuses before a word is written: hand the tier to the next candidate so the person still gets a result.
+      if (out.length === 0 && tried.length <= MAX_SWITCHES) {
+        const next = await resolveModel(opts.tier, tried); const np = providerFor(next, opts.tier);
+        if (next !== model && np && providerUsable(np)) {
+          const why = `HTTP ${e.status}: ${msg.slice(0, 160)}`;
+          console.warn('[provider]', provider.id, 'failed, switching', model, '->', next, why);
+          switchTo(next, { wanted: model, why }); continue;
+        }
       }
       throw e;
     }
@@ -357,13 +381,19 @@ export async function streamAnswer(opts: {
 
 type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number; cacheWrite?: number }; blocks?: ABlock[] };
 
-/** One streamed chat completion on Kimi. Parses the SSE stream, collects text, tool calls and usage. */
-async function chatStream(o: { model: string; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; temperature?: number; reasoning?: string | null; signal?: AbortSignal; onText: (d: string) => void; onThinking?: (d: string) => void }): Promise<ChatOut> {
-  const body: Record<string, unknown> = { model: o.model, messages: o.messages, max_tokens: o.maxTokens, stream: true, stream_options: { include_usage: true } };
+/** The conversation as an OpenAI-compatible provider wants it: the wire fields only (no Anthropic replay blocks; Moonshot's `partial` flag kept). */
+function toChatMessages(convo: ChatMessage[]): Array<Omit<ChatMessage, 'blocks'>> {
+  return convo.map(m => { const { blocks: _blocks, ...rest } = m; void _blocks; return rest; });
+}
+
+/** One streamed chat completion on an OpenAI-compatible provider. Parses the SSE stream, collects text, tool calls and usage. */
+async function chatStream(o: { provider: Provider; model: string; messages: ChatMessage[]; maxTokens: number; maxTokensParam?: 'max_tokens' | 'max_completion_tokens'; tools?: FunctionTool[]; temperature?: number; reasoning?: string | null; streamUsage?: boolean; signal?: AbortSignal; onText: (d: string) => void; onThinking?: (d: string) => void }): Promise<ChatOut> {
+  const body: Record<string, unknown> = { model: o.model, messages: toChatMessages(o.messages), [o.maxTokensParam || 'max_tokens']: o.maxTokens, stream: true };
+  if (o.streamUsage !== false) body.stream_options = { include_usage: true };
   if (o.temperature !== undefined) body.temperature = o.temperature;
   if (o.tools?.length) { body.tools = o.tools; body.tool_choice = 'auto'; }
   if (o.reasoning) body.reasoning_effort = o.reasoning;
-  const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body), signal: o.signal });
+  const res = await fetch(`${o.provider.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${o.provider.key}` }, body: JSON.stringify(body), signal: o.signal });
   if (!res.ok) throw await providerError(res);
   if (!res.body) throw new ProviderRequestError(502, 'Empty response from the model provider');
   let text = ''; let finish = 'stop';
@@ -422,13 +452,13 @@ function toAnthropicMessages(convo: ChatMessage[]): AMessage[] {
  * One streamed message on Anthropic: adaptive thinking with the tier's effort, the system prompt cached, tools
  * offered when connectors are present. Parses the event stream into text, thinking, tool calls and usage.
  */
-async function anthropicStream(o: { model: string; system: SystemBlock[]; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; effort: string | null; signal?: AbortSignal; onText: (d: string) => void; onThinking?: (d: string) => void }): Promise<ChatOut> {
-  const key = anthropicKey(); if (!key) throw new ProviderRequestError(401, 'ANTHROPIC_API_KEY is not set');
+async function anthropicStream(o: { provider: Provider; model: string; system: SystemBlock[]; messages: ChatMessage[]; maxTokens: number; tools?: FunctionTool[]; effort: string | null; signal?: AbortSignal; onText: (d: string) => void; onThinking?: (d: string) => void }): Promise<ChatOut> {
+  const key = o.provider.key; if (!key) throw new ProviderRequestError(401, `No API key for ${o.provider.name}`);
   const system: ABlock[] = o.system.filter(b => b.text.trim()).map(b => b.cache ? { type: 'text', text: b.text, cache_control: { type: 'ephemeral' } } : { type: 'text', text: b.text });
   const body: Record<string, unknown> = { model: o.model, max_tokens: o.maxTokens, stream: true, system, messages: toAnthropicMessages(o.messages), thinking: { type: 'adaptive' } };
   if (o.effort) body.output_config = { effort: o.effort };
   if (o.tools?.length) body.tools = o.tools.map(t => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters }));
-  const res = await fetch(`${anthropicBase()}/v1/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION }, body: JSON.stringify(body), signal: o.signal });
+  const res = await fetch(`${o.provider.baseUrl}/v1/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION }, body: JSON.stringify(body), signal: o.signal });
   if (!res.ok) throw await providerError(res);
   if (!res.body) throw new ProviderRequestError(502, 'Empty response from the model provider');
   let text = ''; let stop = 'end_turn';
@@ -508,31 +538,49 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, ti
   const tried: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     const model = await resolveModel(tier, tried); tried.push(model);
+    let provider: Provider;
+    try { provider = requireProvider(model, tier); } catch { return null; }
     try {
       let text = '';
-      if (isClaude(model)) {
-        const r = await anthropicStream({ model, system: [{ text: system }], messages: [{ role: 'user', content: prompt }], maxTokens, effort: effortFor(tier, model), onText: (d) => { text += d; } });
+      if (provider.kind === 'anthropic') {
+        const r = await anthropicStream({ provider, model, system: [{ text: system }], messages: [{ role: 'user', content: prompt }], maxTokens, effort: effortFor(tier, model), onText: (d) => { text += d; } });
         console.log('[json]', JSON.stringify({ model, tier, in: r.usage.in, out: r.usage.out, cacheRead: r.usage.cacheRead }));
       } else {
-        const body: Record<string, unknown> = { model, max_tokens: maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
+        const body: Record<string, unknown> = { model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
         const temp = temperatureFor(model, 0.4); if (temp !== undefined) body.temperature = temp;
         const effort = reasoningFor(tier, model); if (effort) body.reasoning_effort = effort;
-        const res = await fetch(`${apiBase()}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body) });
-        if (!res.ok) throw await providerError(res);
-        const j = await res.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+        const j = await chatOnce(provider, body, maxTokens);
         text = j.choices?.[0]?.message?.content || '';
         console.log('[json]', JSON.stringify({ model, tier, in: j.usage?.prompt_tokens, out: j.usage?.completion_tokens }));
       }
       return parseJsonLoosely<T>(text);
     } catch (e) {
       const p = describeProviderError(e);
-      console.warn('[provider] quickJson failed', JSON.stringify({ model, tier, code: p.code, status: p.status, type: p.type, message: p.message }));
-      if (isClaude(model) && (p.code === 'provider_auth' || p.code === 'provider_billing')) markAnthropicDown(p.message);
-      // A Claude failure hands the call to the next candidate once; a Kimi failure is final.
-      if (!isClaude(model)) return null;
+      console.warn('[provider] quickJson failed', JSON.stringify({ model, provider: provider.id, tier, code: p.code, status: p.status, type: p.type, message: p.message }));
+      if (p.code === 'provider_auth' || p.code === 'provider_billing') markProviderDown(provider, p.message);
+      // A refusal hands the call to the next candidate once; a bad answer is final.
+      if (p.code === 'prompt_too_large' || p.code === 'invalid_request') return null;
     }
   }
   return null;
+}
+
+/**
+ * One unstreamed chat completion, with the parameter names this model takes: newer OpenAI models want
+ * `max_completion_tokens` and no temperature; older ones and most other providers want `max_tokens`.
+ */
+async function chatOnce(provider: Provider, body: Record<string, unknown>, maxTokens: number): Promise<{ choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
+  let tokensParam = 'max_tokens';
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` }, body: JSON.stringify({ ...body, [tokensParam]: maxTokens }), signal: AbortSignal.timeout(120_000) });
+    if (res.ok) return await res.json();
+    const err = await providerError(res);
+    if (err.status === 400 && tokensParam === 'max_tokens' && /max_completion_tokens/i.test(err.message)) { tokensParam = 'max_completion_tokens'; continue; }
+    if (err.status === 400 && body.temperature !== undefined && /temperature/i.test(err.message)) { delete body.temperature; continue; }
+    if (err.status === 400 && body.reasoning_effort && /reasoning/i.test(err.message)) { delete body.reasoning_effort; continue; }
+    throw err;
+  }
+  throw new ProviderRequestError(400, 'The request could not be shaped for this model');
 }
 
 /** The first JSON array or object in a reply, fences and prose around it ignored. */

@@ -18,13 +18,15 @@ Verbs, with their required fields: open (to: one of #/discover, #/connectors, #/
 
 /** The person's connectors, the presets they could add, and their recent apps, as the model may reference them in a console. */
 export async function consoleContext(userId: string, opts: { canBuild: boolean }): Promise<string> {
-  const [conns, builds] = await Promise.all([
+  const [conns, spaces, builds] = await Promise.all([
     listConnectors(userId).catch(() => []),
+    db().select({ id: schema.spaces.id, name: schema.spaces.name }).from(schema.spaces).where(eq(schema.spaces.userId, userId)).catch(() => []),
     db().select({ id: schema.builds.id, rootId: schema.builds.rootId, version: schema.builds.version, title: schema.builds.title, kind: schema.builds.kind, status: schema.builds.status, updatedAt: schema.builds.updatedAt })
       .from(schema.builds).where(eq(schema.builds.userId, userId)).orderBy(desc(schema.builds.updatedAt)).limit(40).catch(() => []),
   ]);
   const L: string[] = [];
-  const cl = conns.map(c => `- ${c.name} (connector id ${c.id}, ${c.enabled ? 'on' : 'off'}${c.status === 'ok' ? '' : `, ${c.status === 'needs_auth' ? 'needs a sign-in' : c.status === 'error' ? 'not reachable' : 'not checked yet'}`})`);
+  const spaceName = new Map(spaces.map(s => [s.id, s.name]));
+  const cl = conns.map(c => `- ${c.name} (connector id ${c.id}, ${c.enabled ? 'on' : 'off'}${c.status === 'ok' ? '' : `, ${c.status === 'needs_auth' ? 'needs a sign-in' : c.status === 'error' ? 'not reachable' : 'not checked yet'}`}${c.spaceIds?.length ? `, only in the ${c.spaceIds.map(id => spaceName.get(id)).filter(Boolean).join(' and ')} Space${c.spaceIds.length === 1 ? '' : 's'}` : ''})`);
   L.push(cl.length ? `Connectors the person has:\n${cl.join('\n')}` : 'The person has no connectors yet.');
   const have = new Set(conns.map(c => c.preset).filter(Boolean));
   const presets = catalogForClient().filter(p => p.key !== 'custom' && p.available !== false && !have.has(p.key)).slice(0, 12);

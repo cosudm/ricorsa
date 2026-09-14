@@ -225,6 +225,8 @@ export const connectors = sqliteTable('connectors', {
   pending: text('pending', { mode: 'json' }).$type<ConnectorPending>(),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   allowedTools: text('allowed_tools', { mode: 'json' }).$type<string[]>(),
+  /** Spaces this connector is limited to; null or empty means it is available everywhere. */
+  spaceIds: text('space_ids', { mode: 'json' }).$type<string[]>(),
   tools: text('tools', { mode: 'json' }).$type<ConnectorTool[]>().notNull().$defaultFn(() => []).default(sql`'[]'`),
   status: text('status').$type<ConnectorStatus>().notNull().default('new'),
   lastError: text('last_error'),

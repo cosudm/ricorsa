@@ -1,0 +1,1 @@
+ALTER TABLE `connectors` ADD `space_ids` text;

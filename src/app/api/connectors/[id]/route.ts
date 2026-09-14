@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
 import { db, schema } from '@/lib/db';
-import { checkConnector, getConnectorOwned, toClient, validateUrl } from '@/lib/connectors';
+import { checkConnector, getConnectorOwned, ownSpaceIds, toClient, validateUrl } from '@/lib/connectors';
 import { openJson, sealJson } from '@/lib/secretbox';
 import { isVaultConnector, vaultClient } from '@/lib/vault';
 import type { ConnectorSecret } from '@/lib/db/schema';
@@ -17,9 +17,11 @@ const Body = z.object({
   enabled: z.boolean().optional(),
   allowedTools: z.array(z.string().max(120)).max(200).nullable().optional(),
   token: z.string().max(4000).optional(),   // rotate a bearer token
+  /** Limit the connector to these Spaces; an empty list or null makes it available everywhere. */
+  spaceIds: z.array(z.string().max(60)).max(50).nullable().optional(),
 });
 
-/** PATCH /api/connectors/[id] — rename, turn on or off, limit tools, change the URL, or rotate the token. */
+/** PATCH /api/connectors/[id] — rename, turn on or off, limit tools or Spaces, change the URL, or rotate the token. */
 export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const user = await currentUser(); const { id } = await ctx.params;
   const c = await getConnectorOwned(user.id, id);
@@ -28,6 +30,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   if (b.data.name !== undefined) patch.name = b.data.name;
   if (b.data.enabled !== undefined) patch.enabled = b.data.enabled;
   if (b.data.allowedTools !== undefined) patch.allowedTools = b.data.allowedTools && b.data.allowedTools.length ? b.data.allowedTools : null;
+  if (b.data.spaceIds !== undefined) patch.spaceIds = await ownSpaceIds(user.id, b.data.spaceIds);
   let recheck = false;
   if (b.data.url !== undefined) { patch.url = validateUrl(b.data.url); recheck = true; }
   if (b.data.token !== undefined && c.authType === 'bearer') { patch.secret = await sealJson({ token: b.data.token.trim() }); recheck = true; }

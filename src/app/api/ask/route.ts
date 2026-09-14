@@ -133,7 +133,8 @@ export async function POST(req: Request) {
         let space = null;
         if (th.spaceId) { const rows = await db().select().from(schema.spaces).where(and(eq(schema.spaces.id, th.spaceId), eq(schema.spaces.userId, user.id))).limit(1); space = rows[0] || null; }
         let mcp: Awaited<ReturnType<typeof connectorsForModel>> = [];
-        try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors); } catch (e) { console.warn('connectors unavailable', e); }
+        try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors, th.spaceId || null); } catch (e) { console.warn('connectors unavailable', e); }
+        if (mcp.length) console.log('[ask] connectors', JSON.stringify({ space: th.spaceId || null, connectors: mcp.map(m => m.label) }));
         // Vault connectors: their search hits and read pages become numbered sources the answer can cite and the reader can open.
         const vaultByServer = new Map(mcp.filter(m => isVaultConnector({ preset: m.preset, url: m.url })).map(m => [m.name, m.id]));
         // Website connectors: their search hits and read pages become numbered sources with real page URLs.
@@ -141,7 +142,7 @@ export async function POST(req: Request) {
         // Consoles ride along with Search answers: the guide plus what the person actually has, so buttons act on real things.
         let consoles = '';
         if (turn.mode !== 'research') { try { consoles = `${CONSOLE_GUIDE}\n\n${await consoleContext(user.id, { canBuild: user.admin || planFor(user.plan).caps.discover === 'full' })}`; } catch (e) { console.warn('console context unavailable', e); } }
-        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp), files: attached.map(a => a.name), consoles }));
+        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp, space ? { id: space.id, name: space.name } : null), files: attached.map(a => a.name), consoles }));
         const messages = buildMessages(history, turn.q, sourcesBlock(sources), fileText);
         turn.tools = [];
 

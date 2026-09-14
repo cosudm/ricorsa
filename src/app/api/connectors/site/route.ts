@@ -3,7 +3,7 @@ import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, uid, HttpError } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { planFor } from '@/lib/plans';
-import { checkConnector, listConnectors, serverNameFor, toClient } from '@/lib/connectors';
+import { checkConnector, listConnectors, ownSpaceIds, serverNameFor, toClient } from '@/lib/connectors';
 import { sealJson } from '@/lib/secretbox';
 import { eq } from 'drizzle-orm';
 import { SITE_PRESET, MAX_PAGES_CAP, validateSiteUrl, readSite, siteMcpUrl } from '@/lib/sites';
@@ -24,14 +24,15 @@ export const POST = handle(async (req: Request) => {
   const existing = await listConnectors(user.id);
   if (limit <= 0) return fail(402, 'Connectors are part of the Pro and Team plans.', 'upgrade_required');
   if (existing.length >= limit) return fail(402, `The ${plan.name} plan allows ${limit} connector${limit === 1 ? '' : 's'}. Upgrade for more.`, 'upgrade_required');
-  const b = z.object({ url: z.string().trim().min(4).max(500), maxPages: z.number().int().min(1).max(MAX_PAGES_CAP).optional(), name: z.string().trim().max(60).optional() }).safeParse(await readJson(req));
+  const b = z.object({ url: z.string().trim().min(4).max(500), maxPages: z.number().int().min(1).max(MAX_PAGES_CAP).optional(), name: z.string().trim().max(60).optional(), spaceIds: z.array(z.string().max(60)).max(50).optional().nullable() }).safeParse(await readJson(req));
   if (!b.success) return fail(400, 'Enter the website address');
   let rootUrl: string; try { rootUrl = validateSiteUrl(b.data.url); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message) : fail(400, 'Enter a full address'); }
   const host = new URL(rootUrl).hostname.replace(/^www\./, '');
   const name = (b.data.name || host).slice(0, 60);
   const id = uid(); const token = randomToken();
   const d = db();
-  const rows = await d.insert(schema.connectors).values({ id, userId: user.id, name, serverName: serverNameFor('site_' + host.replace(/[^a-z0-9]+/gi, '_').slice(0, 24), existing.map(c => c.serverName)), preset: SITE_PRESET, url: siteMcpUrl(id), authType: 'bearer', secret: await sealJson({ token }), status: 'new' }).returning();
+  const spaceIds = await ownSpaceIds(user.id, b.data.spaceIds);
+  const rows = await d.insert(schema.connectors).values({ id, userId: user.id, name, serverName: serverNameFor('site_' + host.replace(/[^a-z0-9]+/gi, '_').slice(0, 24), existing.map(c => c.serverName)), preset: SITE_PRESET, url: siteMcpUrl(id), authType: 'bearer', secret: await sealJson({ token }), spaceIds, status: 'new' }).returning();
   await d.insert(schema.sites).values({ connectorId: id, userId: user.id, rootUrl, maxPages: b.data.maxPages || 40, status: 'new' });
   const enc = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

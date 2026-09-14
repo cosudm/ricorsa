@@ -3,7 +3,7 @@ import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, uid } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { planFor } from '@/lib/plans';
-import { catalogForClient, checkConnector, listConnectors, presetFor, serverNameFor, toClient, validateUrl } from '@/lib/connectors';
+import { catalogForClient, checkConnector, listConnectors, ownSpaceIds, presetFor, serverNameFor, toClient, validateUrl } from '@/lib/connectors';
 import { sealJson } from '@/lib/secretbox';
 
 export const dynamic = 'force-dynamic';
@@ -23,6 +23,8 @@ const Body = z.object({
   preset: z.string().max(40).optional().nullable(),
   authType: z.enum(['none', 'bearer', 'oauth']).default('none'),
   token: z.string().max(4000).optional().nullable(),
+  /** Limit the connector to these Spaces; none means everywhere. */
+  spaceIds: z.array(z.string().max(60)).max(50).optional().nullable(),
 });
 
 /** POST /api/connectors — add one. Bearer and open connectors are checked right away; OAuth ones wait for sign-in. */
@@ -39,7 +41,8 @@ export const POST = handle(async (req: Request) => {
   if (authType === 'bearer' && !String(b.data.token || '').trim()) return fail(400, 'This connector needs a token');
   const secret = authType === 'bearer' ? await sealJson({ token: String(b.data.token).trim() }) : null;
   const serverName = serverNameFor(b.data.name, existing.map(c => c.serverName));
-  const rows = await db().insert(schema.connectors).values({ id: uid(), userId: user.id, name: b.data.name, serverName, preset: preset && preset.key !== 'custom' ? preset.key : null, url, authType, secret, status: authType === 'oauth' ? 'needs_auth' : 'new' }).returning();
+  const spaceIds = await ownSpaceIds(user.id, b.data.spaceIds);
+  const rows = await db().insert(schema.connectors).values({ id: uid(), userId: user.id, name: b.data.name, serverName, preset: preset && preset.key !== 'custom' ? preset.key : null, url, authType, secret, spaceIds, status: authType === 'oauth' ? 'needs_auth' : 'new' }).returning();
   let row = rows[0];
   if (authType !== 'oauth') row = await checkConnector(row);
   return json({ connector: await toClient(row) });

@@ -3,7 +3,7 @@
  * handed to the model as a set of tools while it answers, through the provider's MCP connector, so a
  * question about the person's own issues, pages, deals or data can be answered from the live source.
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db, schema } from './db';
 import type { ConnectorAuth, ConnectorSecret, ConnectorStatus, ConnectorTool } from './db/schema';
 import { HttpError, slugify } from './http';
@@ -68,6 +68,8 @@ export type ClientConnector = {
   id: string; name: string; serverName: string; preset: string | null; url: string; authType: ConnectorAuth; enabled: boolean;
   allowedTools: string[] | null; tools: ConnectorTool[]; status: ConnectorStatus; lastError: string | null; lastCheckedAt: number | null;
   hasCredential: boolean; createdAt: number; updatedAt: number;
+  /** Spaces the connector is limited to; empty means every thread can use it. */
+  spaceIds: string[];
   /** Website connectors: the site behind it and how much of it has been read. */
   site?: { rootUrl: string; pages: number; chars: number; rendered: number; status: string; error: string | null; crawledAt: number | null } | null;
 };
@@ -79,6 +81,7 @@ export async function toClient(c: ConnectorRow): Promise<ClientConnector> {
     allowedTools: c.allowedTools || null, tools: (c.tools || []).slice(0, MAX_TOOLS_SHOWN), status: c.status, lastError: c.lastError,
     lastCheckedAt: c.lastCheckedAt ? new Date(c.lastCheckedAt).getTime() : null,
     hasCredential: !!(s && (s.token || s.accessToken)), createdAt: new Date(c.createdAt).getTime(), updatedAt: new Date(c.updatedAt).getTime(),
+    spaceIds: c.spaceIds || [],
   };
   if (c.preset === 'website') {
     const site = (await db().select().from(schema.sites).where(eq(schema.sites.connectorId, c.id)).limit(1))[0];
@@ -89,6 +92,34 @@ export async function toClient(c: ConnectorRow): Promise<ClientConnector> {
 
 export async function listConnectors(userId: string): Promise<ConnectorRow[]> {
   return db().select().from(schema.connectors).where(eq(schema.connectors.userId, userId));
+}
+
+/**
+ * Whether a connector is in scope for a thread: one with no Space limit is available everywhere; one limited to
+ * Spaces is available only in threads that belong to one of them.
+ */
+export function connectorInScope(c: { spaceIds?: string[] | null }, spaceId: string | null | undefined): boolean {
+  const ids = c.spaceIds || [];
+  return !ids.length || (!!spaceId && ids.includes(spaceId));
+}
+
+/** The Space ids that belong to the person, out of the ones given; unknown ids are dropped. */
+export async function ownSpaceIds(userId: string, ids: string[] | null | undefined): Promise<string[] | null> {
+  const wanted = [...new Set((ids || []).map(s => String(s).trim()).filter(Boolean))].slice(0, 50);
+  if (!wanted.length) return null;
+  const rows = await db().select({ id: schema.spaces.id }).from(schema.spaces).where(and(eq(schema.spaces.userId, userId), inArray(schema.spaces.id, wanted)));
+  const own = rows.map(r => r.id).filter(id => wanted.includes(id));
+  return own.length ? own : null;
+}
+
+/** A Space is gone: take it out of every connector's scope; a connector left with no Space becomes available everywhere. */
+export async function forgetSpaceInConnectors(userId: string, spaceId: string): Promise<void> {
+  const rows = await listConnectors(userId);
+  for (const c of rows) {
+    if (!c.spaceIds || !c.spaceIds.includes(spaceId)) continue;
+    const next = c.spaceIds.filter(id => id !== spaceId);
+    await db().update(schema.connectors).set({ spaceIds: next.length ? next : null, updatedAt: new Date() }).where(eq(schema.connectors.id, c.id));
+  }
 }
 
 export async function getConnectorOwned(userId: string, id: string): Promise<ConnectorRow> {
@@ -127,26 +158,27 @@ export async function checkConnector(c: ConnectorRow): Promise<ConnectorRow> {
   return rows[0] || { ...c, ...patch };
 }
 
-/** What the model gets: every enabled, working connector, with a live token. */
-export type ModelConnector = { id: string; preset: string | null; name: string; label: string; url: string; token: string | null; allowedTools: string[] | null; tools: ConnectorTool[] };
-export async function connectorsForModel(userId: string, max: number): Promise<ModelConnector[]> {
+/** What the model gets: every enabled, working connector in scope for the thread's Space (none: only the ones available everywhere), with a live token. */
+export type ModelConnector = { id: string; preset: string | null; name: string; label: string; url: string; token: string | null; allowedTools: string[] | null; tools: ConnectorTool[]; spaceIds: string[] };
+export async function connectorsForModel(userId: string, max: number, spaceId: string | null = null): Promise<ModelConnector[]> {
   if (max <= 0) return [];
-  const rows = (await listConnectors(userId)).filter(c => c.enabled && c.status !== 'error').sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).slice(0, max);
+  const rows = (await listConnectors(userId)).filter(c => c.enabled && c.status !== 'error' && connectorInScope(c, spaceId)).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).slice(0, max);
   const out: ModelConnector[] = [];
   for (const c of rows) {
     const token = await tokenFor(c);
     if (c.authType !== 'none' && !token) continue;
-    out.push({ id: c.id, preset: c.preset, name: c.serverName, label: c.name, url: c.url, token, allowedTools: c.allowedTools?.length ? c.allowedTools : null, tools: c.tools || [] });
+    out.push({ id: c.id, preset: c.preset, name: c.serverName, label: c.name, url: c.url, token, allowedTools: c.allowedTools?.length ? c.allowedTools : null, tools: c.tools || [], spaceIds: c.spaceIds || [] });
   }
   return out;
 }
 
 /** One line per connector for the system prompt, so the model knows what it can reach and when to use it. */
-export function connectorsPromptBlock(list: ModelConnector[]): string {
+export function connectorsPromptBlock(list: ModelConnector[], space?: { id: string; name: string } | null): string {
   if (!list.length) return '';
   const lines = list.map(c => {
     const names = (c.allowedTools || c.tools.map(t => t.name)).slice(0, 12);
-    return `- ${c.label} (server "${c.name}")${names.length ? `: ${names.join(', ')}${(c.allowedTools || c.tools).length > 12 ? ', …' : ''}` : ''}`;
+    const here = space && c.spaceIds.includes(space.id) ? ` (connected for the ${space.name} Space)` : '';
+    return `- ${c.label} (server "${c.name}")${here}${names.length ? `: ${names.join(', ')}${(c.allowedTools || c.tools).length > 12 ? ', …' : ''}` : ''}`;
   });
   return `Connected apps. The person has linked these outside apps and MCP servers; their tools are available to you in this conversation:\n${lines.join('\n')}\nUse them when the question is about the person's own data, records or work in those apps (their issues, pages, deals, files, customers, projects, code), and when a tool would give a more exact answer than the web. Do not use them for general knowledge. Call the tool, read the result, then answer in your own words; never dump raw tool output, and never mention server names or tool names in the answer.${list.some(c => c.preset === 'website') ? `\nWebsite connectors hold the pages of sites the person connected (${list.filter(c => c.preset === 'website').map(c => c.label).join(', ')}). For anything those sites would say (their listings, roles, programs, products, documentation, people), search them first (site_search), read the pages you rely on (site_read), and cite each page with the bracketed number the results carry, exactly like web sources; go to the web only for what the site does not cover.` : ''}${list.some(c => c.label === 'VDRPros Vault' || /vdrpros|vault/i.test(c.name)) ? `\nVDRPros Vault holds the person's own documents (depositions, transcripts, summaries, exhibits, records). For questions about a witness, a matter, a defendant, a site, a product or anything that would be in those files, search the Vault first (vault_search), read the pages you will rely on (vault_read), and cite them with the bracketed numbers the results carry, exactly like web sources: a claim from a Vault page ends with its [n]. When a matching folder is still on paper, say so and offer to request a scan; do not request one unless the person asks.` : ''}`;
 }

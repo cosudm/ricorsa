@@ -213,10 +213,10 @@ function toast(msg, kind = 'ok') {
 }
 
 // ---------- Modal ----------
-function openModal(html, { onMount } = {}) {
+function openModal(html, { onMount, wide } = {}) {
   closeModal();
   const root = $('#modalRoot');
-  root.innerHTML = `<div class="overlay" id="overlay"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
+  root.innerHTML = `<div class="overlay" id="overlay"><div class="modal${wide ? ' wide' : ''}" role="dialog" aria-modal="true">${html}</div></div>`;
   const ov = $('#overlay');
   ov.addEventListener('mousedown', e => { if (e.target === ov) closeModal(); });
   $$('[data-close]', ov).forEach(b => b.addEventListener('click', closeModal));
@@ -1563,8 +1563,15 @@ function modelName(id) {
   if (/^claude-fable/i.test(m)) return 'Claude Fable ' + (m.match(/fable-(\d+)(?:-(\d+))?/i) ? m.match(/fable-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
   if (/^claude-opus/i.test(m)) return 'Claude Opus ' + (m.match(/opus-(\d+)(?:-(\d+))?/i) ? m.match(/opus-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
   if (/^claude-sonnet/i.test(m)) return 'Claude Sonnet ' + (m.match(/sonnet-(\d+)(?:-(\d+))?/i) ? m.match(/sonnet-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
-  if (/^kimi-k(\d[\d.]*)/i.test(m)) return 'Kimi K' + m.match(/^kimi-k(\d[\d.]*)/i)[1] + (/code/i.test(m) ? ' code' : '');
-  return m;
+  if (/^kimi-k(\d[\d.]*)/i.test(m)) return 'Kimi K' + m.match(/^kimi-k(\d[\d.]*)/i)[1] + (/code/i.test(m) ? ' code' : '') + (/thinking/i.test(m) ? ' thinking' : '') + (/turbo/i.test(m) ? ' turbo' : '');
+  if (/^gpt-/i.test(m)) return 'GPT-' + m.slice(4).replace(/-preview$/, '').replace(/-(\d{4}-\d{2}-\d{2}|\d{8})$/, '');
+  if (/^o[1-9](-|$)/i.test(m)) return m.replace(/-(\d{4}-\d{2}-\d{2})$/, '');
+  if (/^gemini-/i.test(m)) return 'Gemini ' + m.slice(7).replace(/-preview.*$/, '').replace(/-(\d{2}-\d{2}|\d{3})$/, '').replace(/-/g, ' ');
+  if (/^grok-/i.test(m)) return 'Grok ' + m.slice(5).replace(/-/g, ' ');
+  if (/^deepseek-/i.test(m)) return 'DeepSeek ' + m.slice(9).replace(/-/g, ' ');
+  if (/^(mistral|magistral|codestral|ministral|pixtral|devstral)-/i.test(m)) return m.replace(/-latest$/, '').replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
+  if (/llama/i.test(m)) return m.replace(/^meta-llama\//i, '').replace(/^llama-?/i, 'Llama ').replace(/-instruct.*$|-instant$/i, '');
+  return m.length > 34 ? m.slice(0, 32) + '…' : m;
 }
 /** The configured model could not be used and another wrote instead: say so, with what the provider answered, so a slow or weaker build is never a mystery. */
 function isAdmin() { return !!(state.user && state.user.admin); }
@@ -1734,15 +1741,40 @@ function renderSpace(id) {
   const threads = state.threads.filter(t => t.spaceId === s.id);
   main.innerHTML = `<div class="view">${topbarHtml(s.name, `<button type="button" class="btn sm ghost" data-edit>${icon('edit', 15)}<span>Edit</span></button>`)}<div class="scroll"><div class="col">
     <div class="space-hero"><span class="emo">${esc(s.emoji)}</span><div><h1>${esc(s.name)}</h1>${s.description ? `<p>${esc(s.description)}</p>` : ''}${s.instructions ? `<div class="instr">${esc(s.instructions)}</div>` : ''}</div></div>
-    <div data-composer style="margin-bottom:28px"></div>
-    <div class="sec-h" style="margin-bottom:6px">${icon('library', 17)}Threads in this Space</div>
+    <div data-composer style="margin-bottom:24px"></div>
+    <div class="sec-h" style="margin-bottom:6px">${icon('plug', 17)}Connectors in this Space<span class="spacer"></span><button type="button" class="btn sm" data-space-conn-add>${icon('plus', 14)}<span>Add to this Space</span></button></div>
+    <div data-space-conns><div class="skel"><i></i></div></div>
+    <div class="sec-h" style="margin:22px 0 6px">${icon('library', 17)}Threads in this Space</div>
     ${threads.length ? `<div class="list">${threads.map(t => threadRow(t)).join('')}</div>` : `<div class="empty">${icon('library', 28)}<div>Nothing here yet, ask the first question above.</div></div>`}
   </div></div></div>`;
   const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, tier, focus, attachments }) => startThread(text, { mode, tier, focus, attachments, spaceId: s.id }) });
   $('[data-composer]', main).appendChild(comp);
   $('[data-edit]', main).addEventListener('click', () => spaceModal(s));
+  const scope = { spaceId: s.id, spaceName: s.name, onAdded: () => paintSpaceConnectors(s) };
+  $('[data-space-conn-add]', main).addEventListener('click', () => { if ((state.connLimit || 0) <= 0 && !isAdmin() && state.connectors) { toast('Connectors are part of the Pro and Team plans', 'bad'); return; } addConnectorModal(null, scope); });
   wireRows(main);
   wireTopbar(main);
+  (state.connectors ? Promise.resolve() : loadConnectors()).then(() => paintSpaceConnectors(s)).catch(() => { const box = $('[data-space-conns]', main); if (box) box.innerHTML = `<p class="page-sub">Your connectors could not be loaded.</p>`; });
+}
+/**
+ * The connectors a thread in this Space can use: the ones sourced for it (unique to it, or shared with a few
+ * Spaces) and the ones available everywhere. Others can be brought in without adding them again.
+ */
+function paintSpaceConnectors(s) {
+  const box = $('[data-space-conns]'); if (!box) return;
+  const all = state.connectors || [];
+  const here = all.filter(c => (c.spaceIds || []).includes(s.id));
+  const everywhere = all.filter(c => !(c.spaceIds || []).length);
+  const elsewhere = all.filter(c => (c.spaceIds || []).length && !(c.spaceIds || []).includes(s.id));
+  const chip = (c, kind) => { const st = connStatus(c); return `<div class="space-conn${c.enabled ? '' : ' off'}" data-sc="${esc(c.id)}"><span class="conn-logo sm" style="background:${c.preset === 'vdrpros' ? '#0B6E63' : colorFor(c.name)}">${c.preset === 'vdrpros' ? 'V' : c.preset === 'website' ? 'W' : esc(c.name[0] || '?').toUpperCase()}</span><span class="t"><b>${esc(c.name)}</b><small>${kind === 'here' ? ((c.spaceIds || []).length === 1 ? 'Only in this Space' : `In ${(c.spaceIds || []).length} Spaces`) : 'Everywhere'}${c.enabled ? '' : ' · off'}${c.status !== 'ok' ? ` · ${esc(st.text)}` : ''}</small></span>${kind === 'here' ? `<button type="button" class="btn sm ghost" data-sc-scope title="Change the Spaces it is used in">${icon('layers', 13)}</button>` : ''}</div>`; };
+  box.innerHTML = `${here.length || everywhere.length ? `<div class="space-conn-grid">${here.map(c => chip(c, 'here')).join('')}${everywhere.map(c => chip(c, 'all')).join('')}</div>` : `<p class="page-sub" style="margin:4px 0 6px">No connectors reach this Space yet. Add one here to keep it unique to this Space, or connect one under <a href="#/connectors">Connectors</a> for every thread.</p>`}
+    ${elsewhere.length ? `<p class="page-sub" style="margin:8px 0 0">${elsewhere.length === 1 ? 'One connector is limited to other Spaces' : `${elsewhere.length} connectors are limited to other Spaces`}: <button type="button" class="linklike" data-sc-bring>use one here too</button>.</p>` : ''}`;
+  $$('[data-sc-scope]', box).forEach(b => b.addEventListener('click', () => { const c = all.find(x => x.id === b.closest('[data-sc]').dataset.sc); if (c) connectorScopeModal(c, () => paintSpaceConnectors(s)); }));
+  const bring = $('[data-sc-bring]', box); if (bring) bring.addEventListener('click', () => openModal(`<h2>${icon('plug', 20)}Use in ${esc(s.name)} too</h2><p class="sub">These connectors are limited to other Spaces. Pick one to make it available here as well.</p>
+    ${elsewhere.map(c => `<button type="button" class="pop-item" data-bring="${esc(c.id)}"><span class="conn-logo sm" style="background:${colorFor(c.name)}">${esc(c.name[0] || '?').toUpperCase()}</span><span><div class="t">${esc(c.name)}</div><div class="d">${scopeText(c)}</div></span></button>`).join('')}
+    <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button></div>`, {
+    onMount: ov => $$('[data-bring]', ov).forEach(b => b.addEventListener('click', async () => { const c = all.find(x => x.id === b.dataset.bring); if (!c) return; try { const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body: { spaceIds: [...(c.spaceIds || []), s.id] } }); Object.assign(c, r.connector); closeModal(); paintSpaceConnectors(s); toast(`${c.name} can now be used in ${s.name}`); } catch (err) { apiToast(err); } }))
+  }));
 }
 
 // ---------- Library ----------
@@ -1877,7 +1909,7 @@ function openSettings() {
     <div class="setting"><div class="l"><b>Learning loop</b><small>Let each answer update your identity graph, which shapes how later questions are read.</small></div><select id="stLearn"><option value="on"${state.graph && state.graph.paused ? '' : ' selected'}>On</option><option value="paused"${state.graph && state.graph.paused ? ' selected' : ''}>Paused</option></select></div>
     ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Pro or Team customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="pro"${s.demoPlan === 'pro' ? ' selected' : ''}>Pro</option><option value="team"${s.demoPlan === 'team' ? ' selected' : ''}>Team</option></select></div>
     <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Pro or Team without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>
-    <div class="setting"><div class="l"><b>Model accounts</b><small>Admin only. Which model each part of Ricorsa is running on right now, and what Anthropic and Kimi answer when asked. Start here when a build is slow or shows a different model than expected.</small></div><button type="button" class="btn sm" data-models>${icon('zap', 14)}Check</button></div>` : ''}
+    <div class="setting"><div class="l"><b>Model accounts</b><small>Admin only. Add a provider's API key (Anthropic, OpenAI, Google, xAI, Mistral, DeepSeek, Groq, Moonshot, OpenRouter, Together or any compatible endpoint), see what each account answers, and choose the active model for each part of Ricorsa.</small></div><button type="button" class="btn sm" data-models>${icon('zap', 14)}Manage</button></div>` : ''}
     <div class="setting"><div class="l"><b>Plan and usage</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. No question limits. Today ${state.usage.today} questions, this month ${state.usage.month}${state.usage.research ? `, Research ${state.usage.research}` : ''}.` : `${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.`}</small></div><a class="btn sm" href="/account">Account</a></div>
     <div class="setting"><div class="l"><b>Export everything</b><small>All threads, Spaces and your graph as one JSON file.</small></div><a class="btn sm" href="/api/account/export">${icon('download', 14)}Export</a></div>
     <div class="setting"><div class="l"><b>Sign out</b><small>Signed in as ${esc(state.user ? (state.user.email || state.user.name || '') : '')}. Sign out to switch to a different account.</small></div><a class="btn sm" href="/auth/logout">Sign out</a></div>
@@ -1893,28 +1925,144 @@ function openSettings() {
     }
   });
 }
-/** Admins: the live state of the model accounts. Anthropic is asked for one tiny message so its exact answer is on screen. */
-async function modelsModal() {
-  openModal(`<h2>${icon('zap', 20)}Model accounts</h2><p class="sub">Asking Anthropic and Kimi now.</p><div class="skel"><i></i><i></i></div>`);
+/**
+ * Admins: the model accounts. Every provider Ricorsa can talk to is a card: add the provider's API key (pasted here,
+ * stored sealed) and every model on that account becomes available; then choose the active model for each part of
+ * the product. Check sends one tiny message so the provider's exact answer is on screen.
+ */
+const TIER_LABEL = { quick: 'Fast answers', default: 'Best answers', complex: 'Reasoning answers', build: 'Build studio', ideas: 'Discover ideas' };
+const TIER_NOTE = { quick: 'Planning, rewrites and the Fast setting', default: 'Search answers and built apps', complex: 'The Reasoning setting', build: 'Writing and repairing apps', ideas: 'Discover ideas' };
+const NOT_CHAT = /embed|whisper|tts|image|dall|moderation|audio|realtime|rerank|transcri|speech|-vl-|vision-only|guard|ocr|sora|veo|imagen|video/i;
+function providerHint(p, probe) {
+  const st = probe ? probe.status : 0; const msg = (probe && probe.message) || p.error || '';
+  if (st === 401 || /invalid.*key|authentication|unauthorized/i.test(msg)) return 'The key is not accepted. Paste a current key from the provider.';
+  if (st === 402 || /credit|billing|balance|quota|insufficient/i.test(msg)) return 'The account behind this key has no credit or is over its quota. Add credit at the provider, then press Check.';
+  if (st === 404) return 'That model is not available to this key. Choose another model below.';
+  if (st === 403) return 'The key is valid but not allowed to use this model or this API. Check the key permissions and the organization plan.';
+  if (st === 0 && msg) return 'The provider could not be reached from this server.';
+  return '';
+}
+function providerStatusHtml(p, probe) {
+  if (!p.configured) return `<span class="muted">No key yet.</span>`;
+  const when = p.checkedAt ? ` <small class="muted">${esc(relTime(p.checkedAt))}</small>` : '';
+  if (p.setAside) return `<span class="bad">Set aside until ${esc(new Date(p.setAside.until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}:</span> ${esc(p.setAside.why || '')}`;
+  if (probe) return probe.ok ? `<span class="ok">Working.</span> ${esc(probe.message)} in ${Math.round(probe.ms / 100) / 10}s.` : `<span class="bad">Refused${probe.status ? ` (HTTP ${probe.status})` : ''}:</span> ${esc(probe.message)}`;
+  if (p.status === 'ok') return `<span class="ok">Working.</span>${when}`;
+  if (p.status === 'refused') return `<span class="bad">Refused:</span> ${esc(p.error || '')}${when}`;
+  return `<span class="muted">Key set, not checked yet.</span>`;
+}
+async function modelsModal(opts = {}) {
+  openModal(`<h2>${icon('zap', 20)}Model accounts</h2><p class="sub">${opts.probe ? 'Asking every provider with a key for one tiny message.' : 'Loading the accounts.'}</p><div class="skel"><i></i><i></i><i></i></div>`, { wide: true });
   let r;
-  try { r = await api('/api/admin/models'); } catch (e) { apiToast(e, 'Could not check the model accounts'); return; }
-  const TIER_LABEL = { quick: 'Fast answers', default: 'Best answers', complex: 'Reasoning answers', build: 'Build studio', ideas: 'Discover ideas' };
-  const a = r.anthropic || {}; const p = a.probe;
-  const anth = !a.configured ? `<span class="bad">No key on the server (ANTHROPIC_API_KEY).</span>`
-    : p ? (p.ok ? `<span class="ok">Working.</span> ${esc(p.message)} in ${Math.round(p.ms / 100) / 10}s.` : `<span class="bad">Refused (HTTP ${p.status || 'none'}).</span> ${esc(p.message)}${a.setAsideUntil ? ` Set aside until ${esc(new Date(a.setAsideUntil).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}; builds use Kimi until then.` : ''}`)
-    : (a.usable ? `<span class="ok">Key set.</span>` : `<span class="bad">Set aside:</span> ${esc(a.why || '')}`);
-  const hint = p && !p.ok ? (p.status === 401 ? 'The key is not accepted: paste a current key from console.anthropic.com into the ricorsa worker as ANTHROPIC_API_KEY.' : p.status === 404 ? 'That model id is not available to this key; set MODEL_BUILD and MODEL_IDEAS to a model the account can use.' : /credit|billing|balance/i.test(p.message) ? 'The Anthropic account has no prepaid credit: add credit under Plans and billing at console.anthropic.com, then press Check again.' : p.status === 403 ? 'The key is valid but not allowed to use this model or this API: check the key permissions and the organization plan.' : '') : '';
-  const tiers = Object.entries(r.tiers || {}).map(([k, t]) => `<div class="row"><b>${esc(TIER_LABEL[k] || k)}</b><span>${esc(modelName(t.resolved))}${t.resolved !== t.configured ? ` <span class="bad">(wanted ${esc(modelName(t.configured))})</span>` : ''}</span></div>`).join('');
-  openModal(`<h2>${icon('zap', 20)}Model accounts</h2><p class="sub">What each part of Ricorsa is running on right now.</p>
-    <div class="models-check">
-      <div class="row"><b>Anthropic</b><span>${anth}${hint ? `<br><small>${esc(hint)}</small>` : ''}</span></div>
-      <div class="row"><b>Kimi</b><span>${r.available && r.available.length ? `<span class="ok">Working.</span> ${r.available.length} models on the account.` : `<span class="bad">No model list came back.</span>`}</span></div>
+  try { r = await api('/api/admin/models' + (opts.probe ? '?probe=1' : '')); } catch (e) { apiToast(e, 'Could not load the model accounts'); return; }
+  paintModels(r);
+}
+function paintModels(r) {
+  const providers = r.providers || []; const probes = r.probes || {}; const settings = r.settings || {};
+  const configured = providers.filter(p => p.configured);
+  const chatModels = p => (p.models || []).filter(id => !NOT_CHAT.test(id)).sort();
+  const cards = providers.map(p => {
+    const probe = probes[p.id]; const hint = p.configured ? providerHint(p, probe) : '';
+    return `<div class="prov-card${p.configured ? '' : ' off'}" data-prov="${esc(p.id)}">
+      <div class="prov-head"><b>${esc(p.name)}</b><span class="prov-src">${p.source === 'env' ? 'Server key' : p.source === 'account' ? 'Key added here' : 'No key'}</span></div>
+      <div class="prov-status">${providerStatusHtml(p, probe)}${hint ? `<br><small>${esc(hint)}</small>` : ''}</div>
+      <div class="prov-meta">${p.configured ? (p.models && p.models.length ? `${p.models.length} model${p.models.length === 1 ? '' : 's'} on the account` : 'No model list from this provider') : (p.aggregator ? 'One key reaches many models.' : 'Add a key to use its models.')}${p.custom ? ` · ${esc(p.baseUrl)}` : ''}</div>
+      <div class="prov-actions">
+        ${p.configured ? `<button type="button" class="btn sm" data-check title="Send one tiny message and list the models">${icon('refresh', 13)}<span>Check</span></button>` : ''}
+        <button type="button" class="btn sm${p.configured ? '' : ' primary'}" data-key>${icon('key', 13)}<span>${p.source === 'account' ? 'Replace key' : 'Add key'}</span></button>
+        ${p.source === 'account' ? `<button type="button" class="btn sm ghost" data-forget title="${p.custom ? 'Remove this endpoint' : p.envKeys && p.envKeys.length ? 'Remove the key added here; a server key stays' : 'Remove the key added here'}">${icon('trash', 13)}<span>Remove</span></button>` : ''}
+        ${p.docs ? `<a class="btn sm ghost" href="${esc(p.docs)}" target="_blank" rel="noopener">${icon('external', 13)}<span>Get a key</span></a>` : ''}
+      </div></div>`;
+  }).join('');
+  const tierRows = Object.keys(TIER_LABEL).map(t => {
+    const info = (r.tiers || {})[t] || {}; const chosen = settings[t] || null;
+    const provOpts = `<option value="">Automatic</option>` + configured.map(p => `<option value="${esc(p.id)}"${chosen && chosen.provider === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
+    return `<div class="tier-row" data-tier="${t}">
+      <div class="tier-l"><b>${esc(TIER_LABEL[t])}</b><small>${esc(TIER_NOTE[t])}. Now: ${esc(modelName(info.resolved) || info.resolved || '')}${info.provider ? ` (${esc(info.provider)})` : ''}${info.resolved && info.configured && info.resolved !== info.configured ? ` <span class="bad">wanted ${esc(modelName(info.configured))}</span>` : ''}</small></div>
+      <select data-tier-prov aria-label="Provider for ${esc(TIER_LABEL[t])}">${provOpts}</select>
+      <span data-tier-model-wrap></span>
+    </div>`;
+  }).join('');
+  openModal(`<h2>${icon('zap', 20)}Model accounts</h2><p class="sub">Add a provider's API key and every model on that account can be the active model for any part of Ricorsa. Keys are stored sealed in your database; customers never see provider names or errors.</p>
+    <div class="prov-grid">${cards}
+      <button type="button" class="prov-card add" data-add-custom>${icon('plus', 18)}<b>Custom endpoint</b><span>Any OpenAI-compatible API by base URL: a gateway, a proxy, a model you host yourself.</span></button>
+    </div>
+    <div class="sec-h" style="margin:18px 0 6px">${icon('settings', 16)}Active models</div>
+    <p class="sub">Automatic uses the server's settings and the best model each account can serve. A choice applies as soon as it is saved; if that provider refuses later, the next one that works takes over so answers keep coming.</p>
+    <div class="tier-grid">${tierRows}</div>
+    <div class="models-check" style="margin-top:14px">
       <div class="row"><b>Browser check</b><span>${r.browserRun ? `<span class="ok">On.</span> Every built app is opened in a real browser.` : `<span class="bad">Off.</span> Built apps get a code review only (no Browser Run binding on this deployment).`}</span></div>
       <div class="row"><b>Web search</b><span>${r.search ? `<span class="ok">On.</span>` : `<span class="bad">Off.</span> No BRAVE_API_KEY.`}</span></div>
-      ${tiers}
     </div>
-    <div class="modal-actions"><button type="button" class="btn" id="mdAgain">${icon('refresh', 14)}Check again</button><button type="button" class="btn primary" data-close>Done</button></div>`, {
-    onMount: ov => { $('#mdAgain', ov).addEventListener('click', () => modelsModal()); }
+    <div class="modal-actions"><button type="button" class="btn left" data-check-all>${icon('refresh', 14)}<span>Check every account</span></button><button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" data-save-tiers>Save choices</button></div>`, {
+    wide: true,
+    onMount: ov => {
+      const byId = Object.fromEntries(providers.map(p => [p.id, p]));
+      // A tier's model control follows its provider: a select of the provider's chat models, or a text field when the provider gave no list.
+      const modelControl = (row, t) => {
+        const pid = $('[data-tier-prov]', row).value; const wrap = $('[data-tier-model-wrap]', row); const chosen = settings[t] || null;
+        if (!pid) { wrap.innerHTML = `<span class="muted" style="font-size:12.5px">Best available</span>`; return; }
+        const p = byId[pid]; const ids = p ? chatModels(p) : []; const cur = chosen && chosen.provider === pid ? chosen.model : '';
+        if (ids.length) wrap.innerHTML = `<select data-tier-model aria-label="Model">${(cur && !ids.includes(cur) ? [cur, ...ids] : ids).map(id => `<option value="${esc(id)}"${id === cur ? ' selected' : ''}>${esc(modelName(id) === id ? id : `${modelName(id)} (${id})`)}</option>`).join('')}</select>`;
+        else wrap.innerHTML = `<input type="text" data-tier-model value="${esc(cur)}" placeholder="Model id" aria-label="Model id" maxlength="160">`;
+      };
+      $$('.tier-row', ov).forEach(row => { const t = row.dataset.tier; modelControl(row, t); $('[data-tier-prov]', row).addEventListener('change', () => modelControl(row, t)); });
+      $$('.prov-card[data-prov]', ov).forEach(card => {
+        const p = byId[card.dataset.prov]; if (!p) return;
+        const ck = $('[data-check]', card); if (ck) ck.addEventListener('click', async () => { ck.disabled = true; ck.querySelector('span').textContent = 'Checking'; try { const res = await api('/api/admin/providers', { body: { id: p.id } }); toast(res.probe.ok ? `${p.name}: working, ${res.probe.models} model${res.probe.models === 1 ? '' : 's'}` : `${p.name}: ${res.probe.message}`, res.probe.ok ? 'ok' : 'bad'); } catch (err) { apiToast(err); } modelsModal(); });
+        $('[data-key]', card).addEventListener('click', () => providerKeyModal(p));
+        const fg = $('[data-forget]', card); if (fg) fg.addEventListener('click', () => openModal(`<h2>Remove ${esc(p.name)}${p.custom ? '' : ' key'}?</h2><p class="sub">${p.custom ? 'The endpoint and its key are removed from your account.' : p.envKeys && p.envKeys.length && p.source === 'account' ? 'The key added here is removed. If the server has one of its own, that one is used again.' : 'The key is removed; tiers set to this provider fall back to the next model that works.'}</p><div class="modal-actions"><button type="button" class="btn" id="pkKeep">Keep</button><button type="button" class="btn danger" id="pkDel">Remove</button></div>`, {
+          onMount: () => { $('#pkKeep').addEventListener('click', () => modelsModal()); $('#pkDel').addEventListener('click', async () => { try { await api('/api/admin/providers?id=' + encodeURIComponent(p.id), { method: 'DELETE' }); toast(`${p.name} removed`); modelsModal(); } catch (err) { apiToast(err); } }); }
+        }));
+      });
+      $('[data-add-custom]', ov).addEventListener('click', () => providerKeyModal(null));
+      $('[data-check-all]', ov).addEventListener('click', () => modelsModal({ probe: true }));
+      $('[data-save-tiers]', ov).addEventListener('click', async () => {
+        const tiers = {};
+        for (const row of $$('.tier-row', ov)) {
+          const pid = $('[data-tier-prov]', row).value; const m = $('[data-tier-model]', row);
+          if (!pid) { tiers[row.dataset.tier] = null; continue; }
+          const model = m ? m.value.trim() : ''; if (!model) { toast(`Choose a model for ${TIER_LABEL[row.dataset.tier]}`, 'bad'); if (m) m.focus(); return; }
+          tiers[row.dataset.tier] = { provider: pid, model };
+        }
+        const b = $('[data-save-tiers]', ov); b.disabled = true; b.textContent = 'Saving';
+        try { await api('/api/admin/models', { method: 'PUT', body: { tiers } }); toast('Model choices saved'); modelsModal(); } catch (err) { b.disabled = false; b.textContent = 'Save choices'; apiToast(err, 'Could not save the choices'); }
+      });
+    }
+  });
+}
+/** Paste a provider's API key (or add a custom endpoint). The key is sent once, sealed on the server and checked right away. */
+function providerKeyModal(p) {
+  const custom = !p || p.custom;
+  openModal(`<h2>${icon('key', 20)}${p ? `${p.source === 'account' ? 'Replace the key for' : 'Add a key for'} ${esc(p.name)}` : 'Add a custom endpoint'}</h2>
+    <p class="sub">${p && p.keyHint ? esc(p.keyHint) + ' ' : ''}Paste the key below. It is stored sealed in Ricorsa's database, never shown again, and Ricorsa sends one tiny message right away to confirm it works and to list the models on the account.</p>
+    ${!p ? `<div class="field"><label for="pkName">Name</label><input type="text" id="pkName" maxlength="60" placeholder="e.g. Company gateway"></div>
+    <div class="field"><label for="pkBase">Base URL</label><input type="url" id="pkBase" maxlength="500" placeholder="https://api.example.com/v1"><span class="hint">The address the OpenAI-compatible endpoints hang off: chat/completions and models are added to it.</span></div>
+    <div class="field"><label for="pkKind">API style</label><select id="pkKind"><option value="openai">OpenAI-compatible (chat completions)</option><option value="anthropic">Anthropic Messages API</option></select></div>` : p.custom ? `<div class="field"><label for="pkBase">Base URL</label><input type="url" id="pkBase" maxlength="500" value="${esc(p.baseUrl)}"></div>` : ''}
+    <div class="field"><label for="pkKey">API key</label><input type="password" id="pkKey" maxlength="4000" autocomplete="off" spellcheck="false" placeholder="Paste the key"></div>
+    ${custom ? `<div class="field"><label for="pkModel">Model id to test with (optional)</label><input type="text" id="pkModel" maxlength="160" value="${esc(p && p.probeModel ? p.probeModel : '')}" placeholder="e.g. the id the gateway documents"><span class="hint">Used for the one-message check when the endpoint does not list its models.</span></div>` : ''}
+    <div class="modal-actions"><button type="button" class="btn" id="pkBack">Back</button><button type="button" class="btn primary" id="pkOk">Save and check</button></div>`, {
+    onMount: ov => {
+      $('#pkBack', ov).addEventListener('click', () => modelsModal());
+      $('#pkOk', ov).addEventListener('click', async () => {
+        const key = $('#pkKey', ov).value.trim(); if (!key) { $('#pkKey', ov).focus(); return; }
+        const body = { id: p ? p.id : '', apiKey: key };
+        if (!p) {
+          const name = $('#pkName', ov).value.trim(), base = $('#pkBase', ov).value.trim();
+          if (!name) { $('#pkName', ov).focus(); return; } if (!base) { $('#pkBase', ov).focus(); return; }
+          body.id = 'custom_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'custom_' + Date.now().toString(36);
+          body.name = name; body.baseUrl = base; body.kind = $('#pkKind', ov).value;
+        } else if (custom) { const base = $('#pkBase', ov).value.trim(); if (base) body.baseUrl = base; }
+        if (custom) { const pm = $('#pkModel', ov); if (pm && pm.value.trim()) body.probeModel = pm.value.trim(); }
+        const b = $('#pkOk', ov); b.disabled = true; b.textContent = 'Checking';
+        try {
+          const res = await api('/api/admin/providers', { method: 'PUT', body });
+          toast(res.probe.ok ? `${res.provider.name}: working, ${res.probe.models} model${res.probe.models === 1 ? '' : 's'} available` : `${res.provider.name} saved, but it answered: ${res.probe.message}`, res.probe.ok ? 'ok' : 'bad');
+          modelsModal();
+        } catch (err) { b.disabled = false; b.textContent = 'Save and check'; apiToast(err, 'Could not save the key'); }
+      });
+      const first = $('#pkName', ov) || $('#pkKey', ov); if (first) first.focus();
+    }
   });
 }
 /** Admins: plans granted by email, and a form to add one. */
@@ -1958,7 +2106,7 @@ function renderConnectors() {
   const main = $('#main');
   main.innerHTML = `<div class="view">${topbarHtml('Connectors')}<div class="scroll"><div class="col wide">
     <div class="page-h"><h1>${icon('plug', 26)}Connectors</h1><button type="button" class="btn primary sm" data-add-conn>${icon('plus', 15)}<span>Add connector</span></button></div>
-    <p class="page-sub">Connect Ricorsa to the apps and MCP servers you use. When a connector is on, its tools are available to every answer: ask about your own issues, pages, deals, customers or code and Ricorsa reads the live source instead of guessing. Credentials are stored encrypted and never leave your account.</p>
+    <p class="page-sub">Connect Ricorsa to the apps and MCP servers you use. When a connector is on, its tools are available to every answer, or only inside the Spaces you choose: ask about your own issues, pages, deals, customers or code and Ricorsa reads the live source instead of guessing. Credentials are stored encrypted and never leave your account.</p>
     <div data-conn-list><div class="skel"><i></i><i></i></div></div>
   </div></div></div>`;
   wireTopbar(main);
@@ -1987,13 +2135,15 @@ function paintConnectors() {
         <div class="conn-main">
           <span class="conn-logo" style="background:${c.preset === 'vdrpros' ? '#0B6E63' : colorFor(c.name)}">${c.preset === 'vdrpros' ? 'V' : c.preset === 'website' ? 'W' : esc(c.name[0] || '?').toUpperCase()}</span>
           <div class="conn-txt"><b>${esc(c.name)}</b><span class="conn-url" title="${esc(c.preset === 'website' && c.site ? c.site.rootUrl : c.url)}">${esc(dom)} · ${c.preset === 'vdrpros' ? 'Connected with a one-time code' : c.preset === 'website' ? (c.site ? `${c.site.pages} page${c.site.pages === 1 ? '' : 's'} read${c.site.rendered ? ` (${c.site.rendered} in a browser)` : ''}${c.site.crawledAt ? ` · ${new Date(c.site.crawledAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}` : 'Website') : esc(AUTH_LABEL[c.authType] || c.authType)}</span>
-            <span class="conn-status ${st.cls}">${esc(st.text)}${c.lastError && c.status !== 'ok' ? `: ${esc(truncate(c.lastError, 120))}` : ''}</span></div>
+            <span class="conn-status ${st.cls}">${esc(st.text)}${c.lastError && c.status !== 'ok' ? `: ${esc(truncate(c.lastError, 120))}` : ''}</span>
+            <span class="conn-scope">${scopeText(c)}</span></div>
           <label class="switch${c.enabled ? ' on' : ''}" title="${c.enabled ? 'On: its tools are available to answers' : 'Off: kept, but not used'}" data-toggle><i></i><span>${c.enabled ? 'On' : 'Off'}</span></label>
         </div>
         <div class="conn-actions">
           ${c.authType === 'oauth' ? `<a class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" href="/api/connectors/${encodeURIComponent(c.id)}/oauth/start" title="Sign in to the app and approve access">${icon('key', 14)}<span>${c.status === 'needs_auth' ? 'Sign in' : 'Sign in again'}</span></a>` : ''}
           <button type="button" class="btn sm" data-test title="Reach the server and refresh its tool list">${icon('refresh', 14)}<span>Test</span></button>
           <button type="button" class="btn sm" data-tools title="Choose which of its tools Ricorsa may use" ${c.tools.length ? '' : 'disabled'}>${icon('check', 14)}<span>Tools</span></button>
+          <button type="button" class="btn sm" data-scope title="Use it everywhere, or only in chosen Spaces">${icon('layers', 14)}<span>Where</span></button>
           ${c.preset === 'website' ? `<button type="button" class="btn sm" data-reread title="Read the site again and replace its pages">${icon('loop', 14)}<span>Read again</span></button>` : ''}
           ${c.preset === 'vdrpros' ? `<button type="button" class="btn sm${c.status === 'needs_auth' ? ' primary' : ''}" data-reconnect title="Connect the Vault again with a new code">${icon('key', 14)}<span>Reconnect</span></button>` : c.preset === 'website' ? '' : `<button type="button" class="btn sm" data-edit title="Rename, change the URL or the token">${icon('edit', 14)}<span>Edit</span></button>`}
           <button type="button" class="btn sm danger" data-remove title="Remove this connector and its credentials">${icon('trash', 14)}<span>Remove</span></button>
@@ -2008,6 +2158,7 @@ function paintConnectors() {
     $('[data-toggle]', card).addEventListener('click', async e => { e.preventDefault(); try { const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body: { enabled: !c.enabled } }); Object.assign(c, r.connector); paintConnectors(); } catch (err) { apiToast(err); } });
     $('[data-test]', card).addEventListener('click', async e => { const b = e.currentTarget; b.disabled = true; b.querySelector('span').textContent = 'Testing'; try { const r = await api('/api/connectors/' + encodeURIComponent(c.id) + '/test', { method: 'POST' }); Object.assign(c, r.connector); toast(c.status === 'ok' ? `${c.name}: ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'} available` : `${c.name}: ${c.lastError || 'not reachable'}`, c.status === 'ok' ? 'ok' : 'bad'); } catch (err) { apiToast(err); } paintConnectors(); });
     const tb = $('[data-tools]', card); if (tb) tb.addEventListener('click', () => toolsModal(c));
+    const sc = $('[data-scope]', card); if (sc) sc.addEventListener('click', () => connectorScopeModal(c));
     const eb = $('[data-edit]', card); if (eb) eb.addEventListener('click', () => editConnectorModal(c));
     const rb = $('[data-reconnect]', card); if (rb) rb.addEventListener('click', () => vaultConnectModal((state.catalog || []).find(p => p.key === 'vdrpros'), c));
     const rr = $('[data-reread]', card); if (rr) rr.addEventListener('click', () => siteReadModal(c));
@@ -2016,22 +2167,47 @@ function paintConnectors() {
     }));
   });
 }
-function addConnectorModal(presetKey) {
+/** Where a connector applies: everywhere, or only in the Spaces it is limited to. */
+function scopeText(c) {
+  const ids = c.spaceIds || [];
+  if (!ids.length) return 'Available everywhere';
+  const names = ids.map(id => getSpace(id)).filter(Boolean).map(sp => `${esc(sp.emoji)} ${esc(sp.name)}`);
+  return `Only in ${names.length ? names.join(', ') : `${ids.length} Space${ids.length === 1 ? '' : 's'}`}`;
+}
+/** A connector sourced for a Space stays unique to it: tick the Spaces it may be used in, or none for everywhere. */
+function connectorScopeModal(c, after) {
+  const spaces = state.spaces || []; const ids = c.spaceIds || [];
+  openModal(`<h2>${icon('layers', 20)}Where ${esc(c.name)} is used</h2><p class="sub">Tick the Spaces this connector belongs to; threads in those Spaces can use it and no others can. Leave every box clear to make it available everywhere.</p>
+    ${spaces.length ? `<div class="tool-list">${spaces.map(sp => `<label class="tool-row"><input type="checkbox" data-sp="${esc(sp.id)}"${ids.includes(sp.id) ? ' checked' : ''}><span><b>${esc(sp.emoji)} ${esc(sp.name)}</b>${sp.description ? `<small>${esc(truncate(sp.description, 90))}</small>` : ''}</span></label>`).join('')}</div>` : `<div class="empty" style="padding:18px 0">${icon('layers', 24)}<div>No Spaces yet.</div><p>Create one under <a href="#/spaces" data-close>Spaces</a>, then limit connectors to it here.</p></div>`}
+    <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button>${spaces.length ? `<button type="button" class="btn primary" id="scOk">Save</button>` : ''}</div>`, {
+    onMount: ov => { const ok = $('#scOk', ov); if (!ok) return; ok.addEventListener('click', async () => {
+      const picked = $$('[data-sp]', ov).filter(x => x.checked).map(x => x.dataset.sp);
+      ok.disabled = true; ok.textContent = 'Saving';
+      try { const r = await api('/api/connectors/' + encodeURIComponent(c.id), { method: 'PATCH', body: { spaceIds: picked } }); Object.assign(c, r.connector); closeModal(); paintConnectors(); if (after) after(); toast(picked.length ? `${c.name}: only in ${picked.length} Space${picked.length === 1 ? '' : 's'}` : `${c.name}: available everywhere`); }
+      catch (err) { ok.disabled = false; ok.textContent = 'Save'; apiToast(err); }
+    }); }
+  });
+}
+/**
+ * Add a connector. With `scope` ({ spaceId, spaceName, onAdded }) the connector is sourced for that Space alone:
+ * it is created limited to the Space, and the Space page repaints when it lands.
+ */
+function addConnectorModal(presetKey, scope) {
   const cat = state.catalog || [];
   const preset = presetKey ? cat.find(p => p.key === presetKey) : null;
   if (!preset) {
-    openModal(`<h2>Add a connector</h2><p class="sub">Pick an app, or connect any MCP server by URL.</p>
+    openModal(`<h2>Add a connector${scope ? ` to ${esc(scope.spaceName)}` : ''}</h2><p class="sub">${scope ? 'Only threads in this Space will be able to use it. ' : ''}Pick an app, or connect any MCP server by URL.</p>
       <div class="conn-cat modal-cat">${cat.map(p => `<button type="button" class="conn-pick" data-pick="${esc(p.key)}"><b>${esc(p.name)}</b><span>${esc(p.blurb)}</span><em>${p.flow === 'vault' ? 'One-time code by email' : p.flow === 'site' ? 'Reads the site for you' : esc(AUTH_LABEL[p.auth])}</em></button>`).join('')}</div>
       <div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button></div>`, {
-      onMount: ov => $$('[data-pick]', ov).forEach(b => b.addEventListener('click', () => addConnectorModal(b.dataset.pick)))
+      onMount: ov => $$('[data-pick]', ov).forEach(b => b.addEventListener('click', () => addConnectorModal(b.dataset.pick, scope)))
     });
     return;
   }
-  if (preset.flow === 'vault') { vaultConnectModal(preset); return; }
-  if (preset.flow === 'site') { siteConnectModal(preset); return; }
+  if (preset.flow === 'vault') { vaultConnectModal(preset, null, scope); return; }
+  if (preset.flow === 'site') { siteConnectModal(preset, scope); return; }
   const custom = preset.key === 'custom';
   const authOpts = ['none', 'bearer', 'oauth'].map(a => `<option value="${a}"${a === preset.auth ? ' selected' : ''}>${AUTH_LABEL[a]}</option>`).join('');
-  openModal(`<h2>${custom ? 'Custom MCP server' : 'Connect ' + esc(preset.name)}</h2><p class="sub">${esc(preset.blurb)}${preset.docs ? ` <a href="${esc(preset.docs)}" target="_blank" rel="noopener">Vendor docs</a>` : ''}</p>
+  openModal(`<h2>${custom ? 'Custom MCP server' : 'Connect ' + esc(preset.name)}</h2><p class="sub">${scope ? `For the ${esc(scope.spaceName)} Space only. ` : ''}${esc(preset.blurb)}${preset.docs ? ` <a href="${esc(preset.docs)}" target="_blank" rel="noopener">Vendor docs</a>` : ''}</p>
     <div class="field"><label for="cName">Name</label><input type="text" id="cName" maxlength="60" value="${esc(custom ? '' : preset.name)}" placeholder="e.g. Company Jira"></div>
     <div class="field"><label for="cUrl">Server URL</label><input type="url" id="cUrl" maxlength="500" value="${esc(preset.url)}" placeholder="https://mcp.example.com/mcp"><span class="hint">${custom ? 'The remote MCP endpoint, over HTTPS.' : 'The vendor’s published endpoint. Edit it if their docs show a different one.'}</span></div>
     <div class="field"><label for="cAuth">Sign-in</label><select id="cAuth">${authOpts}</select><span class="hint" data-auth-hint></span></div>
@@ -2047,11 +2223,11 @@ function addConnectorModal(presetKey) {
         if (authType === 'bearer' && !token.trim()) { $('#cToken').focus(); return; }
         const btn = $('#cOk'); btn.disabled = true; btn.textContent = authType === 'oauth' ? 'Starting sign-in' : 'Checking the server';
         try {
-          const r = await api('/api/connectors', { body: { name, url, authType, token: authType === 'bearer' ? token : null, preset: custom ? null : preset.key } });
+          const r = await api('/api/connectors', { body: { name, url, authType, token: authType === 'bearer' ? token : null, preset: custom ? null : preset.key, spaceIds: scope ? [scope.spaceId] : undefined } });
           state.connectors = [...(state.connectors || []), r.connector];
           closeModal();
           if (authType === 'oauth') { location.href = '/api/connectors/' + encodeURIComponent(r.connector.id) + '/oauth/start'; return; }
-          paintConnectors();
+          paintConnectors(); if (scope && scope.onAdded) scope.onAdded();
           const c = r.connector; toast(c.status === 'ok' ? `${c.name} connected: ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'} available` : `${c.name} saved, but ${c.lastError || 'it could not be reached'}`, c.status === 'ok' ? 'ok' : 'bad');
         } catch (err) { btn.disabled = false; btn.textContent = 'Connect'; apiToast(err, 'Could not add the connector'); }
       });
@@ -2063,8 +2239,8 @@ function addConnectorModal(presetKey) {
  * Connecting a website: the address and how many pages to read; Ricorsa reads the site (rendering pages that are
  * applications) with progress shown as it goes, and the connector appears with its pages counted.
  */
-function siteConnectModal(preset) {
-  openModal(`<h2>${icon('globe', 20)}Connect a website</h2><p class="sub">Ricorsa reads the site's pages, keeps their text in your account, and searches them when you ask; answers cite the pages. Pages that only show their content in a browser are opened in one.</p>
+function siteConnectModal(preset, scope) {
+  openModal(`<h2>${icon('globe', 20)}Connect a website${scope ? ` to ${esc(scope.spaceName)}` : ''}</h2><p class="sub">${scope ? 'Only threads in this Space will search it. ' : ''}Ricorsa reads the site's pages, keeps their text in your account, and searches them when you ask; answers cite the pages. Pages that only show their content in a browser are opened in one.</p>
     <div class="field"><label for="sUrl">Website address</label><input type="url" id="sUrl" maxlength="500" placeholder="https://example.com" autocomplete="off"></div>
     <div class="field"><label for="sPages">Pages to read</label><select id="sPages"><option value="10">Up to 10</option><option value="25">Up to 25</option><option value="40" selected>Up to 40</option><option value="60">Up to 60</option></select></div>
     <div class="site-progress" id="sProg" hidden><span class="spinner tiny"></span><span id="sProgText">Opening the site</span></div>
@@ -2074,13 +2250,13 @@ function siteConnectModal(preset) {
         const url = $('#sUrl', ov).value.trim(); if (!url) { $('#sUrl', ov).focus(); return; }
         const b = $('#sGo', ov); b.disabled = true; $('#sProg', ov).hidden = false;
         try {
-          const res = await fetch('/api/connectors/site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ url, maxPages: +$('#sPages', ov).value }) });
+          const res = await fetch('/api/connectors/site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ url, maxPages: +$('#sPages', ov).value, spaceIds: scope ? [scope.spaceId] : undefined }) });
           if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || 'The site could not be read'); }
           let done = null, failed = null;
           await readSse(res, (ev, data) => { if (ev === 'status') { const t = $('#sProgText', ov); if (t) t.textContent = data.text || 'Reading'; } else if (ev === 'done') done = data; else if (ev === 'error') failed = data; });
           if (failed) throw new Error(failed.message || 'The site could not be read');
           if (!done) throw new Error('The read was cut off');
-          state.connectors = [...(state.connectors || []), done.connector]; closeModal(); paintConnectors();
+          state.connectors = [...(state.connectors || []), done.connector]; closeModal(); paintConnectors(); if (scope && scope.onAdded) scope.onAdded();
           toast(`${done.connector.name}: ${done.pages} page${done.pages === 1 ? '' : 's'} read${done.rendered ? `, ${done.rendered} in a browser` : ''}`);
         } catch (err) { $('#sProg', ov).hidden = true; b.disabled = false; toast(err.message || 'The site could not be read', 'bad'); }
       };
@@ -2110,7 +2286,7 @@ function siteReadModal(c) {
  * Connecting a VDRPros Vault: the person's Vault email, the one-time code it receives, then the workspaces to share.
  * Nothing about the Vault's own sign-in is involved; the Vault issues Ricorsa a token limited to those workspaces.
  */
-function vaultConnectModal(preset, existing) {
+function vaultConnectModal(preset, existing, scope) {
   if (!preset) { toast('The Vault connector is not available', 'bad'); return; }
   if (preset.available === false) { openModal(`<h2>VDRPros Vault</h2><p class="sub">This Ricorsa server is not linked to the Vault yet. Ask your administrator to finish the setup.</p><div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
   const stepEmail = () => openModal(`<h2>${existing ? 'Reconnect' : 'Connect'} VDRPros Vault</h2><p class="sub">Enter the email address your Vault administrator set up for you (not a Vault or Ricorsa address). A one-time code is issued for it; nothing is shared until you approve.</p>
@@ -2145,9 +2321,9 @@ function vaultConnectModal(preset, existing) {
         const picked = $$('[data-ws]', ov).filter(x => x.checked).map(x => x.dataset.ws); if (!picked.length) { toast('Tick at least one workspace', 'bad'); return; }
         ok.disabled = true; ok.textContent = 'Connecting';
         try {
-          const res = await api('/api/connectors/vault/approve', { body: { challengeId, workspaceIds: picked, name: existing ? existing.name : undefined } });
+          const res = await api('/api/connectors/vault/approve', { body: { challengeId, workspaceIds: picked, name: existing ? existing.name : undefined, spaceIds: existing ? (existing.spaceIds || []) : scope ? [scope.spaceId] : undefined } });
           if (existing) { try { await api('/api/connectors/' + encodeURIComponent(existing.id), { method: 'DELETE' }); } catch (e) { /* the old connection is revoked with the row */ } state.connectors = (state.connectors || []).filter(x => x.id !== existing.id); }
-          state.connectors = [...(state.connectors || []), res.connector]; closeModal(); paintConnectors();
+          state.connectors = [...(state.connectors || []), res.connector]; closeModal(); paintConnectors(); if (scope && scope.onAdded) scope.onAdded();
           toast(res.connector.status === 'ok' ? `Vault connected: ${res.workspaces.length} workspace${res.workspaces.length === 1 ? '' : 's'}, ${res.connector.tools.length} tools` : `Vault connected, but ${res.connector.lastError || 'it could not be reached yet'}`, res.connector.status === 'ok' ? 'ok' : 'bad');
         } catch (err) { ok.disabled = false; ok.textContent = 'Connect'; apiToast(err, 'Could not connect'); }
       }); }
@@ -2218,7 +2394,9 @@ async function checkProviderHealth() {
     if (!h || h.ok) return;
     if (sessionStorage.getItem('ricorsa.health.dismissed') === String(h.checkedAt)) return;
     const bar = document.createElement('div'); bar.className = 'admin-bar';
-    bar.innerHTML = `${icon('alert', 15)}<span>${esc(h.anthropic === 'refused' ? 'Anthropic is refusing requests (billing or key), so builds and ideas run on the fallback model.' : h.kimi === 'refused' ? 'Kimi is refusing requests (billing or key).' : 'A model account is not answering.')} Customers are not told.</span><button type="button" class="btn sm" data-health-check>Model accounts</button><button type="button" class="btn sm ghost" data-health-close aria-label="Dismiss">${icon('x', 13)}</button>`;
+    const PROV = { anthropic: 'Anthropic', moonshot: 'Moonshot (Kimi)', openai: 'OpenAI', google: 'Google', xai: 'xAI', mistral: 'Mistral', deepseek: 'DeepSeek', groq: 'Groq', openrouter: 'OpenRouter', together: 'Together' };
+    const refused = Object.entries(h.providers || {}).filter(([, v]) => v === 'refused').map(([k]) => PROV[k] || k);
+    bar.innerHTML = `${icon('alert', 15)}<span>${esc(refused.length ? `${refused.join(', ')} ${refused.length === 1 ? 'is' : 'are'} refusing requests (billing or key); the parts set to ${refused.length === 1 ? 'it' : 'them'} run on the next model that works.` : Object.keys(h.providers || {}).length ? 'A model account is not answering.' : 'No model account has a key yet, so nothing can answer.')} Customers are not told.</span><button type="button" class="btn sm" data-health-check>Model accounts</button><button type="button" class="btn sm ghost" data-health-close aria-label="Dismiss">${icon('x', 13)}</button>`;
     document.body.prepend(bar);
     $('[data-health-check]', bar).addEventListener('click', () => modelsModal());
     $('[data-health-close]', bar).addEventListener('click', () => { try { sessionStorage.setItem('ricorsa.health.dismissed', String(h.checkedAt)); } catch (e) {} bar.remove(); });

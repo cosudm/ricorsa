@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
 import { db, schema } from '@/lib/db';
+import { forgetSpaceInConnectors } from '@/lib/connectors';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -19,6 +20,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
 export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const user = await currentUser(); const { id } = await ctx.params;
   await db().update(schema.threads).set({ spaceId: null }).where(and(eq(schema.threads.spaceId, id), eq(schema.threads.userId, user.id)));
+  try { await forgetSpaceInConnectors(user.id, id); } catch (e) { console.warn('[spaces] connector scope not cleared', String((e as Error)?.message || e)); }
   await db().delete(schema.spaces).where(and(eq(schema.spaces.id, id), eq(schema.spaces.userId, user.id)));
   return json({ ok: true });
 });
