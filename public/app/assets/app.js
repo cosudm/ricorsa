@@ -2031,6 +2031,14 @@ function paintModels(r) {
     }
   });
 }
+/** A key pasted into the wrong provider's card is the commonest slip: the prefixes give most of them away. */
+function keyLooksWrong(id, key) {
+  const owner = key.startsWith('sk-ant-') ? 'anthropic' : key.startsWith('sk-or-') ? 'openrouter' : key.startsWith('gsk_') ? 'groq' : key.startsWith('xai-') ? 'xai' : key.startsWith('AIza') ? 'google' : null;
+  const NAMES = { anthropic: 'Anthropic', openrouter: 'OpenRouter', groq: 'Groq', xai: 'xAI', google: 'Google' };
+  if (owner && owner !== id) return `This looks like ${owner === 'anthropic' ? 'an' : 'a'} ${NAMES[owner]} key. Each provider needs its own key from its own console.`;
+  if (id === 'anthropic' && !key.startsWith('sk-ant-')) return 'Anthropic keys start with sk-ant-. Check that this key came from console.anthropic.com.';
+  return '';
+}
 /** Paste a provider's API key (or add a custom endpoint). The key is sent once, sealed on the server and checked right away. */
 function providerKeyModal(p) {
   const custom = !p || p.custom;
@@ -2044,8 +2052,11 @@ function providerKeyModal(p) {
     <div class="modal-actions"><button type="button" class="btn" id="pkBack">Back</button><button type="button" class="btn primary" id="pkOk">Save and check</button></div>`, {
     onMount: ov => {
       $('#pkBack', ov).addEventListener('click', () => modelsModal());
+      let warned = '';
       $('#pkOk', ov).addEventListener('click', async () => {
         const key = $('#pkKey', ov).value.trim(); if (!key) { $('#pkKey', ov).focus(); return; }
+        const wrong = p && !custom ? keyLooksWrong(p.id, key) : '';
+        if (wrong && warned !== key) { warned = key; toast(wrong, 'bad'); $('#pkOk', ov).textContent = 'Save anyway'; return; }
         const body = { id: p ? p.id : '', apiKey: key };
         if (!p) {
           const name = $('#pkName', ov).value.trim(), base = $('#pkBase', ov).value.trim();

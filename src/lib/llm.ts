@@ -524,8 +524,9 @@ async function readSse(body: ReadableStream<Uint8Array>, onData: (data: string) 
 async function providerError(res: Response): Promise<ProviderRequestError> {
   const raw = await res.text().catch(() => '');
   let parsed: unknown = null; try { parsed = JSON.parse(raw); } catch { /* not json */ }
-  const err = (parsed as { error?: { message?: string; type?: string } })?.error;
-  return new ProviderRequestError(res.status, err?.message || raw.slice(0, 300) || `HTTP ${res.status}`, parsed, String(err?.type || ''));
+  if (Array.isArray(parsed)) parsed = parsed[0];   // Google's OpenAI-compatible endpoint wraps its error in an array
+  const err = (parsed as { error?: { message?: string; type?: string; status?: string } })?.error;
+  return new ProviderRequestError(res.status, err?.message || raw.slice(0, 300) || `HTTP ${res.status}`, parsed, String(err?.type || err?.status || ''));
 }
 
 /**

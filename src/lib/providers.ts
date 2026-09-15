@@ -139,7 +139,8 @@ export async function probeProvider(p: Provider, model?: string): Promise<ProbeR
     const text = await res.text();
     if (res.ok) { clearProviderDown(p); return note(p, { ok: true, status: res.status, message: `${p.name} accepted a message on ${m}`, model: m, models: ids.length, ms: Date.now() - started }); }
     let message = text.slice(0, 300);
-    try { const j = JSON.parse(text) as { error?: { type?: string; message?: string; code?: string } | string }; const e = typeof j.error === 'string' ? { message: j.error } : j.error; if (e?.message) message = `${e.type || e.code || 'error'}: ${e.message}`.slice(0, 300); } catch { /* not JSON */ }
+    // Both wire formats answer { error: { message, type } }; Google wraps that in an array and uses status and code instead of type.
+    try { const parsed = JSON.parse(text) as unknown; const j = (Array.isArray(parsed) ? parsed[0] : parsed) as { error?: { type?: string; message?: string; code?: string | number; status?: string } | string }; const e = typeof j?.error === 'string' ? { message: j.error } : j?.error; if (e?.message) message = `${e.type || e.status || e.code || 'error'}: ${e.message}`.slice(0, 300); } catch { /* not JSON */ }
     // A model this key cannot use is not a dead provider: the list is still good and another model may work.
     if (res.status === 404 && ids.length) return note(p, { ok: false, status: res.status, message, model: m, models: ids.length, ms: Date.now() - started });
     if (res.status === 401 || res.status === 402 || res.status === 403 || (res.status === 400 && /credit|billing|balance|quota/i.test(message))) markProviderDown(p, `HTTP ${res.status}: ${message.slice(0, 120)}`);
