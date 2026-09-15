@@ -7,6 +7,7 @@ export function SiteNav({ signedIn }: { signedIn: boolean }) {
         <Brand />
         <div className="links">
           <a className="btn ghost hide-sm" href="/#how">How it works</a>
+          <a className="btn ghost hide-sm" href="/#who">Who it is for</a>
           <a className="btn ghost hide-sm" href="/#enterprise">Enterprise</a>
           <a className="btn ghost hide-sm" href="/pricing">Pricing</a>
           {signedIn ? (
