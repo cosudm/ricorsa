@@ -7,20 +7,14 @@ export function SiteNav({ signedIn }: { signedIn: boolean }) {
         <Brand />
         <div className="links">
           <a className="btn ghost hide-sm" href="/#how">How it works</a>
-          <a className="btn ghost hide-sm" href="/#who">Who it is for</a>
-          <a className="btn ghost hide-sm" href="/#enterprise">Enterprise</a>
           <a className="btn ghost hide-sm" href="/pricing">Pricing</a>
           {signedIn ? (
             <>
               <a className="btn ghost" href="/account">Account</a>
-              <a className="btn ghost hide-sm" href="/auth/logout" title="Sign out of this account">Sign out</a>
               <a className="btn primary" href="/app">Open Ricorsa</a>
             </>
           ) : (
-            <>
-              <a className="btn ghost" href="/auth/login?returnTo=/app">Sign in</a>
-              <a className="btn primary" href="/auth/login?screen_hint=signup&returnTo=/app">Start free</a>
-            </>
+            <a className="btn" href="/auth/login?returnTo=/app">Sign in</a>
           )}
         </div>
       </nav>
@@ -28,13 +22,20 @@ export function SiteNav({ signedIn }: { signedIn: boolean }) {
   );
 }
 
+/** The footer band: the tagline on the left, the graph that powers Ricorsa on the right, the legal links beneath. */
 export function SiteFooter() {
   return (
-    <div className="wrap">
-      <footer>
-        <span>© {new Date().getFullYear()} Ricorsa, an SMEPro company. Houston, TX.</span>
-        <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:hello@ricorsa.com">hello@ricorsa.com</a> · <a href="mailto:enterprise@ricorsa.com">Enterprise</a></span>
-      </footer>
-    </div>
+    <footer className="site-foot">
+      <div className="wrap">
+        <div className="foot-band">
+          <span className="tag">Intelligence that stays yours.</span>
+          <span className="powered">Powered by <b>SMEPro Identity Graph</b></span>
+        </div>
+        <div className="foot-legal">
+          <span>© {new Date().getFullYear()} Ricorsa, an SMEPro company. Houston, TX.</span>
+          <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:hello@ricorsa.com">hello@ricorsa.com</a> · <a href="mailto:enterprise@ricorsa.com">Enterprise</a></span>
+        </div>
+      </div>
+    </footer>
   );
 }
