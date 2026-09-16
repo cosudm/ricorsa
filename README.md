@@ -88,7 +88,7 @@ To deploy from your own machine instead: `npx wrangler login`, then `npm run db:
 
 ## Plans and metering
 
-`src/lib/plans.ts` defines Free, Essentials ($25), Professional ($55) and Enterprise ($85): daily and monthly question caps, Research reports per month, which model tiers a plan may use, and how many Spaces. `assertQuota` runs before every answer and returns a 402 (upgrade) or 429 (limit) that the app turns into a friendly message with a link to pricing. Usage rows in the `usage` table carry token counts and an estimated cost so you can watch margin per user; the price constants near the bottom of `plans.ts` are the ones to update when list prices change.
+`src/lib/plans.ts` defines Essentials ($25), Professional ($55) and Enterprise ($85), each starting with a free trial of `TRIAL_DAYS` (14) through PayPal, plus the free state an account has with no subscription (not offered as a plan): daily and monthly question caps, Research reports per month, which model tiers a plan may use, and how many Spaces. `assertQuota` runs before every answer and returns a 402 (upgrade) or 429 (limit) that the app turns into a friendly message with a link to pricing. Usage rows in the `usage` table carry token counts and an estimated cost so you can watch margin per user; the price constants near the bottom of `plans.ts` are the ones to update when list prices change.
 
 ## The identity graph
 

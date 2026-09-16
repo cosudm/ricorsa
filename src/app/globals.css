@@ -77,13 +77,13 @@ button { font: inherit; cursor: pointer; }
 .section .sub { color: var(--ink-2); max-width: 62ch; margin: 0 0 28px; font-size: 16px; }
 
 /* pricing */
-.plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; align-items: stretch; }
-@media (max-width: 1000px) { .plans { grid-template-columns: repeat(2, 1fr); } }
+.plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; }
+.plan .trial { font-size: 12.5px; font-weight: 500; color: var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 5px 9px; align-self: flex-start; }
 .plan { border: 1px solid var(--line); border-radius: 18px; background: var(--card); padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .plan.hot { border-color: var(--accent-line); box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-2); }
 .plan .name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
 .plan .tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 6px; }
-.plan .price { font-size: 34px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+.plan .price { font-size: 38px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
 .plan .price small { font-size: 14px; font-weight: 500; color: var(--ink-3); letter-spacing: 0; margin-left: 4px; }
 .plan .blurb { color: var(--ink-2); font-size: 14px; margin: 0; }
 .plan ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 7px; font-size: 14px; }

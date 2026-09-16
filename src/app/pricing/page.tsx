@@ -3,13 +3,18 @@ import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { PayPalSubscribe } from '@/components/PayPalSubscribe';
 import { viewer } from '@/lib/viewer';
-import { PLANS, paypalPlanId, normalizePlanKey, type PlanKey } from '@/lib/plans';
+import { PLANS, OFFERED_PLANS, TRIAL_DAYS, paypalPlanId, normalizePlanKey, type PlanKey } from '@/lib/plans';
 import { paypalProvisioned } from '@/lib/paypal-setup';
 import { currentUser } from '@/lib/session';
 
 export const metadata: Metadata = { title: 'Pricing' };
 export const dynamic = 'force-dynamic';
 
+/**
+ * Three plans, each starting with a free trial through PayPal: the person approves the subscription, nothing is
+ * charged until the trial ends, then the plan bills monthly. An account with no subscription is not a plan on
+ * offer, so it is not a card here; it simply has the limits of the free state until a trial starts.
+ */
 export default async function Pricing() {
   const v = await viewer();
   let current: PlanKey = 'free'; let status: string | null = null; let userId = '';
@@ -24,29 +29,28 @@ export default async function Pricing() {
       <main className="wrap">
         <section className="section" style={{ borderTop: 0, paddingTop: 40 }}>
           <h2>Pricing</h2>
-          <p className="sub">Start free. Pay through PayPal when you want more room. Prices are per month, in US dollars, and you can cancel any time. Need a deployment on your own data and geography? <a href="mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise">Talk to us</a>.</p>
+          <p className="sub">Every plan starts with a {TRIAL_DAYS}-day free trial. Pick one, approve it in PayPal, and nothing is charged until the trial ends; cancel any time before then and you pay nothing. Prices are per month, in US dollars. Need a deployment on your own data and geography? <a href="mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise">Talk to us</a>.</p>
           {current !== 'free' && <div className="notice good" style={{ marginBottom: 18 }}>You are on the {PLANS[current].name} plan{status ? ` (${status.toLowerCase()})` : ''}. Manage it on your <a href="/account">Account page</a>.</div>}
           <div className="plans">
-            {Object.values(PLANS).map(p => {
-              const pid = p.key === 'free' ? null : paypalPlanId(p.key, provisioned);
+            {OFFERED_PLANS.map(key => PLANS[key]).map(p => {
+              const pid = paypalPlanId(p.key, provisioned);
               const isCurrent = current === p.key;
               return (
                 <div key={p.key} className={'plan' + (p.key === 'professional' ? ' hot' : '')}>
                   <div className="name">{p.name}{p.key === 'professional' && <span className="tag">Most popular</span>}{isCurrent && <span className="tag" style={{ background: '#E6F3EA', color: 'var(--good)' }}>Current</span>}</div>
                   <div className="price">${p.priceUsd}<small>/ month</small></div>
+                  <div className="trial">{TRIAL_DAYS}-day free trial, then ${p.priceUsd} a month</div>
                   <p className="blurb">{p.blurb}</p>
                   <ul>{p.features.map(f => <li key={f}>{f}</li>)}</ul>
                   <div className="buy">
-                    {p.key === 'free' ? (
-                      <a className="btn" href={v ? '/app' : signup}>{v ? 'Open Ricorsa' : 'Start free'}</a>
-                    ) : !v ? (
-                      <a className="btn primary" href={signup}>Sign up to subscribe</a>
+                    {!v ? (
+                      <a className="btn primary" href={signup}>Start free trial</a>
                     ) : isCurrent ? (
                       <a className="btn" href="/account">Manage on Account</a>
                     ) : !pid || !clientId ? (
                       <div className="notice">Checkout is being set up. Please check back in a moment.</div>
                     ) : (
-                      <PayPalSubscribe planId={pid} planKey={p.key} planName={p.name} clientId={clientId} userId={userId} />
+                      <PayPalSubscribe planId={pid} planKey={p.key} planName={p.name} clientId={clientId} userId={userId} trialDays={TRIAL_DAYS} />
                     )}
                   </div>
                 </div>

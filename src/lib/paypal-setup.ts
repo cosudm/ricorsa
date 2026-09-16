@@ -5,15 +5,15 @@
  * Explicit PAYPAL_PLAN_* / PAYPAL_WEBHOOK_ID env vars still win when set.
  *
  * Plans are reconciled against src/lib/plans.ts on every cold start: a tier with no PayPal plan yet gets one,
- * and a tier whose price changed gets a new one (PayPal plans are immutable) while the old id is kept as
- * retired, so subscriptions taken out at the old price keep granting the tier they paid for.
+ * and a tier whose price or trial changed gets a new one (PayPal plans are immutable) while the old id is kept
+ * as retired, so subscriptions taken out at the old price keep granting the tier they paid for.
  */
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db';
-import { PLANS, LEGACY_PLAN_KEYS, type PlanKey, type ProvisionedPlans } from './plans';
+import { PLANS, LEGACY_PLAN_KEYS, TRIAL_DAYS, type PlanKey, type ProvisionedPlans } from './plans';
 import { createPlan, createProduct, createWebhook, paypalConfigured } from './paypal';
 
-export type PaypalProvisioned = ProvisionedPlans & { env: 'live' | 'sandbox'; productId: string; /** The price each current plan id was created at, so a price change is noticed. */ prices?: Partial<Record<PlanKey, number>>; webhookId?: string; webhookUrl?: string; createdAt: number };
+export type PaypalProvisioned = ProvisionedPlans & { env: 'live' | 'sandbox'; productId: string; /** The price each current plan id was created at (older rows), so a price change is noticed. */ prices?: Partial<Record<PlanKey, number>>; /** What each current plan id was created with, `price|trialDays`, so a change to either makes a new plan. */ specs?: Partial<Record<PlanKey, string>>; webhookId?: string; webhookUrl?: string; createdAt: number };
 
 let cached: PaypalProvisioned | null = null;
 let inflight: Promise<PaypalProvisioned | null> | null = null;
@@ -47,7 +47,8 @@ async function provision(): Promise<PaypalProvisioned | null> {
   }
 
   let changed = false;
-  cfg.prices = cfg.prices || {}; cfg.retired = cfg.retired || {};
+  cfg.prices = cfg.prices || {}; cfg.specs = cfg.specs || {}; cfg.retired = cfg.retired || {};
+  const specOf = (plan: { priceUsd: number }) => `${plan.priceUsd}|${TRIAL_DAYS}`;
   // Ids stored under a plan's previous name become retired ids for the plan that replaced it.
   for (const [legacy, current] of Object.entries(LEGACY_PLAN_KEYS)) {
     const id = cfg.plans[legacy];
@@ -57,13 +58,14 @@ async function provision(): Promise<PaypalProvisioned | null> {
   for (const plan of Object.values(PLANS)) {
     if (!plan.paypalPlanEnv || process.env[plan.paypalPlanEnv]) continue;
     const have = cfg.plans[plan.key];
-    if (have && cfg.prices[plan.key] === plan.priceUsd) continue;
+    const haveSpec = cfg.specs[plan.key] || (cfg.prices[plan.key] !== undefined ? `${cfg.prices[plan.key]}|0` : undefined);
+    if (have && haveSpec === specOf(plan)) continue;
     if (have) { cfg.retired[have] = plan.key; }
     try {
       if (!cfg.productId) { const product = await createProduct('Ricorsa', 'Ricorsa answer engine subscription'); cfg.productId = product.id; }
-      const created = await createPlan(cfg.productId, `Ricorsa ${plan.name}`, `${plan.name} plan: ${plan.blurb}`, plan.priceUsd);
-      cfg.plans[plan.key] = created.id; cfg.prices[plan.key] = plan.priceUsd; changed = true;
-      console.log('[paypal] plan created', plan.key, plan.priceUsd, created.id, have ? `(retired ${have})` : '');
+      const created = await createPlan(cfg.productId, `Ricorsa ${plan.name}`, `${plan.name} plan: ${plan.blurb}`, plan.priceUsd, TRIAL_DAYS);
+      cfg.plans[plan.key] = created.id; cfg.prices[plan.key] = plan.priceUsd; cfg.specs[plan.key] = specOf(plan); changed = true;
+      console.log('[paypal] plan created', plan.key, specOf(plan), created.id, have ? `(retired ${have})` : '');
     } catch (e) {
       // Leave the old id in place (still sellable at the old price) rather than none at all; the next cold start tries again.
       if (have) { delete cfg.retired[have]; }

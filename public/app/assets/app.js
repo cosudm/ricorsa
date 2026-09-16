@@ -439,7 +439,7 @@ function renderSidebar() {
     if (up) {
       const k = state.plan ? state.plan.key : 'free'; const next = nextPlanName(k);
       up.hidden = !next || (state.user && state.user.admin && !(state.settings && state.settings.demoPlan));
-      const lbl = up.querySelector('span:last-child'); if (lbl) lbl.textContent = next ? 'Upgrade to ' + next : '';
+      const lbl = up.querySelector('span:last-child'); if (lbl) lbl.textContent = k === 'free' ? 'Start a free trial' : next ? 'Upgrade to ' + next : '';
       up.title = k === 'free' ? 'Essentials unlocks the full identity graph, Research mode and the Reasoning model' : k === 'essentials' ? 'Professional unlocks Discover: build apps, agents and datasets from your asset' : 'Enterprise: the highest limits, every connector, and a direct line to us';
     }
   }
@@ -1033,7 +1033,8 @@ const PLAN_ORDER = ['free', 'essentials', 'professional', 'enterprise'];
 function planLabel(key) { return PLAN_NAMES[key] || key || ''; }
 function nextPlanName(key) { const k = key === 'pro' ? 'essentials' : key === 'team' ? 'professional' : key; const i = PLAN_ORDER.indexOf(k); return i >= 0 && i < PLAN_ORDER.length - 1 ? PLAN_NAMES[PLAN_ORDER[i + 1]] : ''; }
 function upgradeCard(title, body, plan) {
-  return `<div class="upgrade-card">${icon('sparkles', 20)}<div><b>${esc(title)}</b><p>${esc(body)}</p></div><a class="btn primary sm" href="/pricing" title="See plans and upgrade">Upgrade to ${esc(plan)}</a></div>`;
+  const free = !state.plan || state.plan.key === 'free';
+  return `<div class="upgrade-card">${icon('sparkles', 20)}<div><b>${esc(title)}</b><p>${esc(body)}</p></div><a class="btn primary sm" href="/pricing" title="See plans; every plan starts with a free trial">${free ? `Try ${esc(plan)} free` : `Upgrade to ${esc(plan)}`}</a></div>`;
 }
 
 // ---------- Home ----------
@@ -1066,7 +1067,7 @@ function quotaNotice() {
   const p = state.plan, u = state.usage; if (!p) return '';
   if (state.user && state.user.admin) return ''; // admins have no counted limits
   if (p.status && !['ACTIVE', 'APPROVAL_PENDING'].includes(p.status) && p.key !== 'free') return `<div class="notice">${icon('info', 17)}<div>Your subscription is ${esc(String(p.status).toLowerCase())}. <a href="/account">Fix it on the Account page</a> to keep your ${esc(p.name)} limits.</div></div>`;
-  if (u.today >= p.questionsPerDay) return `<div class="notice">${icon('info', 17)}<div>You have used today\u2019s ${p.questionsPerDay} questions on the ${esc(p.name)} plan. ${p.key === 'free' ? '<a href="/pricing">Upgrade to Essentials</a> for up to 300 a day.' : 'The counter resets at midnight UTC.'}</div></div>`;
+  if (u.today >= p.questionsPerDay) return `<div class="notice">${icon('info', 17)}<div>You have used today\u2019s ${p.questionsPerDay} questions on the ${esc(p.name)} plan. ${p.key === 'free' ? '<a href="/pricing">Start a free trial</a> for up to 300 a day.' : 'The counter resets at midnight UTC.'}</div></div>`;
   if (p.key === 'free' && u.today >= Math.max(1, p.questionsPerDay - 3)) return `<div class="notice info">${icon('info', 17)}<div>${p.questionsPerDay - u.today} free question${p.questionsPerDay - u.today === 1 ? '' : 's'} left today. <a href="/pricing">See plans</a>.</div></div>`;
   return '';
 }

@@ -25,7 +25,7 @@ export default async function Landing() {
             <a className="btn primary lg" href={start}>{v ? 'Open Ricorsa' : 'Start free'}</a>
             <a className="btn lg" href="#how">How it works</a>
           </div>
-          <div className="fine">10 questions a day. No card required.</div>
+          <div className="fine">14-day free trial on every plan. Cancel any time.</div>
         </section>
 
         <section className="section-c wrap" id="how">

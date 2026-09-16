@@ -9,6 +9,10 @@ export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
 export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', team: 'professional' };
 /** The plans in order of what they include, for "upgrade to" prompts. */
 export const PLAN_ORDER: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
+/** Every paid plan starts with a free trial of this many days through PayPal; billing begins when it ends. */
+export const TRIAL_DAYS = 14;
+/** The plans shown on the pricing page: the paid ones. Free is the state of an account with no subscription, not an offer. */
+export const OFFERED_PLANS: PlanKey[] = ['essentials', 'professional', 'enterprise'];
 
 /** `files`: how many files a question can carry and how large each may be. */
 export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; connectors: number; files: { perQuestion: number; maxMb: number } };

@@ -48,10 +48,14 @@ export async function createProduct(name: string, description: string) {
   return api<{ id: string }>('/v1/catalogs/products', { method: 'POST', body: JSON.stringify({ name, description, type: 'SERVICE', category: 'SOFTWARE' }) });
 }
 
-export async function createPlan(productId: string, name: string, description: string, priceUsd: number) {
+/** A monthly plan, with a free trial of `trialDays` first when given: PayPal charges nothing until the trial cycle ends. */
+export async function createPlan(productId: string, name: string, description: string, priceUsd: number, trialDays = 0) {
+  const cycles: Array<Record<string, unknown>> = [];
+  if (trialDays > 0) cycles.push({ frequency: { interval_unit: 'DAY', interval_count: trialDays }, tenure_type: 'TRIAL', sequence: 1, total_cycles: 1 });
+  cycles.push({ frequency: { interval_unit: 'MONTH', interval_count: 1 }, tenure_type: 'REGULAR', sequence: cycles.length + 1, total_cycles: 0, pricing_scheme: { fixed_price: { value: priceUsd.toFixed(2), currency_code: 'USD' } } });
   return api<{ id: string }>('/v1/billing/plans', { method: 'POST', body: JSON.stringify({
     product_id: productId, name, description, status: 'ACTIVE',
-    billing_cycles: [{ frequency: { interval_unit: 'MONTH', interval_count: 1 }, tenure_type: 'REGULAR', sequence: 1, total_cycles: 0, pricing_scheme: { fixed_price: { value: priceUsd.toFixed(2), currency_code: 'USD' } } }],
+    billing_cycles: cycles,
     payment_preferences: { auto_bill_outstanding: true, setup_fee_failure_action: 'CONTINUE', payment_failure_threshold: 2 },
   }) });
 }
