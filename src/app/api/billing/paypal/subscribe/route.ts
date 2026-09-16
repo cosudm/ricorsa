@@ -3,6 +3,7 @@ import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
 import { getSubscription } from '@/lib/paypal';
 import { applySubscription } from '@/lib/billing';
+import { PLANS } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 const Body = z.object({ subscriptionId: z.string().min(3).max(64) });
@@ -17,6 +18,6 @@ export const POST = handle(async (req: Request) => {
   const sub = await getSubscription(b.data.subscriptionId);
   if (sub.custom_id && sub.custom_id !== user.id) return fail(403, 'That subscription belongs to another account');
   const result = await applySubscription(sub, user.id);
-  if (!result) return fail(400, 'Subscription plan not recognised.');
-  return json({ ok: true, plan: result.plan, status: result.status });
+  if (!result) return fail(400, 'Subscription plan not recognized.');
+  return json({ ok: true, plan: result.plan, planName: PLANS[result.plan]?.name || result.plan, status: result.status });
 });

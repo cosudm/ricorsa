@@ -22,7 +22,7 @@ export const POST = handle(async (req: Request) => {
   const user = await currentUser();
   const plan = planFor(user.plan); const limit = user.admin ? 100 : plan.caps.connectors;
   const existing = await listConnectors(user.id);
-  if (limit <= 0) return fail(402, 'Connectors are part of the Pro and Team plans.', 'upgrade_required');
+  if (limit <= 0) return fail(402, 'Connectors are part of the Essentials, Professional and Enterprise plans.', 'upgrade_required');
   if (existing.length >= limit) return fail(402, `The ${plan.name} plan allows ${limit} connector${limit === 1 ? '' : 's'}. Upgrade for more.`, 'upgrade_required');
   const b = z.object({ url: z.string().trim().min(4).max(500), maxPages: z.number().int().min(1).max(MAX_PAGES_CAP).optional(), name: z.string().trim().max(60).optional(), spaceIds: z.array(z.string().max(60)).max(50).optional().nullable() }).safeParse(await readJson(req));
   if (!b.success) return fail(400, 'Enter the website address');

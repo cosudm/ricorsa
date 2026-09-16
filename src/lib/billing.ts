@@ -11,7 +11,7 @@ const GRANTING = new Set(['ACTIVE', 'APPROVAL_PENDING']);
 /** Apply a PayPal subscription object to our records. Idempotent; safe to call from webhooks and from activation. */
 export async function applySubscription(sub: PaypalSubscription, userIdHint?: string): Promise<{ userId: string; plan: PlanKey; status: string } | null> {
   const provisioned = await paypalProvisioned();
-  const planKey = planKeyFromPaypalPlan(sub.plan_id, provisioned?.plans);
+  const planKey = planKeyFromPaypalPlan(sub.plan_id, provisioned);
   const userId = sub.custom_id || userIdHint;
   if (!planKey || !userId) { console.warn('subscription without known plan or user', sub.id, sub.plan_id, sub.custom_id); return null; }
   const d = db();
@@ -30,7 +30,7 @@ export async function applySubscription(sub: PaypalSubscription, userIdHint?: st
   }
   const plan: PlanKey = GRANTING.has(status) ? planKey : 'free';
   await d.update(schema.users).set({ plan, paypalSubscriptionId: sub.id, subscriptionStatus: status, planRenewsAt: nextBillingAt }).where(eq(schema.users.id, userId));
-  // A plan granted by email outranks whatever PayPal just said (a cancelled subscription must not take a licence away).
+  // A plan granted by email outranks whatever PayPal just said (a canceled subscription must not take a license away).
   const granted = await applyGrant({ ...user, plan, subscriptionStatus: status, planRenewsAt: nextBillingAt, paypalSubscriptionId: sub.id });
   if (granted) return { userId, plan: granted.plan as PlanKey, status: granted.subscriptionStatus || status };
   return { userId, plan, status };

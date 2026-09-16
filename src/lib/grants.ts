@@ -1,11 +1,12 @@
 /**
  * Plans granted by email (Settings, admins: "Grant a plan by email"). A grant stands on its own: it lands on
  * the person's row at sign-in, it comes back after a PayPal event that would otherwise drop them to Free, and
- * it outranks a paid plan on the same account (an admin who grants Team to someone paying for Pro means it).
+ * it outranks a paid plan on the same account (an admin who grants Professional to someone paying for Essentials means it).
  * It stops counting once its end date has passed or an admin removes it.
  */
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db';
+import { normalizePlanKey } from './plans';
 
 type UserRow = typeof schema.users.$inferSelect;
 
@@ -29,9 +30,9 @@ export async function applyGrant(row: UserRow): Promise<UserRow | null> {
   if (g.appliedTo && g.appliedTo !== row.id) return null;
   const wantRenews = g.endsAt ? new Date(g.endsAt).getTime() : null;
   const haveRenews = row.planRenewsAt ? new Date(row.planRenewsAt).getTime() : null;
-  if (row.plan === g.plan && row.subscriptionStatus === g.status && wantRenews === haveRenews) return null;
+  if (normalizePlanKey(row.plan) === normalizePlanKey(g.plan) && row.subscriptionStatus === g.status && wantRenews === haveRenews) return null;
   const d = db();
-  const patch = { plan: g.plan, subscriptionStatus: g.status, planRenewsAt: g.endsAt ? new Date(g.endsAt) : null };
+  const patch = { plan: normalizePlanKey(g.plan), subscriptionStatus: g.status, planRenewsAt: g.endsAt ? new Date(g.endsAt) : null };
   await d.update(schema.users).set(patch).where(eq(schema.users.id, row.id));
   if (!g.appliedTo) await d.update(schema.grants).set({ appliedTo: row.id, appliedAt: new Date() }).where(eq(schema.grants.email, g.email));
   console.log('[grant] applied', JSON.stringify({ email: g.email, plan: g.plan, status: g.status, user: row.id }));

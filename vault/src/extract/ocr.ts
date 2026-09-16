@@ -3,7 +3,7 @@ import type { Page } from '../shard-do';
 import { paginate, tidy } from './text';
 
 /**
- * OCR providers behind one interface. Scans and images are sent out, the recognised text comes back page by page
+ * OCR providers behind one interface. Scans and images are sent out, the recognized text comes back page by page
  * with a confidence figure; a provider that works asynchronously hands back an operation to poll later, which the
  * queue does with a delay instead of holding a Worker open. `none` records the file as awaiting OCR.
  */

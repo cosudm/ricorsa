@@ -22,7 +22,7 @@ What you produce
 
 Live answers from Ricorsa's model (use this for anything a model should do)
 - When the idea needs a model at any point (answers to a question, chat, summaries, drafts, rewriting, translation, classification, extraction, tagging, suggestions), do not fake it. Ricorsa gives the running app a live line: window.ricorsa.ask(prompt, options) returns a Promise of { text, sources, model }. Options: system (the app's standing instructions for the model, a string), onText(delta, textSoFar) called as the answer streams, search (true to have Ricorsa search the web first; the sources then arrive in the result and through onSources(sources), each { n, title, domain, url }), history (earlier exchanges as [{ role: "user" | "assistant", content }], oldest first), personal (default true: the model knows the person the way Ricorsa does), format ("text", the default, gives plain text the app can set as textContent; "markdown" only when the app renders Markdown itself).
-- The line exists only while the app runs inside Ricorsa. Test for it with window.ricorsa && window.ricorsa.available. When it is absent (a downloaded copy opened on its own), say so once in the interface ("Live answers work when this app is opened from Ricorsa") and keep everything else usable with labelled sample output.
+- The line exists only while the app runs inside Ricorsa. Test for it with window.ricorsa && window.ricorsa.available. When it is absent (a downloaded copy opened on its own), say so once in the interface ("Live answers work when this app is opened from Ricorsa") and keep everything else usable with labeled sample output.
 - Stream the text into the interface as it arrives, keep the control that started the request disabled until the promise settles, show the error message when it rejects (plans have limits), and show sources when search was used. A small line such as "Answered by Ricorsa" under the result is enough; never present the output as coming from any other product or model.
 - Never call fetch, XMLHttpRequest or any URL for a model; window.ricorsa.ask is the only way, and it needs no network permission of its own.
 
@@ -36,7 +36,7 @@ By kind of idea
 - Apps: several screens with real navigation, create/edit/delete, search or filter, sorting where lists get long, and a settings screen that actually changes behaviour.
 - Tools: one focused job done well: clear inputs, instant output, copy and download buttons, a history of past runs, sensible defaults, worked examples.
 - Agents: an agent workspace: the goal and rules it works from (editable), a run button that executes a visible step-by-step loop over realistic sample data, a log or timeline of what it did and why, and approvals for anything consequential.
-- Decentralized (dApps, DIDs, credentials, consent, token gating, data unions): make the decentralized parts real where a browser can do it. Generate a key pair with WebCrypto (ECDSA P-256) and derive a did:key style identifier from it; sign credentials, receipts and claims with the private key and verify them with the public key, showing the JSON and the signature; keep a local append-only ledger in localStorage; simulate the wallet or network with a clearly labelled demo wallet and demo peers. Show verification succeeding and, when data is tampered with, failing.
+- Decentralized (dApps, DIDs, credentials, consent, token gating, data unions): make the decentralized parts real where a browser can do it. Generate a key pair with WebCrypto (ECDSA P-256) and derive a did:key style identifier from it; sign credentials, receipts and claims with the private key and verify them with the public key, showing the JSON and the signature; keep a local append-only ledger in localStorage; simulate the wallet or network with a clearly labeled demo wallet and demo peers. Show verification succeeding and, when data is tampered with, failing.
 - Data and credentials (exports, schemas, datasets, badges): show the schema, the rows, validation, and real export to JSON and CSV through download links built from Blob URLs; badges and claims are signed as above.
 - Content (courses, newsletters, talks, playbooks): an outline editor with sections, drafting aids, word counts, reading time, and export to Markdown and HTML.
 
@@ -91,7 +91,7 @@ const KIND_HINT: Record<string, string> = {
   'Apps': 'This is an application.',
   'Tools': 'This is a tool: one focused job, instant results, copy and download.',
   'Agents': 'This is an agent: build the agent workspace with a visible run loop.',
-  'Decentralized': 'This is a decentralized idea: real keys, signatures and verification in the browser, with a labelled demo wallet and peers.',
+  'Decentralized': 'This is a decentralized idea: real keys, signatures and verification in the browser, with a labeled demo wallet and peers.',
   'Data & credentials': 'This is a data or credential product: schema, rows, validation, signed claims, real exports.',
   'Content': 'This is content: outline, drafting, exports.',
 };

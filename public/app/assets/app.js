@@ -437,10 +437,10 @@ function renderSidebar() {
     acct.title = state.user.admin ? 'Admin account: every capability, no limits. Use Settings to demo a plan.' : 'Account: plan, billing, export and sign out';
     const up = $('#upgradeRow');
     if (up) {
-      const k = state.plan ? state.plan.key : 'free';
-      up.hidden = k === 'team' || (state.user && state.user.admin && !(state.settings && state.settings.demoPlan));
-      const lbl = up.querySelector('span:last-child'); if (lbl) lbl.textContent = k === 'pro' ? 'Upgrade to Team' : 'Upgrade to Pro';
-      up.title = k === 'pro' ? 'Team unlocks Discover: build agents, apps and tools from your graph' : 'Pro unlocks the full identity graph';
+      const k = state.plan ? state.plan.key : 'free'; const next = nextPlanName(k);
+      up.hidden = !next || (state.user && state.user.admin && !(state.settings && state.settings.demoPlan));
+      const lbl = up.querySelector('span:last-child'); if (lbl) lbl.textContent = next ? 'Upgrade to ' + next : '';
+      up.title = k === 'free' ? 'Essentials unlocks the full identity graph, Research mode and the Reasoning model' : k === 'essentials' ? 'Professional unlocks Discover: build apps, agents and datasets from your asset' : 'Enterprise: the highest limits, every connector, and a direct line to us';
     }
   }
 }
@@ -756,7 +756,7 @@ const ERROR_COPY = {
   daily_limit: 'You have used today\u2019s questions on your plan.',
   monthly_limit: 'You have used this month\u2019s questions on your plan.',
   research_limit: 'You have used this month\u2019s Research reports.',
-  upgrade_required: 'That needs a Pro plan.',
+  upgrade_required: 'That needs a paid plan.',
   subscription_inactive: 'Your subscription is not active. Update it on the Account page.',
 };
 const BLOCKING = new Set([]);
@@ -1027,6 +1027,11 @@ function createComposer(o) {
 
 // ---------- Plans ----------
 function caps() { return (state.plan && state.plan.caps) || { graph: 'preview', discover: 'locked' }; }
+/** Plan names by key, including the keys used before September 2026. */
+const PLAN_NAMES = { free: 'Free', essentials: 'Essentials', professional: 'Professional', enterprise: 'Enterprise', pro: 'Essentials', team: 'Professional' };
+const PLAN_ORDER = ['free', 'essentials', 'professional', 'enterprise'];
+function planLabel(key) { return PLAN_NAMES[key] || key || ''; }
+function nextPlanName(key) { const k = key === 'pro' ? 'essentials' : key === 'team' ? 'professional' : key; const i = PLAN_ORDER.indexOf(k); return i >= 0 && i < PLAN_ORDER.length - 1 ? PLAN_NAMES[PLAN_ORDER[i + 1]] : ''; }
 function upgradeCard(title, body, plan) {
   return `<div class="upgrade-card">${icon('sparkles', 20)}<div><b>${esc(title)}</b><p>${esc(body)}</p></div><a class="btn primary sm" href="/pricing" title="See plans and upgrade">Upgrade to ${esc(plan)}</a></div>`;
 }
@@ -1061,8 +1066,8 @@ function quotaNotice() {
   const p = state.plan, u = state.usage; if (!p) return '';
   if (state.user && state.user.admin) return ''; // admins have no counted limits
   if (p.status && !['ACTIVE', 'APPROVAL_PENDING'].includes(p.status) && p.key !== 'free') return `<div class="notice">${icon('info', 17)}<div>Your subscription is ${esc(String(p.status).toLowerCase())}. <a href="/account">Fix it on the Account page</a> to keep your ${esc(p.name)} limits.</div></div>`;
-  if (u.today >= p.questionsPerDay) return `<div class="notice">${icon('info', 17)}<div>You have used today\u2019s ${p.questionsPerDay} questions on the ${esc(p.name)} plan. ${p.key === 'free' ? '<a href="/pricing">Upgrade to Pro</a> for up to 300 a day.' : 'The counter resets at midnight UTC.'}</div></div>`;
-  if (p.key === 'free' && u.today >= Math.max(1, p.questionsPerDay - 3)) return `<div class="notice info">${icon('info', 17)}<div>${p.questionsPerDay - u.today} free question${p.questionsPerDay - u.today === 1 ? '' : 's'} left today. <a href="/pricing">See Pro</a>.</div></div>`;
+  if (u.today >= p.questionsPerDay) return `<div class="notice">${icon('info', 17)}<div>You have used today\u2019s ${p.questionsPerDay} questions on the ${esc(p.name)} plan. ${p.key === 'free' ? '<a href="/pricing">Upgrade to Essentials</a> for up to 300 a day.' : 'The counter resets at midnight UTC.'}</div></div>`;
+  if (p.key === 'free' && u.today >= Math.max(1, p.questionsPerDay - 3)) return `<div class="notice info">${icon('info', 17)}<div>${p.questionsPerDay - u.today} free question${p.questionsPerDay - u.today === 1 ? '' : 's'} left today. <a href="/pricing">See plans</a>.</div></div>`;
   return '';
 }
 function renderHome() {
@@ -1150,7 +1155,7 @@ function threadMenu(anchor, thread) {
   })) });
 }
 function provenanceModal(thread) {
-  if (caps().graph !== 'full') { openModal(`<h2>${icon('loop', 20)}Provenance</h2><p class="sub">Every thread and every node carries a cryptographic id that traces where it began. The full chain is part of the Pro identity graph.</p>${upgradeCard('See the provenance chain', 'Pro shows the origin of this thread, the hash of every turn, and which graph nodes each one added.', 'Pro')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
+  if (caps().graph !== 'full') { openModal(`<h2>${icon('loop', 20)}Provenance</h2><p class="sub">Every thread and every node carries a cryptographic id that traces where it began. The full chain is part of the full identity graph.</p>${upgradeCard('See the provenance chain', 'Essentials shows the origin of this thread, the hash of every turn, and which graph nodes each one added.', 'Essentials')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
   const o = thread.origin || null;
   const rows = [];
   if (o) {
@@ -1402,7 +1407,7 @@ function renderDiscover() {
   const locked = caps().discover !== 'full';
   main.innerHTML = `<div class="view">${topbarHtml('Discover')}<div class="scroll"><div class="col wide">
     <div class="page-h"><h1>${icon('compass', 26)}Discover</h1><div class="disc-tools">${personal ? `<span class="gen-tag">${icon('loop', 14)}Built from your graph</span>` : ''}<button type="button" class="btn sm" data-gen>${icon('sparkles', 15)}<span>${locked ? 'Generate from my graph' : items ? 'Generate again' : 'Generate from my graph'}</span></button></div></div>
-    ${locked ? upgradeCard('Discover builds from your graph on the Team plan', 'Agents, apps, tools, credentials and data products proposed from your own identity graph, each stamped with a provenance id. Below are examples of what it produces.', 'Team') : ''}
+    ${locked ? upgradeCard('Discover builds from your graph on the Professional plan', 'Agents, apps, tools, credentials and data products proposed from your own identity graph, each stamped with a provenance id. Below are examples of what it produces.', 'Professional') : ''}
     <p class="page-sub">What your identity graph can become. ${nodes >= 3 ? 'These ideas are drawn from the topics, entities, goals and expertise in your graph. Open one to start building it with Ricorsa.' : 'Ask a few questions first and these will be drawn from your own graph; until then, here is what an identity graph can create.'} Every idea carries a cryptographic id tied to the exact state of your graph it came from, so anything built from it can be traced back to its origin.${entry && entry.graphHash ? ` <span class="hash" title="SHA-256 fingerprint of your graph at generation time">${icon('loop', 11)}graph ${esc(shortHash(entry.graphHash))}</span>` : ''}</p>
     ${buildsRowHtml()}
     <div class="cat-row">${DISCOVER_CATS.map(c => `<button type="button" class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
@@ -1418,14 +1423,14 @@ function renderDiscover() {
   }));
   $$('[data-build]', main).forEach(b => b.addEventListener('click', () => { const it = items ? items[+b.dataset.build] : null; if (it) startBuild(it, cat); }));
   const genBtn = $('[data-gen]', main);
-  if (locked) { genBtn.disabled = true; genBtn.title = 'Generating from your graph is part of the Team plan'; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items));
+  if (locked) { genBtn.disabled = true; genBtn.title = 'Generating from your graph is part of the Professional and Enterprise plans'; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items));
   if (!items && !state.discoverTried[cat]) { state.discoverTried[cat] = true; fetchDiscover(cat, false); }
   wireTopbar(main);
 }
 function discoverCard(it, i, cat) {
   const builds = (it.builds || []).slice(0, 4).map(x => `<span class="nchip"><span class="dot circle" style="background:var(--accent)"></span><span>${esc(x)}</span></span>`).join('');
   const hash = it.id ? `<span class="hash" title="Provenance id ${esc(it.id)} · graph ${esc(it.graphHash || '')}">${icon('loop', 11)}${esc(shortHash(it.id))}</span>` : '';
-  const buildTip = caps().discover === 'full' ? 'Build a working version of this, personalised with your graph' : 'Building from Discover is part of the Team plan';
+  const buildTip = caps().discover === 'full' ? 'Build a working version of this, personalized with your graph' : 'Building from Discover is part of the Professional and Enterprise plans';
   const askQ = `What would "${it.title}" do for me, and what should it include? ${it.what}`;
   return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}"><button type="button" class="disc-open" data-build="${i}" data-idx="${i}" title="${esc(buildTip)}">${previewHtml(it, cat, i + 1, i === 0)}<div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${it.why ? `<span class="why">${icon('sparkles', 12)}<span>${esc(it.why)}</span></span>` : ''}${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button><div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(askQ)}" data-idx="${i}" title="Start a thread about this idea (the app itself is built with Build it)">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
 }
@@ -1453,7 +1458,7 @@ function newStudio(it, cat) {
   return { sessionId: null, title: it.title, kind: it.kind || 'App', category: cat || null, ideaId: it.id || null, graphHash: it.graphHash || null, spec: it, messages: [], versions: [], current: null, selected: null, live: null, tab: 'chat', view: 'preview', error: null };
 }
 function startBuild(it, cat) {
-  if (caps().discover !== 'full') { openModal(`<h2>${icon('zap', 20)}Build it</h2><p class="sub">Ricorsa turns a Discover idea into a working app, personalised with your graph, and keeps building it with you in a chat.</p>${upgradeCard('Building is part of the Team plan', 'Team unlocks Discover fully: ideas generated from your own graph, and any of them built into a working app, tool, agent or dApp you can keep shaping in conversation.', 'Team')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
+  if (caps().discover !== 'full') { openModal(`<h2>${icon('zap', 20)}Build it</h2><p class="sub">Ricorsa turns a Discover idea into a working app, personalized with your graph, and keeps building it with you in a chat.</p>${upgradeCard('Building is part of the Professional plan', 'Professional unlocks Discover fully: ideas generated from your own asset, and any of them built into a working app, tool, agent or dataset you can keep shaping in conversation.', 'Professional')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`); return; }
   state.studio = newStudio(it, cat);
   state.studio.messages.push({ id: 'm0', role: 'user', text: it.prompt || it.what || it.title, kind: 'request', at: Date.now() });
   go('#/build/live');
@@ -1751,7 +1756,7 @@ function renderSpace(id) {
   $('[data-composer]', main).appendChild(comp);
   $('[data-edit]', main).addEventListener('click', () => spaceModal(s));
   const scope = { spaceId: s.id, spaceName: s.name, onAdded: () => paintSpaceConnectors(s) };
-  $('[data-space-conn-add]', main).addEventListener('click', () => { if ((state.connLimit || 0) <= 0 && !isAdmin() && state.connectors) { toast('Connectors are part of the Pro and Team plans', 'bad'); return; } addConnectorModal(null, scope); });
+  $('[data-space-conn-add]', main).addEventListener('click', () => { if ((state.connLimit || 0) <= 0 && !isAdmin() && state.connectors) { toast('Connectors are part of the Essentials, Professional and Enterprise plans', 'bad'); return; } addConnectorModal(null, scope); });
   wireRows(main);
   wireTopbar(main);
   (state.connectors ? Promise.resolve() : loadConnectors()).then(() => paintSpaceConnectors(s)).catch(() => { const box = $('[data-space-conns]', main); if (box) box.innerHTML = `<p class="page-sub">Your connectors could not be loaded.</p>`; });
@@ -1873,7 +1878,7 @@ function renderGraph() {
     <p class="page-sub">What Ricorsa has learned about you from ${g.events} conversation${g.events === 1 ? '' : 's'}. It belongs to your account, follows you across devices, and is folded into every question you ask so your intent is read better each time. Weights strengthen with repetition and fade when unused; forget anything with the \u00d7 on a chip.</p>
     ${g.paused ? `<div class="paused-banner">${icon('pause', 16)}<span>Learning is paused. Answers still use what’s here, but new conversations won’t change it.</span></div>` : ''}
     <div class="g-stats"><div class="g-stat"><b>${all.length}</b><span>nodes</span></div><div class="g-stat"><b>${Object.keys(g.edges).length}</b><span>connections</span></div><div class="g-stat"><b>${g.events}</b><span>learning events</span></div><div class="g-stat"><b>${g.intents.length}</b><span>intents recorded</span></div></div>
-    ${preview ? upgradeCard('This is the preview of your graph', `Ricorsa is learning you on every plan. Pro shows the whole graph: the living map, how nodes connect, what you have been trying to do lately, and where each node came from.${all.length ? ` You have ${state.graphSize || all.length} nodes so far.` : ''}`, 'Pro') : ''}
+    ${preview ? upgradeCard('This is the preview of your graph', `Ricorsa is learning you on every plan. Essentials shows the whole graph: the living map, how nodes connect, what you have been trying to do lately, and where each node came from.${all.length ? ` You have ${state.graphSize || all.length} nodes so far.` : ''}`, 'Essentials') : ''}
     ${g.intents.length ? `<div class="intents"><h3>Lately you’ve been trying to</h3><ol>${g.intents.slice(0, 5).map(i => `<li>${esc(i.text.replace(/^You(’|')re\s+/i, '').replace(/^You\s+(want|need|are)\s+/i, ''))}<span class="when">${relTime(i.at)}</span></li>`).join('')}</ol></div>` : ''}
     ${drawn.length && !preview ? `<div class="g-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Map of what Ricorsa has learned: ${all.length} nodes">${svg}</svg><div class="g-tip" id="gTip"></div><div class="g-legend">${Object.entries(NODE_TYPES).map(([t, T]) => `<span><i class="sw ${T.shape}" style="background:${T.hex}"></i>${T.label}</span>`).join('')}<span style="margin-left:auto;color:var(--ink-3)">Size = weight · lines = asked about together</span></div></div>`
       : drawn.length ? '' : `<div class="g-empty">${icon('loop', 30)}<div>Nothing learned yet.</div><p>Ask a few questions and come back, each answer adds what it revealed about what you’re working on.</p><p><a href="#/">Ask something</a></p></div>`}
@@ -1907,8 +1912,8 @@ function openSettings() {
     <div class="setting"><div class="l"><b>Default focus</b><small>Shapes the framing and the kind of references used.</small></div>${sel('stFocus', FOCI, s.focus)}</div>
     <div class="setting"><div class="l"><b>Answer length</b><small>Applies to Search mode.</small></div>${sel('stLen', LENGTHS, s.length)}</div>
     <div class="setting"><div class="l"><b>Learning loop</b><small>Let each answer update your identity graph, which shapes how later questions are read.</small></div><select id="stLearn"><option value="on"${state.graph && state.graph.paused ? '' : ' selected'}>On</option><option value="paused"${state.graph && state.graph.paused ? ' selected' : ''}>Paused</option></select></div>
-    ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Pro or Team customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="pro"${s.demoPlan === 'pro' ? ' selected' : ''}>Pro</option><option value="team"${s.demoPlan === 'team' ? ' selected' : ''}>Team</option></select></div>
-    <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Pro or Team without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>
+    ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Essentials, Professional or Enterprise customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="essentials"${s.demoPlan === 'essentials' || s.demoPlan === 'pro' ? ' selected' : ''}>Essentials</option><option value="professional"${s.demoPlan === 'professional' || s.demoPlan === 'team' ? ' selected' : ''}>Professional</option><option value="enterprise"${s.demoPlan === 'enterprise' ? ' selected' : ''}>Enterprise</option></select></div>
+    <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Essentials, Professional or Enterprise without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>
     <div class="setting"><div class="l"><b>Model accounts</b><small>Admin only. Add a provider's API key (Anthropic, OpenAI, Google, xAI, Mistral, DeepSeek, Groq, Moonshot, OpenRouter, Together or any compatible endpoint), see what each account answers, and choose the active model for each part of Ricorsa.</small></div><button type="button" class="btn sm" data-models>${icon('zap', 14)}Manage</button></div>` : ''}
     <div class="setting"><div class="l"><b>Plan and usage</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. No question limits. Today ${state.usage.today} questions, this month ${state.usage.month}${state.usage.research ? `, Research ${state.usage.research}` : ''}.` : `${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.`}</small></div><a class="btn sm" href="/account">Account</a></div>
     <div class="setting"><div class="l"><b>Export everything</b><small>All threads, Spaces and your graph as one JSON file.</small></div><a class="btn sm" href="/api/account/export">${icon('download', 14)}Export</a></div>
@@ -2081,16 +2086,16 @@ async function grantsModal() {
   let grants = [];
   try { const r = await api('/api/admin/grants'); grants = r.grants || []; } catch (e) { apiToast(e, 'Could not load the grants'); return; }
   const when = (v) => v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-  const rows = grants.length ? grants.map(g => `<tr><td>${esc(g.email)}</td><td>${esc(g.plan === 'team' ? 'Team' : 'Pro')}${g.status === 'TRIAL' ? ' trial' : ''}</td><td>${g.endsAt ? 'until ' + esc(when(g.endsAt)) : 'open-ended'}</td><td>${g.appliedTo ? `<span class="ok">Applied ${esc(when(g.appliedAt))}</span>` : '<span class="muted">Waiting for first sign-in</span>'}</td><td><button type="button" class="btn sm ghost" data-del-grant="${esc(g.email)}" title="Remove this grant">${icon('trash', 13)}</button></td></tr>`).join('') : '<tr><td colspan="5" class="muted">No grants yet.</td></tr>';
+  const rows = grants.length ? grants.map(g => `<tr><td>${esc(g.email)}</td><td>${esc(planLabel(g.plan))}${g.status === 'TRIAL' ? ' trial' : ''}</td><td>${g.endsAt ? 'until ' + esc(when(g.endsAt)) : 'open-ended'}</td><td>${g.appliedTo ? `<span class="ok">Applied ${esc(when(g.appliedAt))}</span>` : '<span class="muted">Waiting for first sign-in</span>'}</td><td><button type="button" class="btn sm ghost" data-del-grant="${esc(g.email)}" title="Remove this grant">${icon('trash', 13)}</button></td></tr>`).join('') : '<tr><td colspan="5" class="muted">No grants yet.</td></tr>';
   openModal(`<h2>${icon('key', 20)}Plans granted by email</h2><p class="sub">The plan lands on the account the first time the person signs in with that address, or right away if they already have one. Ends on the date you set, or never.</p>
-    <form id="grantForm" class="grant-form"><div class="field"><label for="grEmail">Email</label><input type="email" id="grEmail" required placeholder="name@company.com"></div><div class="field"><label for="grPlan">Plan</label><select id="grPlan"><option value="team">Team</option><option value="pro">Pro</option></select></div><div class="field"><label for="grKind">Kind</label><select id="grKind"><option value="LICENSED">Licence</option><option value="TRIAL">Trial</option></select></div><div class="field"><label for="grEnds">Ends (optional)</label><input type="date" id="grEnds"></div><div class="field wide"><label for="grNote">Note (optional)</label><input type="text" id="grNote" maxlength="200" placeholder="e.g. Marketing consultant"></div><button type="submit" class="btn primary sm">${icon('plus', 14)}Grant</button></form>
+    <form id="grantForm" class="grant-form"><div class="field"><label for="grEmail">Email</label><input type="email" id="grEmail" required placeholder="name@company.com"></div><div class="field"><label for="grPlan">Plan</label><select id="grPlan"><option value="professional">Professional</option><option value="essentials">Essentials</option><option value="enterprise">Enterprise</option></select></div><div class="field"><label for="grKind">Kind</label><select id="grKind"><option value="LICENSED">License</option><option value="TRIAL">Trial</option></select></div><div class="field"><label for="grEnds">Ends (optional)</label><input type="date" id="grEnds"></div><div class="field wide"><label for="grNote">Note (optional)</label><input type="text" id="grNote" maxlength="200" placeholder="e.g. Marketing consultant"></div><button type="submit" class="btn primary sm">${icon('plus', 14)}Grant</button></form>
     <div class="grant-list"><table class="grants"><thead><tr><th>Email</th><th>Plan</th><th>Ends</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="modal-actions"><button type="button" class="btn" data-close>Done</button></div>`, {
     onMount: ov => {
       $('#grantForm', ov).addEventListener('submit', async e => {
         e.preventDefault();
         const body = { email: $('#grEmail', ov).value.trim(), plan: $('#grPlan', ov).value, status: $('#grKind', ov).value, endsAt: $('#grEnds', ov).value || null, note: $('#grNote', ov).value.trim() };
-        try { const r = await api('/api/admin/grants', { body }); toast(r.applied ? `${body.email} now has ${body.plan === 'team' ? 'Team' : 'Pro'}` : `${body.email} gets ${body.plan === 'team' ? 'Team' : 'Pro'} at first sign-in`); grantsModal(); } catch (err) { apiToast(err, 'Could not save the grant'); }
+        try { const r = await api('/api/admin/grants', { body }); toast(r.applied ? `${body.email} now has ${r.planName || planLabel(body.plan)}` : `${body.email} gets ${r.planName || planLabel(body.plan)} at first sign-in`); grantsModal(); } catch (err) { apiToast(err, 'Could not save the grant'); }
       });
       $$('[data-del-grant]', ov).forEach(b => b.addEventListener('click', async () => { try { await api('/api/admin/grants?email=' + encodeURIComponent(b.dataset.delGrant), { method: 'DELETE' }); toast('Grant removed'); grantsModal(); } catch (err) { apiToast(err); } }));
     }
@@ -2121,7 +2126,7 @@ function renderConnectors() {
     <div data-conn-list><div class="skel"><i></i><i></i></div></div>
   </div></div></div>`;
   wireTopbar(main);
-  $('[data-add-conn]', main).addEventListener('click', () => { if (state.connLimit <= 0 && !(state.user && state.user.admin)) { toast('Connectors are part of the Pro and Team plans', 'bad'); return; } addConnectorModal(); });
+  $('[data-add-conn]', main).addEventListener('click', () => { if (state.connLimit <= 0 && !(state.user && state.user.admin)) { toast('Connectors are part of the Essentials, Professional and Enterprise plans', 'bad'); return; } addConnectorModal(); });
   loadConnectors().then(() => { paintConnectors(); afterOauthReturn(); }).catch(e => { const box = $('[data-conn-list]', main); if (box) box.innerHTML = `<div class="empty">${icon('alert', 26)}<div>${esc((e && e.message) || 'Could not load your connectors')}</div></div>`; });
 }
 function afterOauthReturn() {
@@ -2133,7 +2138,7 @@ function paintConnectors() {
   const box = $('[data-conn-list]'); if (!box) return;
   const list = state.connectors || []; const limit = state.connLimit; const admin = state.user && state.user.admin;
   let html = '';
-  if (limit <= 0 && !admin) html += upgradeCard('Connectors are part of Pro and Team', 'Pro links up to 3 outside apps or MCP servers to your answers; Team links up to 25.', 'Pro');
+  if (limit <= 0 && !admin) html += upgradeCard('Connectors are part of the paid plans', 'Essentials links up to 3 outside apps, MCP servers, websites or document vaults to your answers; Professional links 25 and Enterprise 100.', 'Essentials');
   else if (list.length >= limit && !admin) html += `<p class="page-sub">You are using all ${limit} connectors on the ${esc(state.plan ? state.plan.name : '')} plan. <a href="/pricing">See plans</a> for more.</p>`;
   if (!list.length) {
     const picks = (state.catalog || []).filter(p => p.key !== 'custom').slice(0, 6);

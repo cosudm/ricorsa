@@ -42,6 +42,6 @@ export async function consoleContext(userId: string, opts: { canBuild: boolean }
   const apps = [...sessions.values()].sort((a, b) => b.at - a.at).slice(0, 10);
   L.push(apps.length
     ? `Apps the person has built in the Build studio (app id opens the studio with #/build/<app id>; version id is for app.open):\n${apps.map(a => `- ${a.title} (${a.kind}, ${a.status === 'done' ? 'ready' : a.status}; app id ${a.id}; version id ${a.latest}, v${a.version})`).join('\n')}`
-    : `The person has not built an app yet${opts.canBuild ? '; the build verb starts one from an idea' : ' (building is part of the Team plan; the build verb shows the upgrade)'}.`);
+    : `The person has not built an app yet${opts.canBuild ? '; the build verb starts one from an idea' : ' (building is part of the Professional and Enterprise plans; the build verb shows the upgrade)'}.`);
   return `Console context (for consoles only; never recite ids in prose):\n${L.join('\n')}`;
 }

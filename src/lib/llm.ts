@@ -36,7 +36,7 @@ const CANDIDATES: Record<Tier, string[]> = {
 
 /** Whether a model is served over Anthropic's Messages API (Claude); every other model speaks the OpenAI-compatible API. */
 export function isClaude(model: string): boolean { const p = providerForModel(model); return p ? p.kind === 'anthropic' : /^claude-/i.test(model); }
-/** The provider that serves a model right now, honouring the tier's chosen provider when one is set. */
+/** The provider that serves a model right now, honoring the tier's chosen provider when one is set. */
 function providerFor(model: string, tier?: Tier): Provider | null { return providerForModel(model, tier ? configuredProvider(tier) : undefined); }
 
 /**

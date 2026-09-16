@@ -40,7 +40,7 @@ export type PaypalSubscription = {
 
 export function getSubscription(id: string) { return api<PaypalSubscription>(`/v1/billing/subscriptions/${encodeURIComponent(id)}`); }
 
-export async function cancelSubscription(id: string, reason = 'Cancelled by customer') {
+export async function cancelSubscription(id: string, reason = 'Canceled by customer') {
   await api(`/v1/billing/subscriptions/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) });
 }
 

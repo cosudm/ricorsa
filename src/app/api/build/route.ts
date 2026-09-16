@@ -40,7 +40,7 @@ const Body = z.object({
 type Review = { findings: string[]; serious: number; ran: boolean; check: BuildCheck };
 
 /**
- * POST /api/build  — the build chat (Team plan). Streams server-sent events:
+ * POST /api/build  — the build chat (Professional and Enterprise plans). Streams server-sent events:
  *   meta → status → plan → delta* → phase(review/repair)* → done | reply → done | error
  * A new idea starts a session (version 1). A message in an existing session either produces the next
  * version (plan + app, streamed) or a plain reply when it was only a question. When no version has
@@ -52,7 +52,7 @@ type Review = { findings: string[]; serious: number; ran: boolean; check: BuildC
 export async function POST(req: Request) {
   let user; try { user = await currentUser(); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Sign-in check failed'); }
   const plan = planFor(user.plan);
-  if (plan.caps.discover !== 'full') return fail(402, 'Building from Discover is part of the Team plan.', 'upgrade_required');
+  if (plan.caps.discover !== 'full') return fail(402, 'Building from Discover is part of the Professional and Enterprise plans.', 'upgrade_required');
   if (!user.admin && !statusGrants(user.subscriptionStatus)) return fail(402, 'Your subscription is not active.', 'subscription_inactive');
   const parsed = Body.safeParse(await readJson(req).catch(() => ({})));
   if (!parsed.success) return fail(400, 'Invalid request', 'invalid_request');

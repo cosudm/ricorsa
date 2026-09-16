@@ -25,7 +25,7 @@ function parseRange(h: string | null, size: number): { offset: number; length: n
 /**
  * GET /api/files/:id/content — the file exactly as it was uploaded, for the owner only. Served inline with the
  * media type its extension implies, so PDFs and images open in the browser's own viewers and the app's viewer
- * can fetch the bytes; `?download=1` saves it under its original name instead. Byte ranges are honoured so a
+ * can fetch the bytes; `?download=1` saves it under its original name instead. Byte ranges are honored so a
  * large PDF can be read progressively.
  */
 export const GET = handle(async (req: Request, ctx: Ctx) => {

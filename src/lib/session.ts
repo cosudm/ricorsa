@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { auth0, auth0Configured, devFakeUserEnabled } from './auth0';
 import { db, schema } from './db';
 import { HttpError } from './http';
-import { grantExpired } from './plans';
+import { grantExpired, normalizePlanKey } from './plans';
 import { applyGrant } from './grants';
 
 export type CurrentUser = typeof schema.users.$inferSelect & { admin?: boolean; effectivePlan?: string };
@@ -14,11 +14,11 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   return list.includes(email.toLowerCase());
 }
 
-/** Admins act as Team (or as the plan they chose to demo); everyone else is what PayPal says they are. */
+/** Admins act as Enterprise (or as the plan they chose to demo); everyone else is what PayPal says they are. */
 function withAccess(u: typeof schema.users.$inferSelect): CurrentUser {
   if (!isAdminEmail(u.email)) return u;
   const demo = (u.settings as { demoPlan?: string } | null)?.demoPlan;
-  const plan = demo && ['free', 'pro', 'team'].includes(demo) ? demo : 'team';
+  const plan = demo ? normalizePlanKey(demo) : 'enterprise';
   return { ...u, admin: true, effectivePlan: plan, plan, subscriptionStatus: null };
 }
 
@@ -40,7 +40,7 @@ export async function currentUser(): Promise<CurrentUser> {
   const existing = await d.select().from(schema.users).where(eq(schema.users.id, sub)).limit(1);
   if (existing[0]) {
     let row = existing[0];
-    // A trial or licence granted by the Manager Console ends on its date: the account goes back to Free.
+    // A trial or license granted by the Manager Console ends on its date: the account goes back to Free.
     if (grantExpired(row.subscriptionStatus, row.planRenewsAt)) {
       const ended = row.subscriptionStatus === 'TRIAL' ? 'TRIAL_ENDED' : 'LICENSE_ENDED';
       await d.update(schema.users).set({ plan: 'free', subscriptionStatus: ended, planRenewsAt: null }).where(eq(schema.users.id, sub));

@@ -1,9 +1,14 @@
 /**
- * Plans, prices and quotas. Prices here are what the PayPal setup script creates;
- * change them before running `npm run paypal:setup` (PayPal plans are immutable once
- * created, so a price change means a new plan id).
+ * Plans, prices and quotas. Free, then Essentials, Professional and Enterprise. Prices here are what the app
+ * creates on PayPal for itself (src/lib/paypal-setup.ts): PayPal plans are immutable once created, so a price
+ * change makes a new PayPal plan and the old one is kept as retired, so people already subscribed keep their
+ * price and their access.
  */
-export type PlanKey = 'free' | 'pro' | 'team';
+export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
+/** The keys in use before September 2026. Rows and PayPal ids stored under them resolve to the plans that replaced them. */
+export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', team: 'professional' };
+/** The plans in order of what they include, for "upgrade to" prompts. */
+export const PLAN_ORDER: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
 
 /** `files`: how many files a question can carry and how large each may be. */
 export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; connectors: number; files: { perQuestion: number; maxMb: number } };
@@ -14,6 +19,8 @@ export type Plan = {
   priceUsd: number;            // per month, 0 for free
   caps: Caps;                  // what the identity graph and Discover can do on this plan
   paypalPlanEnv?: string;      // env var holding the PayPal plan id
+  /** The env var the plan's PayPal id lived in under its previous name and price, for subscriptions taken out then. */
+  legacyPaypalPlanEnv?: string;
   questionsPerDay: number;     // Search-mode answers per day
   questionsPerMonth: number;   // hard monthly ceiling on all answers
   researchPerMonth: number;    // Research-mode answers per month
@@ -37,33 +44,49 @@ export const PLANS: Record<PlanKey, Plan> = {
     blurb: 'Try it and let the graph start learning you.',
     features: ['10 questions a day', 'Live web citations', 'Attach files to a question: PDFs, documents, spreadsheets, images', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
   },
-  pro: {
-    key: 'pro',
-    name: 'Pro',
-    priceUsd: 20,
-    paypalPlanEnv: 'PAYPAL_PLAN_PRO',
+  essentials: {
+    key: 'essentials',
+    name: 'Essentials',
+    priceUsd: 25,
+    paypalPlanEnv: 'PAYPAL_PLAN_ESSENTIALS',
+    legacyPaypalPlanEnv: 'PAYPAL_PLAN_PRO',
     caps: { graph: 'full', discover: 'locked', connectors: 3, files: { perQuestion: 5, maxMb: 25 } },
     questionsPerDay: 300,
     questionsPerMonth: 1500,
     researchPerMonth: 40,
     tiers: ['quick', 'default', 'complex'],
     spaces: 25,
-    blurb: 'The full identity graph, for people who ask all day.',
-    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month', '40 Research reports a month', 'Reasoning model', '3 Connectors: outside apps and MCP servers the answers can use', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
+    blurb: 'The full identity graph, for people who research every day.',
+    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month', '40 Research reports a month', 'Reasoning model', '3 Connectors: apps, MCP servers, websites and document vaults your answers can use', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
   },
-  team: {
-    key: 'team',
-    name: 'Team',
-    priceUsd: 49,
-    paypalPlanEnv: 'PAYPAL_PLAN_TEAM',
+  professional: {
+    key: 'professional',
+    name: 'Professional',
+    priceUsd: 55,
+    paypalPlanEnv: 'PAYPAL_PLAN_PROFESSIONAL',
+    legacyPaypalPlanEnv: 'PAYPAL_PLAN_TEAM',
     caps: { graph: 'full', discover: 'full', connectors: 25, files: { perQuestion: 10, maxMb: 40 } },
     questionsPerDay: 1000,
     questionsPerMonth: 5000,
     researchPerMonth: 150,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100,
-    blurb: 'Everything in Pro, plus Discover.',
-    features: ['Everything in Pro', 'Discover, fully unlocked: agents, apps, tools, credentials and data products drawn from your graph, each with a provenance id', 'Up to 5,000 questions a month', '150 Research reports a month', '25 Connectors', '100 Spaces', 'Priority support'],
+    blurb: 'Everything in Essentials, plus Discover: turn your research into working tools.',
+    features: ['Everything in Essentials', 'Discover, fully unlocked: apps, agents, tools, datasets and credentials built from your own asset, each checked in a real browser and stamped with a provenance id', 'Up to 5,000 questions a month', '150 Research reports a month', '25 Connectors, each usable everywhere or kept to one Space', '100 Spaces', 'Priority support'],
+  },
+  enterprise: {
+    key: 'enterprise',
+    name: 'Enterprise',
+    priceUsd: 85,
+    paypalPlanEnv: 'PAYPAL_PLAN_ENTERPRISE',
+    caps: { graph: 'full', discover: 'full', connectors: 100, files: { perQuestion: 20, maxMb: 60 } },
+    questionsPerDay: 3000,
+    questionsPerMonth: 15000,
+    researchPerMonth: 500,
+    tiers: ['quick', 'default', 'complex'],
+    spaces: 100000,
+    blurb: 'For firms that run on research: the highest limits, every connector, and a direct line to us.',
+    features: ['Everything in Professional', 'Up to 15,000 questions a month', '500 Research reports a month', '100 Connectors', 'Unlimited Spaces', 'Larger files: 20 per question, up to 60 MB each', 'A direct line to us, with onboarding for your team', 'Deployment options on your own data and geography with the SMEPro Identity Graph'],
   },
 };
 
@@ -80,21 +103,39 @@ export function grantExpired(status: string | null | undefined, renewsAt: Date |
   return new Date(renewsAt).getTime() < Date.now();
 }
 
-export function planFor(key: string | null | undefined): Plan {
-  return PLANS[(key as PlanKey) in PLANS ? (key as PlanKey) : 'free'];
+/** A stored plan key as a current one: today's keys pass through, the previous names map to their successors, anything else is Free. */
+export function normalizePlanKey(key: string | null | undefined): PlanKey {
+  if (key && key in PLANS) return key as PlanKey;
+  if (key && key in LEGACY_PLAN_KEYS) return LEGACY_PLAN_KEYS[key];
+  return 'free';
 }
+export function planFor(key: string | null | undefined): Plan { return PLANS[normalizePlanKey(key)]; }
+/** The plan above this one, or null at the top. */
+export function nextPlan(key: string | null | undefined): Plan | null {
+  const i = PLAN_ORDER.indexOf(normalizePlanKey(key));
+  return i >= 0 && i < PLAN_ORDER.length - 1 ? PLANS[PLAN_ORDER[i + 1]] : null;
+}
+
+/** What the app keeps about the PayPal side: the current plan id per tier, and every earlier id (an old price, an old name) mapped to the tier it grants. */
+export type ProvisionedPlans = { plans: Partial<Record<string, string>>; retired?: Record<string, string> };
 
 /** The PayPal plan id for a paid tier: an explicit env var wins, otherwise the id the app provisioned itself. */
-export function paypalPlanId(key: PlanKey, provisioned?: Partial<Record<PlanKey, string>> | null): string | null {
+export function paypalPlanId(key: PlanKey, provisioned?: ProvisionedPlans | null): string | null {
   const env = PLANS[key].paypalPlanEnv;
   if (!env) return null;
-  return process.env[env] || provisioned?.[key] || null;
+  return process.env[env] || provisioned?.plans?.[key] || null;
 }
 
-/** Map a PayPal plan id back to our plan key. */
-export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, provisioned?: Partial<Record<PlanKey, string>> | null): PlanKey | null {
+/** Map a PayPal plan id back to our plan key, including ids from before a rename or a price change. */
+export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, provisioned?: ProvisionedPlans | null): PlanKey | null {
   if (!paypalPlanId) return null;
-  for (const p of Object.values(PLANS)) if (p.paypalPlanEnv && (process.env[p.paypalPlanEnv] === paypalPlanId || provisioned?.[p.key] === paypalPlanId)) return p.key;
+  for (const p of Object.values(PLANS)) {
+    if (p.paypalPlanEnv && process.env[p.paypalPlanEnv] === paypalPlanId) return p.key;
+    if (p.legacyPaypalPlanEnv && process.env[p.legacyPaypalPlanEnv] === paypalPlanId) return p.key;
+  }
+  for (const [key, id] of Object.entries(provisioned?.plans || {})) if (id === paypalPlanId) return normalizePlanKey(key);
+  const retired = provisioned?.retired?.[paypalPlanId];
+  if (retired) return normalizePlanKey(retired);
   return null;
 }
 

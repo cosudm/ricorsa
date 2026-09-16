@@ -49,7 +49,7 @@ export async function extract(name: string, bytes: Uint8Array): Promise<Extracte
   const text = decodeText(bytes.subarray(0, 200_000));
   const printable = text.replace(/[\s\p{L}\p{N}\p{P}\p{S}]/gu, '').length;
   if (text.trim() && printable / Math.max(1, text.length) < 0.05) return { pages: paginate(tidy(text)), needsOcr: false, needsConversion: false };
-  return { pages: [], needsOcr: false, needsConversion: true, note: 'unrecognised format' };
+  return { pages: [], needsOcr: false, needsConversion: true, note: 'unrecognized format' };
 }
 
 /** Plain text out of RTF: control words dropped, escapes decoded. Good enough for search; the original is kept. */

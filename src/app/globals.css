@@ -42,7 +42,7 @@ button { font: inherit; cursor: pointer; }
 .btn.lg { height: 48px; padding: 0 24px; font-size: 15.5px; border-radius: 11px; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 
-/* hero: one centred promise, as on the design */
+/* hero: one centered promise, as on the design */
 .hero-c { min-height: calc(100vh - 64px - 160px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 72px 24px 88px; }
 .hero-c h1 { font-family: var(--sans); font-weight: 500; font-size: 64px; line-height: 1.08; letter-spacing: -.03em; margin: 0 0 22px; max-width: 14ch; text-wrap: balance; }
 .hero-c h1 .hl { display: block; color: var(--accent); }
@@ -50,7 +50,7 @@ button { font: inherit; cursor: pointer; }
 .hero-c .cta { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; align-items: center; }
 .hero-c .fine { font-size: 13px; color: var(--ink-3); margin-top: 20px; }
 
-/* below the fold: centred sections */
+/* below the fold: centered sections */
 .section-c { padding: 64px 24px; border-top: 1px solid var(--line); text-align: center; }
 .section-c h2 { font-size: 32px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 10px; text-wrap: balance; }
 .section-c .sub { color: var(--ink-2); max-width: 58ch; margin: 0 auto 32px; font-size: 16.5px; line-height: 1.6; }
@@ -77,12 +77,13 @@ button { font: inherit; cursor: pointer; }
 .section .sub { color: var(--ink-2); max-width: 62ch; margin: 0 0 28px; font-size: 16px; }
 
 /* pricing */
-.plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; }
-.plan { border: 1px solid var(--line); border-radius: 18px; background: var(--card); padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+.plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; align-items: stretch; }
+@media (max-width: 1000px) { .plans { grid-template-columns: repeat(2, 1fr); } }
+.plan { border: 1px solid var(--line); border-radius: 18px; background: var(--card); padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .plan.hot { border-color: var(--accent-line); box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-2); }
 .plan .name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
 .plan .tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 6px; }
-.plan .price { font-size: 38px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+.plan .price { font-size: 34px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
 .plan .price small { font-size: 14px; font-weight: 500; color: var(--ink-3); letter-spacing: 0; margin-left: 4px; }
 .plan .blurb { color: var(--ink-2); font-size: 14px; margin: 0; }
 .plan ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 7px; font-size: 14px; }

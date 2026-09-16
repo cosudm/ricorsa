@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env';
 
 /**
- * One per workspace: the hash of every file received, so a duplicate is recognised at intake wherever it turns
+ * One per workspace: the hash of every file received, so a duplicate is recognized at intake wherever it turns
  * up in the archive. Millions of rows of (hash, document) fit comfortably in one object's SQLite storage.
  */
 export class HashDirectory extends DurableObject<Env> {

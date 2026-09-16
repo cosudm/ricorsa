@@ -23,8 +23,8 @@ export async function assertQuota(user: CurrentUser, mode: 'search' | 'research'
     throw new HttpError(402, 'Your subscription is not active. Update your payment method or resubscribe.', 'subscription_inactive');
   }
   // Feature gates follow the plan (for an admin, the plan they chose to demo); the counted limits never apply to an admin.
-  if (!plan.tiers.includes(tier as never)) throw new HttpError(402, `The ${tier === 'complex' ? 'Reasoning' : tier} model needs a Pro plan.`, 'upgrade_required');
-  if (mode === 'research' && plan.researchPerMonth === 0) throw new HttpError(402, 'Research mode needs a Pro plan.', 'upgrade_required');
+  if (!plan.tiers.includes(tier as never)) throw new HttpError(402, `The ${tier === 'complex' ? 'Reasoning' : tier} model needs an Essentials plan or above.`, 'upgrade_required');
+  if (mode === 'research' && plan.researchPerMonth === 0) throw new HttpError(402, 'Research mode needs an Essentials plan or above.', 'upgrade_required');
   const u = await readUsage(user.id);
   if (user.admin) return { plan, usage: u };
   if (u.day.questions >= plan.questionsPerDay) throw new HttpError(429, `You have used today's ${plan.questionsPerDay} questions on the ${plan.name} plan.`, 'daily_limit');

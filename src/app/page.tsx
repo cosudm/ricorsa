@@ -6,7 +6,7 @@ import { viewer } from '@/lib/viewer';
 export const dynamic = 'force-dynamic';
 
 /**
- * The landing page: one centred promise, two buttons, and below the fold the three stages in the fewest words
+ * The landing page: one centered promise, two buttons, and below the fold the three stages in the fewest words
  * that still say what happens (research with citations, a data asset you own, working tools that speak MCP).
  * Plans live on /pricing; the footer carries the tagline and the SMEPro Identity Graph line.
  */
@@ -44,7 +44,7 @@ export default async function Landing() {
             <div className="stage-c">
               <div className="k"><span className="n">2</span>Data asset</div>
               <h3>What you learn stays, and stays yours</h3>
-              <p>Every answer adds to an asset you can read: the topics, people, organisations, goals and sources of your work, kept in Spaces per client or project. It shapes how the next question is understood. Edit it, export it, forget any part of it.</p>
+              <p>Every answer adds to an asset you can read: the topics, people, organizations, goals and sources of your work, kept in Spaces per client or project. It shapes how the next question is understood. Edit it, export it, forget any part of it.</p>
               <div className="mini chips">
                 <span className="nchip"><i className="dot" style={{ background: 'var(--n-topic)' }} />state pre-emption</span>
                 <span className="nchip"><i className="dot square" style={{ background: 'var(--n-entity)' }} />Florida DBPR</span>
@@ -66,7 +66,7 @@ export default async function Landing() {
 
         <section className="section-c wrap middle-c">
           <p className="big">Ricorsa sits in the middle: between a search box that hands you links, and a software team you do not have.</p>
-          <p className="sub">Research it properly, keep what you learn, turn it into a tool. Organisations run the same loop on a map with the SMEPro Identity Graph; <a href="mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise">talk to us about a deployment</a>.</p>
+          <p className="sub">Research it properly, keep what you learn, turn it into a tool. Organizations run the same loop on a map with the SMEPro Identity Graph; <a href="mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise">talk to us about a deployment</a>.</p>
           <div className="cta">
             <a className="btn primary lg" href={start}>{v ? 'Open Ricorsa' : 'Start free'}</a>
             <a className="btn lg" href="/pricing">See plans</a>

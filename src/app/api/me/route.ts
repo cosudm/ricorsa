@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
-import { planFor } from '@/lib/plans';
+import { planFor, normalizePlanKey } from '@/lib/plans';
 import { readUsage } from '@/lib/usage';
 import { listThreads } from '@/lib/threads';
 import { loadGraph, graphView } from '@/lib/graph';
@@ -33,12 +33,12 @@ export const GET = handle(async () => {
   });
 });
 
-const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), focus: z.enum(['web', 'academic', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional(), demoPlan: z.enum(['free', 'pro', 'team', '']).optional() });
+const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), focus: z.enum(['web', 'academic', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional(), demoPlan: z.enum(['free', 'essentials', 'professional', 'enterprise', 'pro', 'team', '']).optional() });
 export const PATCH = handle(async (req: Request) => {
   const user = await currentUser();
   const b = Settings.safeParse(await readJson(req)); if (!b.success) return fail(400, 'Invalid settings');
   const patch: Record<string, unknown> = { ...b.data };
-  if ('demoPlan' in patch) { if (!user.admin) delete patch.demoPlan; else if (!patch.demoPlan) patch.demoPlan = undefined; }
+  if ('demoPlan' in patch) { if (!user.admin) delete patch.demoPlan; else if (!patch.demoPlan) patch.demoPlan = undefined; else patch.demoPlan = normalizePlanKey(String(patch.demoPlan)); }
   const settings = { ...(user.settings || {}), ...patch };
   for (const k of Object.keys(settings)) if (settings[k] === undefined) delete settings[k];
   await db().update(schema.users).set({ settings }).where(eq(schema.users.id, user.id));

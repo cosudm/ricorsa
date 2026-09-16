@@ -56,7 +56,7 @@ export const POST = handle(async (req: Request) => {
   const graph = await loadGraph(user.id);
   const nodeCount = Object.keys(graph.nodes).length;
   const caps = planFor(user.plan).caps;
-  // Discover is generated from the graph on the Team plan; other plans see the curated examples of what it does.
+  // Discover is generated from the graph on the Professional and Enterprise plans; other plans see the curated examples of what it does.
   if (caps.discover !== 'full') return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, locked: true, graphHash: await graphFingerprint(graph) });
   if (nodeCount < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, graphHash: await graphFingerprint(graph) });
 

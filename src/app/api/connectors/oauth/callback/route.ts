@@ -19,7 +19,7 @@ export async function GET(req: Request) {
   const c = rows.find(r => r.pending && state && r.pending.state === state);
   if (!c) return done('oauth=failed&reason=' + encodeURIComponent('This sign-in link is not valid any more. Start again from Connectors.'));
   if (err || !code) {
-    const reason = u.searchParams.get('error_description') || err || 'Sign-in was cancelled';
+    const reason = u.searchParams.get('error_description') || err || 'Sign-in was canceled';
     await db().update(schema.connectors).set({ pending: null, status: 'needs_auth', lastError: reason.slice(0, 300), updatedAt: new Date() }).where(and(eq(schema.connectors.id, c.id), eq(schema.connectors.userId, user.id)));
     return done('oauth=failed&reason=' + encodeURIComponent(reason) + '&id=' + encodeURIComponent(c.id));
   }

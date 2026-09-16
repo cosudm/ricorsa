@@ -20,7 +20,7 @@ function loadSdk(clientId: string) {
  * Renders PayPal's subscription button for one plan. On approval the subscription id goes to
  * our server, which verifies it with PayPal before changing the account.
  */
-export function PayPalSubscribe({ planId, planKey, clientId, userId, disabled }: { planId: string; planKey: string; clientId: string; userId: string; disabled?: boolean }) {
+export function PayPalSubscribe({ planId, planKey, planName, clientId, userId, disabled }: { planId: string; planKey: string; planName?: string; clientId: string; userId: string; disabled?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'approving' | 'done' | 'error'>('idle');
   const [msg, setMsg] = useState('');
@@ -39,7 +39,7 @@ export function PayPalSubscribe({ planId, planKey, clientId, userId, disabled }:
           setState('approving'); setMsg('Confirming with PayPal');
           const res = await fetch('/api/billing/paypal/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionId: data.subscriptionID }) });
           const body = await res.json().catch(() => ({}));
-          if (res.ok) { setState('done'); setMsg(`You are on ${body.plan === 'team' ? 'Team' : 'Pro'}. Opening Ricorsa.`); setTimeout(() => { location.href = '/app'; }, 1200); }
+          if (res.ok) { setState('done'); setMsg(`You are on ${body.planName || planName || planKey}. Opening Ricorsa.`); setTimeout(() => { location.href = '/app'; }, 1200); }
           else { setState('error'); setMsg(body.error || 'PayPal approved the subscription but we could not confirm it. It will be applied automatically within a few minutes.'); }
         },
         onError: (err: unknown) => { console.error(err); setState('error'); setMsg('PayPal could not complete that. Try again or use a different funding source.'); },
@@ -56,7 +56,7 @@ export function PayPalSubscribe({ planId, planKey, clientId, userId, disabled }:
       <div ref={ref} className="paypal-slot" aria-busy={state === 'loading' || state === 'approving'} />
       {state === 'loading' && <div className="note">Loading PayPal</div>}
       {msg && <div className={'notice ' + (state === 'error' ? '' : state === 'done' ? 'good' : 'info')} style={{ marginTop: 8 }}>{msg}</div>}
-      <div className="note" style={{ marginTop: 8 }}>Billed monthly by PayPal ({planKey === 'team' ? 'Team' : 'Pro'}). Cancel any time from your Account page or your PayPal account.</div>
+      <div className="note" style={{ marginTop: 8 }}>Billed monthly by PayPal ({planName || planKey}). Cancel any time from your Account page or your PayPal account.</div>
     </div>
   );
 }
