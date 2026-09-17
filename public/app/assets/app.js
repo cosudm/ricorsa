@@ -1569,7 +1569,7 @@ function modelName(id) {
   if (/^claude-fable/i.test(m)) return 'Claude Fable ' + (m.match(/fable-(\d+)(?:-(\d+))?/i) ? m.match(/fable-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
   if (/^claude-opus/i.test(m)) return 'Claude Opus ' + (m.match(/opus-(\d+)(?:-(\d+))?/i) ? m.match(/opus-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
   if (/^claude-sonnet/i.test(m)) return 'Claude Sonnet ' + (m.match(/sonnet-(\d+)(?:-(\d+))?/i) ? m.match(/sonnet-(\d+)(?:-(\d+))?/i).slice(1).filter(Boolean).join('.') : '');
-  if (/^kimi-k(\d[\d.]*)/i.test(m)) return 'Kimi K' + m.match(/^kimi-k(\d[\d.]*)/i)[1] + (/code/i.test(m) ? ' code' : '') + (/thinking/i.test(m) ? ' thinking' : '') + (/turbo/i.test(m) ? ' turbo' : '');
+  if (/^kimi-k(\d[\d.]*)/i.test(m)) return 'Kimi K' + m.match(/^kimi-k(\d[\d.]*)/i)[1] + (/code/i.test(m) ? ' code' : '') + (/thinking/i.test(m) ? ' thinking' : '') + (/turbo/i.test(m) ? ' turbo' : '') + (/highspeed/i.test(m) ? ' highspeed' : '');
   if (/^gpt-/i.test(m)) return 'GPT-' + m.slice(4).replace(/-preview$/, '').replace(/-(\d{4}-\d{2}-\d{2}|\d{8})$/, '');
   if (/^o[1-9](-|$)/i.test(m)) return m.replace(/-(\d{4}-\d{2}-\d{2})$/, '');
   if (/^gemini-/i.test(m)) return 'Gemini ' + m.slice(7).replace(/-preview.*$/, '').replace(/-(\d{2}-\d{2}|\d{3})$/, '').replace(/-/g, ' ');
@@ -1938,14 +1938,22 @@ function openSettings() {
  */
 const TIER_LABEL = { quick: 'Fast answers', default: 'Best answers', complex: 'Reasoning answers', build: 'Build studio', ideas: 'Discover ideas' };
 const TIER_NOTE = { quick: 'Planning, rewrites and the Fast setting', default: 'Search answers and built apps', complex: 'The Reasoning setting', build: 'Writing and repairing apps', ideas: 'Discover ideas' };
-const NOT_CHAT = /embed|whisper|tts|image|dall|moderation|audio|realtime|rerank|transcri|speech|-vl-|vision-only|guard|ocr|sora|veo|imagen|video/i;
+const NOT_CHAT = /embed|whisper|tts|image|dall|moderation|audio|realtime|rerank|transcri|speech|-vl-|vision-only|guard|ocr|sora|veo|imagen|video|babbage|davinci|computer-use/i;
+const KEY_OWNER_NAMES = { anthropic: 'an Anthropic', openrouter: 'an OpenRouter', groq: 'a Groq', xai: 'an xAI', google: 'a Google' };
+/** What to do about a refusal, read from the probe when there is one and from the stored answer otherwise. */
 function providerHint(p, probe) {
-  const st = probe ? probe.status : 0; const msg = (probe && probe.message) || p.error || '';
-  if (st === 401 || /invalid.*key|authentication|unauthorized/i.test(msg)) return 'The key is not accepted. Paste a current key from the provider.';
-  if (st === 402 || /credit|billing|balance|quota|insufficient/i.test(msg)) return 'The account behind this key has no credit or is over its quota. Add credit at the provider, then press Check.';
-  if (st === 404) return 'That model is not available to this key. Choose another model below.';
+  const msg = (probe && probe.message) || p.error || (p.setAside && p.setAside.why) || '';
+  const hm = /HTTP (\d{3})/.exec(msg); const st = probe ? probe.status : hm ? +hm[1] : 0;
+  if (p.mcp) return 'This address is an MCP server, not a model API. Remove it here and add it under Connectors as a custom MCP server.';
+  // A key pasted into the wrong card (an Anthropic key on the DeepSeek card) is the commonest slip; the prefix gives it away.
+  if (p.keyOwner && p.keyOwner !== p.id && !p.custom && !p.aggregator) return `The key stored here looks like ${KEY_OWNER_NAMES[p.keyOwner] || "another provider's"} key. Remove it, or replace it with a key from ${p.name}.`;
+  if (st === 401 || /invalid.*key|api key.*invalid|incorrect api key|authentication|unauthorized/i.test(msg)) return `The key is not accepted. Paste a current key from ${p.custom ? 'the endpoint' : p.name}.`;
+  if (st === 402 || /credit|billing|balance|quota|insufficient/i.test(msg)) return 'The account behind this key has no credit or is over its quota. Add credit to the organization that owns this key, then press Check.';
+  if (st === 404 || /no longer available|not found|does not exist|unknown model/i.test(msg)) return 'The model used for the check is not available to this key. Press Check to try the newest one on the account, or pick another model below.';
+  if (/max_completion_tokens|unsupported parameter/i.test(msg)) return 'The check used a request format this model does not take. Press Check to run it again.';
   if (st === 403) return 'The key is valid but not allowed to use this model or this API. Check the key permissions and the organization plan.';
-  if (st === 0 && msg) return 'The provider could not be reached from this server.';
+  if (/No model list came back/i.test(msg)) return 'The endpoint did not list its models. Use Replace key to give a model id to test with.';
+  if (st === 0 && msg && /fetch|network|timeout|timed out|econn|abort|socket|dns|certificate/i.test(msg)) return 'The provider could not be reached from this server.';
   return '';
 }
 function providerStatusHtml(p, probe) {
@@ -1972,9 +1980,9 @@ function paintModels(r) {
     return `<div class="prov-card${p.configured ? '' : ' off'}" data-prov="${esc(p.id)}">
       <div class="prov-head"><b>${esc(p.name)}</b><span class="prov-src">${p.source === 'env' ? 'Server key' : p.source === 'account' ? 'Key added here' : 'No key'}</span></div>
       <div class="prov-status">${providerStatusHtml(p, probe)}${hint ? `<br><small>${esc(hint)}</small>` : ''}</div>
-      <div class="prov-meta">${p.configured ? (p.models && p.models.length ? `${p.models.length} model${p.models.length === 1 ? '' : 's'} on the account` : 'No model list from this provider') : (p.aggregator ? 'One key reaches many models.' : 'Add a key to use its models.')}${p.custom ? ` · ${esc(p.baseUrl)}` : ''}</div>
+      <div class="prov-meta">${p.configured ? (p.models && p.models.length ? `${p.models.length} model${p.models.length === 1 ? '' : 's'} on the account` : 'No model list from this provider') : (p.aggregator ? 'One key reaches many models.' : 'Add a key to use its models.')}${p.keyTail ? ` · Key ends in <span style="white-space:nowrap">…${esc(p.keyTail)}</span>` : ''}${p.custom ? ` · ${esc(p.baseUrl)}` : ''}</div>
       <div class="prov-actions">
-        ${p.configured ? `<button type="button" class="btn sm" data-check title="Send one tiny message and list the models">${icon('refresh', 13)}<span>Check</span></button>` : ''}
+        ${p.configured && !p.mcp ? `<button type="button" class="btn sm" data-check title="Send one tiny message and list the models">${icon('refresh', 13)}<span>Check</span></button>` : ''}
         <button type="button" class="btn sm${p.configured ? '' : ' primary'}" data-key>${icon('key', 13)}<span>${p.source === 'account' ? 'Replace key' : 'Add key'}</span></button>
         ${p.source === 'account' ? `<button type="button" class="btn sm ghost" data-forget title="${p.custom ? 'Remove this endpoint' : p.envKeys && p.envKeys.length ? 'Remove the key added here; a server key stays' : 'Remove the key added here'}">${icon('trash', 13)}<span>Remove</span></button>` : ''}
         ${p.docs ? `<a class="btn sm ghost" href="${esc(p.docs)}" target="_blank" rel="noopener">${icon('external', 13)}<span>Get a key</span></a>` : ''}
@@ -1984,7 +1992,7 @@ function paintModels(r) {
     const info = (r.tiers || {})[t] || {}; const chosen = settings[t] || null;
     const provOpts = `<option value="">Automatic</option>` + configured.map(p => `<option value="${esc(p.id)}"${chosen && chosen.provider === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('');
     return `<div class="tier-row" data-tier="${t}">
-      <div class="tier-l"><b>${esc(TIER_LABEL[t])}</b><small>${esc(TIER_NOTE[t])}. Now: ${esc(modelName(info.resolved) || info.resolved || '')}${info.provider ? ` (${esc(info.provider)})` : ''}${info.resolved && info.configured && info.resolved !== info.configured ? ` <span class="bad">wanted ${esc(modelName(info.configured))}</span>` : ''}</small></div>
+      <div class="tier-l"><b>${esc(TIER_LABEL[t])}</b><small>${esc(TIER_NOTE[t])}. Now: ${esc(modelName(info.resolved) || info.resolved || '')}${info.provider ? ` on ${esc(info.provider)}` : ''}${info.resolved && info.configured && info.resolved !== info.configured ? ` <span class="bad">wanted ${esc(modelName(info.configured))}</span>` : ''}</small></div>
       <select data-tier-prov aria-label="Provider for ${esc(TIER_LABEL[t])}">${provOpts}</select>
       <span data-tier-model-wrap></span>
     </div>`;
@@ -2005,11 +2013,16 @@ function paintModels(r) {
     onMount: ov => {
       const byId = Object.fromEntries(providers.map(p => [p.id, p]));
       // A tier's model control follows its provider: a select of the provider's chat models, or a text field when the provider gave no list.
+      // It opens on the saved choice; failing that on what the tier runs now, if this provider serves it; failing that on the
+      // provider's newest general model, never on whatever sorts first.
       const modelControl = (row, t) => {
-        const pid = $('[data-tier-prov]', row).value; const wrap = $('[data-tier-model-wrap]', row); const chosen = settings[t] || null;
+        const pid = $('[data-tier-prov]', row).value; const wrap = $('[data-tier-model-wrap]', row); const chosen = settings[t] || null; const info = (r.tiers || {})[t] || {};
         if (!pid) { wrap.innerHTML = `<span class="muted" style="font-size:12.5px">Best available</span>`; return; }
-        const p = byId[pid]; const ids = p ? chatModels(p) : []; const cur = chosen && chosen.provider === pid ? chosen.model : '';
-        if (ids.length) wrap.innerHTML = `<select data-tier-model aria-label="Model">${(cur && !ids.includes(cur) ? [cur, ...ids] : ids).map(id => `<option value="${esc(id)}"${id === cur ? ' selected' : ''}>${esc(modelName(id) === id ? id : `${modelName(id)} (${id})`)}</option>`).join('')}</select>`;
+        const p = byId[pid]; const ids = p ? chatModels(p) : []; const rec = p && p.recommended ? p.recommended : '';
+        const saved = chosen && chosen.provider === pid ? chosen.model : '';
+        const cur = saved || (info.resolved && ids.includes(info.resolved) ? info.resolved : '') || rec || '';
+        const label = id => `${esc(modelName(id) === id ? id : `${modelName(id)} (${id})`)}${id === rec ? ' · suggested' : ''}`;
+        if (ids.length) wrap.innerHTML = `<select data-tier-model aria-label="Model">${(cur && !ids.includes(cur) ? [cur, ...ids] : ids).map(id => `<option value="${esc(id)}"${id === cur ? ' selected' : ''}>${label(id)}</option>`).join('')}</select>`;
         else wrap.innerHTML = `<input type="text" data-tier-model value="${esc(cur)}" placeholder="Model id" aria-label="Model id" maxlength="160">`;
       };
       $$('.tier-row', ov).forEach(row => { const t = row.dataset.tier; modelControl(row, t); $('[data-tier-prov]', row).addEventListener('change', () => modelControl(row, t)); });
@@ -2067,6 +2080,7 @@ function providerKeyModal(p) {
         if (!p) {
           const name = $('#pkName', ov).value.trim(), base = $('#pkBase', ov).value.trim();
           if (!name) { $('#pkName', ov).focus(); return; } if (!base) { $('#pkBase', ov).focus(); return; }
+          if (/\/(mcp|sse)\/?$/i.test(base)) { toast('That address is an MCP server. Add it under Connectors as a custom MCP server; this screen takes model APIs.', 'bad'); $('#pkBase', ov).focus(); return; }
           body.id = 'custom_' + name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'custom_' + Date.now().toString(36);
           body.name = name; body.baseUrl = base; body.kind = $('#pkKind', ov).value;
         } else if (custom) { const base = $('#pkBase', ov).value.trim(); if (base) body.baseUrl = base; }

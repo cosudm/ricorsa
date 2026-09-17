@@ -59,16 +59,21 @@ function build(): Provider[] {
   return list;
 }
 
-/** A provider as the admin screen shows it: everything but the key itself. */
+/** A provider as the admin screen shows it: everything but the key itself (its last characters, so two keys can be told apart, as the providers' own consoles show them). */
 export function providerForClient(p: Provider) {
   const def = PROVIDER_CATALOG.find(d => d.id === p.id);
   return {
     id: p.id, name: p.name, kind: p.kind, baseUrl: p.baseUrl, source: p.source, custom: p.custom, aggregator: p.aggregator,
-    configured: !!p.key, usable: providerUsable(p), setAside: providerSetAside(p), status: p.status || null, error: p.error || null, checkedAt: p.checkedAt || null,
-    models: p.models, modelsAt: p.modelsAt || null, probeModel: p.probeModel || null, docs: def?.docs || null, keyHint: def?.keyHint || (p.custom ? 'The API key the endpoint expects as a bearer token.' : null), envKeys: def?.envKeys || [],
+    configured: !!p.key, keyTail: p.key && p.key.length >= 16 ? p.key.slice(-6) : null, keyOwner: p.key ? keyOwner(p.key) : null, usable: providerUsable(p), setAside: providerSetAside(p), status: p.status || null, error: p.error || null, checkedAt: p.checkedAt || null,
+    models: p.models, modelsAt: p.modelsAt || null, probeModel: p.probeModel || null, recommended: p.key ? recommendedModel(p) || null : null, mcp: p.custom && mcpAddress(p.baseUrl),
+    docs: def?.docs || null, keyHint: def?.keyHint || (p.custom ? 'The API key the endpoint expects as a bearer token.' : null), envKeys: def?.envKeys || [],
   };
 }
 export type ClientProvider = ReturnType<typeof providerForClient>;
+/** The provider a key's prefix identifies, when it has a telling one; a key on the wrong card is the commonest slip. */
+export function keyOwner(key: string): string | null {
+  return key.startsWith('sk-ant-') ? 'anthropic' : key.startsWith('sk-or-') ? 'openrouter' : key.startsWith('gsk_') ? 'groq' : key.startsWith('xai-') ? 'xai' : key.startsWith('AIza') ? 'google' : null;
+}
 
 /** Every provider Ricorsa knows about, with its key and source; the ones without a key have source 'none'. Account keys are re-read every thirty seconds. */
 export async function loadProviders(force = false): Promise<Provider[]> {
@@ -126,44 +131,96 @@ export async function probeProvider(p: Provider, model?: string): Promise<ProbeR
   const started = Date.now();
   if (!p.key) return { ok: false, status: 0, message: 'No API key for this provider', model: model || '', models: 0, ms: 0 };
   const ids = await listProviderModels(p, true);
-  const m = model || p.probeModel || defaultProbeModel(p, ids);
+  let m = model || p.probeModel || defaultProbeModel(p, ids);
   // A custom endpoint with no list and no model id to try: the list is all there is to go on.
-  if (!m) return note(p, { ok: ids.length > 0, status: ids.length ? 200 : 0, message: ids.length ? `${p.name} listed ${ids.length} models` : 'No model list came back; give a model id to test with', model: '', models: ids.length, ms: Date.now() - started });
+  if (!m) return note(p, { ok: ids.length > 0, status: ids.length ? 200 : 0, message: ids.length ? `${p.name} listed ${ids.length} models` : (mcpAddress(p.baseUrl) ? 'This address is an MCP server, not a model API; add it under Connectors instead' : 'No model list came back; give a model id to test with'), model: '', models: ids.length, ms: Date.now() - started });
+  const key = p.key;
+  const send = (body: Record<string, unknown>) => p.kind === 'anthropic'
+    ? fetch(`${p.baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) })
+    : fetch(`${p.baseUrl}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+  // One tiny message; OpenAI's reasoning models take max_completion_tokens instead of max_tokens, so a 400 that says so is sent once more their way.
+  const attempt = async (id: string) => {
+    const messages = [{ role: 'user', content: 'ok' }];
+    let res = await send({ model: id, max_tokens: 1, messages }); let text = await res.text();
+    if (res.status === 400 && p.kind === 'openai' && /max_completion_tokens/i.test(text)) { res = await send({ model: id, max_completion_tokens: 1, messages }); text = await res.text(); }
+    return { res, text };
+  };
+  const unknownModel = (status: number, text: string) => status === 404 || (status === 400 && /no longer available|not found|does not exist|unknown model|invalid model/i.test(text));
   try {
-    let res: Response;
-    if (p.kind === 'anthropic') {
-      res = await fetch(`${p.baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': p.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model: m, max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] }), signal: AbortSignal.timeout(20_000) });
-    } else {
-      res = await fetch(`${p.baseUrl}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${p.key}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: m, max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] }), signal: AbortSignal.timeout(20_000) });
+    let { res, text } = await attempt(m);
+    // A retired or unlisted model is not a dead key: when the model was Ricorsa's pick, try the next kind of pick once.
+    if (!res.ok && !model && !p.probeModel && ids.length && unknownModel(res.status, text)) {
+      const alt = probeCandidates(p, ids).find(id => id !== m);
+      if (alt) { m = alt; ({ res, text } = await attempt(m)); }
     }
-    const text = await res.text();
     if (res.ok) { clearProviderDown(p); return note(p, { ok: true, status: res.status, message: `${p.name} accepted a message on ${m}`, model: m, models: ids.length, ms: Date.now() - started }); }
     let message = text.slice(0, 300);
     // Both wire formats answer { error: { message, type } }; Google wraps that in an array and uses status and code instead of type.
     try { const parsed = JSON.parse(text) as unknown; const j = (Array.isArray(parsed) ? parsed[0] : parsed) as { error?: { type?: string; message?: string; code?: string | number; status?: string } | string }; const e = typeof j?.error === 'string' ? { message: j.error } : j?.error; if (e?.message) message = `${e.type || e.status || e.code || 'error'}: ${e.message}`.slice(0, 300); } catch { /* not JSON */ }
     // A model this key cannot use is not a dead provider: the list is still good and another model may work.
-    if (res.status === 404 && ids.length) return note(p, { ok: false, status: res.status, message, model: m, models: ids.length, ms: Date.now() - started });
+    if (unknownModel(res.status, text) && ids.length) return note(p, { ok: false, status: res.status, message: `${message} (tried ${m})`.slice(0, 300), model: m, models: ids.length, ms: Date.now() - started });
     if (res.status === 401 || res.status === 402 || res.status === 403 || (res.status === 400 && /credit|billing|balance|quota/i.test(message))) markProviderDown(p, `HTTP ${res.status}: ${message.slice(0, 120)}`);
     return note(p, { ok: false, status: res.status, message, model: m, models: ids.length, ms: Date.now() - started });
   } catch (e) { return note(p, { ok: false, status: 0, message: String((e as Error)?.message || e).slice(0, 200), model: m, models: ids.length, ms: Date.now() - started }); }
 }
+/** Whether a base URL points at an MCP server rather than a model API: those belong under Connectors. */
+export function mcpAddress(baseUrl: string): boolean { return /\/(mcp|sse)\/?$/i.test(baseUrl); }
 function note(p: Provider, r: ProbeResult): ProbeResult {
   lastProbe.set(p.id, { status: r.ok ? 'ok' : 'refused', error: r.ok ? null : r.message, checkedAt: Date.now() });
   p.status = r.ok ? 'ok' : 'refused'; p.error = r.ok ? null : r.message; p.checkedAt = Date.now();
   return r;
 }
-function defaultProbeModel(p: Provider, ids: string[]): string {
+const NOT_CHAT = /embed|whisper|tts|image|dall|moderation|audio|realtime|rerank|transcri|speech|-vl-|vision-only|guard|ocr|sora|veo|imagen|video|babbage|davinci|computer-use/i;
+/** The id with the highest version among those matching `re`, whose first capture group is the version (2.5, 3.6, 5.2). Ties go to the shorter id. */
+function newest(ids: string[], re: RegExp): string | undefined {
+  let best: { id: string; v: number } | null = null;
+  for (const id of ids) { const m = re.exec(id); if (!m) continue; const v = parseFloat((m[1] || '0').replace('-', '.')); if (!best || v > best.v || (v === best.v && id.length < best.id.length)) best = { id, v }; }
+  return best?.id;
+}
+/**
+ * The cheap model to test a key with: the newest small model on the account, so a provider that has retired an
+ * older generation (Google drops old Flash models for new keys) still answers the check. Falls back to a known id
+ * when the list is empty.
+ */
+function defaultProbeModel(p: Provider, ids: string[]): string { return probeCandidates(p, ids)[0] || ''; }
+/** The models to test a key with, in order: each entry is a different kind of pick, so when the first is retired the next is not its older sibling. */
+function probeCandidates(p: Provider, ids: string[]): string[] {
+  const pick = (re: RegExp) => ids.find(id => re.test(id));
+  const chat = () => ids.find(id => !NOT_CHAT.test(id));
+  let picks: Array<string | undefined>;
+  switch (p.id) {
+    case 'anthropic': picks = [newest(ids, /^claude-haiku-(\d+(?:-\d+)?)$/), newest(ids, /^claude-haiku-(\d+)/), newest(ids, /^claude-sonnet-(\d+)/), newest(ids, /^claude-fable-(\d+)/), pick(/^claude-/), 'claude-fable-5-1']; break;
+    case 'moonshot': picks = [pick(/^kimi-k3-turbo$/), pick(/^kimi-k3$/), newest(ids, /^kimi-k(\d+(?:\.\d+)?)$/), pick(/^kimi-/), 'kimi-k3']; break;
+    case 'openai': picks = [newest(ids, /^gpt-(\d+(?:\.\d+)?)-mini$/), newest(ids, /^gpt-(\d+(?:\.\d+)?)-nano$/), pick(/^gpt-4o-mini$/), newest(ids, /^gpt-(\d+(?:\.\d+)?)$/), pick(/^gpt-/), 'gpt-4.1-mini']; break;
+    case 'google': picks = [newest(ids, /^gemini-(\d+(?:\.\d+)?)-flash$/), newest(ids, /^gemini-(\d+(?:\.\d+)?)-flash-lite$/), newest(ids, /^gemini-(\d+(?:\.\d+)?)-flash(?!.*(tts|image|live|audio))/), newest(ids, /^gemini-(\d+(?:\.\d+)?)-pro$/), newest(ids, /^gemini-(\d+(?:\.\d+)?)-pro-preview/), pick(/^gemini-/), 'gemini-2.5-flash']; break;
+    case 'xai': picks = [newest(ids, /^grok-(\d+(?:\.\d+)?)-mini$/), newest(ids, /^grok-(\d+(?:\.\d+)?)-fast(?:-non-reasoning)?$/), pick(/^grok-.*mini/), newest(ids, /^grok-(\d+(?:\.\d+)?)$/), pick(/^grok-/), 'grok-4']; break;
+    case 'mistral': picks = [pick(/^mistral-small-latest$/), pick(/^mistral-small/), pick(/^ministral/), pick(/^mistral-/), 'mistral-small-latest']; break;
+    case 'deepseek': picks = [pick(/^deepseek-chat$/), pick(/^deepseek-/), 'deepseek-chat']; break;
+    case 'groq': picks = [pick(/llama-3\.[13]-8b/), pick(/llama/), chat(), 'llama-3.1-8b-instant']; break;
+    case 'openrouter': picks = [pick(/^openai\/gpt-\d+(\.\d+)?-mini$/), pick(/^anthropic\/claude-haiku/), pick(/^google\/gemini-.*flash$/), chat()]; break;
+    default: picks = [chat(), ids[0]];
+  }
+  return picks.filter((v, i, a): v is string => !!v && a.indexOf(v) === i);
+}
+/**
+ * The model to suggest when an admin points a tier at a provider: the account's newest general model, so the
+ * select does not open on whatever sorts first alphabetically (an older Kimi, a legacy GPT, Gemini 1.5).
+ */
+export function recommendedModel(p: Provider, ids: string[] = p.models): string {
   const pick = (re: RegExp) => ids.find(id => re.test(id));
   switch (p.id) {
-    case 'anthropic': return pick(/^claude-fable/) || pick(/^claude-(sonnet|haiku)/) || ids[0] || 'claude-fable-5-1';
-    case 'moonshot': return pick(/^kimi-k3$/) || pick(/^kimi-/) || ids[0] || 'kimi-k3';
-    case 'openai': return pick(/^gpt-5(\.\d+)?-mini$/) || pick(/^gpt-4\.1-mini$/) || pick(/^gpt-4o-mini$/) || pick(/^gpt-/) || ids[0] || 'gpt-4.1-mini';
-    case 'google': return pick(/^gemini-2\.5-flash$/) || pick(/^gemini-.*flash/) || pick(/^gemini-/) || ids[0] || 'gemini-2.5-flash';
-    case 'xai': return pick(/^grok-.*mini/) || pick(/^grok-/) || ids[0] || 'grok-4';
-    case 'mistral': return pick(/^mistral-small/) || pick(/^mistral-/) || ids[0] || 'mistral-small-latest';
-    case 'deepseek': return pick(/^deepseek-chat/) || ids[0] || 'deepseek-chat';
-    case 'groq': return pick(/llama-3\.[13]-8b/) || pick(/llama/) || ids[0] || 'llama-3.1-8b-instant';
-    default: return ids.find(id => !/embed|whisper|tts|image|dall|moderation|audio|realtime/i.test(id)) || ids[0] || '';
+    case 'anthropic': return newest(ids, /^claude-fable-(\d+(?:-\d+)?)$/) || newest(ids, /^claude-fable-(\d+)/) || newest(ids, /^claude-opus-(\d+)/) || newest(ids, /^claude-sonnet-(\d+)/) || pick(/^claude-/) || '';
+    case 'moonshot': return pick(/^kimi-k3$/) || newest(ids, /^kimi-k(\d+(?:\.\d+)?)$/) || pick(/^kimi-/) || '';
+    case 'openai': return newest(ids, /^gpt-(\d+(?:\.\d+)?)$/) || newest(ids, /^gpt-(\d+(?:\.\d+)?)-mini$/) || pick(/^gpt-4o$/) || pick(/^gpt-/) || '';
+    // The newest generation wins even when only its Flash is out of preview; an older Pro may already be closed to new keys.
+    case 'google': return newest(ids, /^gemini-(\d+(?:\.\d+)?)-(?:pro|flash)$/) || newest(ids, /^gemini-(\d+(?:\.\d+)?)-pro-preview/) || pick(/^gemini-/) || '';
+    case 'xai': return newest(ids, /^grok-(\d+(?:\.\d+)?)$/) || newest(ids, /^grok-(\d+(?:\.\d+)?)-fast(?:-reasoning)?$/) || pick(/^grok-/) || '';
+    case 'mistral': return pick(/^mistral-large-latest$/) || pick(/^mistral-medium-latest$/) || pick(/^magistral-medium-latest$/) || pick(/^mistral-large/) || pick(/^mistral-/) || '';
+    case 'deepseek': return pick(/^deepseek-chat$/) || pick(/^deepseek-reasoner$/) || pick(/^deepseek-/) || '';
+    case 'groq': return pick(/^openai\/gpt-oss-120b$/) || pick(/llama-3\.3-70b/) || pick(/^moonshotai\/kimi/) || pick(/llama.*70b/) || ids.find(id => !NOT_CHAT.test(id)) || '';
+    case 'openrouter': return pick(/^anthropic\/claude-(fable|opus)/) || pick(/^openai\/gpt-\d+(\.\d+)?$/) || pick(/^moonshotai\/kimi-k\d/) || pick(/^google\/gemini-.*pro/) || ids.find(id => !NOT_CHAT.test(id)) || '';
+    case 'together': return pick(/^moonshotai\/Kimi-K\d/i) || pick(/^deepseek-ai\/DeepSeek-V\d/i) || pick(/^meta-llama\/Llama-.*(70B|405B)/i) || ids.find(id => !NOT_CHAT.test(id)) || '';
+    default: return p.probeModel || ids.find(id => !NOT_CHAT.test(id)) || '';
   }
 }
 

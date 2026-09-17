@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
-import { PROVIDER_CATALOG, loadProviders, probeProvider, saveProviderAccount, removeProviderAccount, providerForClient, forgetProviders, type ProviderKind } from '@/lib/providers';
+import { PROVIDER_CATALOG, loadProviders, probeProvider, saveProviderAccount, removeProviderAccount, providerForClient, forgetProviders, mcpAddress, type ProviderKind } from '@/lib/providers';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,6 +10,7 @@ function validBase(raw: string): string {
   let u: URL; try { u = new URL(raw.trim()); } catch { throw new Error('Enter the full base URL of the API, for example https://api.example.com/v1'); }
   if (u.protocol !== 'https:' && !(u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && /^(localhost|127\.0\.0\.1)$/.test(u.hostname))) throw new Error('The base URL must use https');
   if (u.username || u.password || u.search || u.hash) throw new Error('Use the plain base URL, without credentials or query');
+  if (mcpAddress(u.pathname)) throw new Error('That address is an MCP server. Add it under Connectors as a custom MCP server; Model accounts take OpenAI-compatible model APIs, usually ending in /v1');
   return u.toString().replace(/\/+$/, '');
 }
 
