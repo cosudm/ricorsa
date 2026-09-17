@@ -1,6 +1,8 @@
 import './globals.css'; // site styles load only on these pages; the app under /app has its own
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
+import { TryRicorsa } from '@/components/TryRicorsa';
 import { viewer } from '@/lib/viewer';
+import { PRODUCTS, SAMPLE_PROMPTS } from '@/lib/products';
 
 // Rendered per request: the nav reflects the signed-in state, which comes from the session cookie.
 export const dynamic = 'force-dynamic';
@@ -62,6 +64,26 @@ export default async function Landing() {
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="section-c wrap" id="products">
+          <h2>What Ricorsa gives you</h2>
+          <p className="sub">One place to ask, keep and build. Each part works on its own; together they carry a question through to a tool.</p>
+          <div className="products">
+            {PRODUCTS.map(p => (
+              <div key={p.slug} className="product">
+                <h3>{p.name}</h3>
+                <p>{p.blurb}</p>
+                <a className="more" href={`/product/${p.slug}`}>Learn more<span aria-hidden="true"> →</span></a>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="section-c wrap" id="try">
+          <h2>Try Ricorsa</h2>
+          <p className="sub">Get to know it with a few sample questions. Each one lands in the composer, ready to send.</p>
+          <TryRicorsa groups={SAMPLE_PROMPTS} signedIn={!!v} />
         </section>
 
         <section className="section-c wrap middle-c">

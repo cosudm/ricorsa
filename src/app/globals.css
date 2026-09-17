@@ -68,6 +68,40 @@ button { font: inherit; cursor: pointer; }
 .nchip .dot { width: 8px; height: 8px; border-radius: 50%; }
 .nchip .dot.square { border-radius: 2px; } .nchip .dot.diamond { border-radius: 2px; transform: rotate(45deg) scale(.85); } .nchip .dot.hex { clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); border-radius: 0; }
 .tool-pill { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 500; }
+/* what Ricorsa gives you: one card per product */
+.products { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; text-align: left; }
+.product { border: 1px solid var(--line); border-radius: 18px; background: var(--card); padding: 22px 24px 20px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-1); }
+.product h3 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -.01em; }
+.product p { margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+.product .more { margin-top: auto; padding-top: 6px; font-weight: 500; font-size: 14px; align-self: flex-start; }
+/* try Ricorsa: sample questions by kind of work */
+.try { text-align: left; }
+.try-tabs { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 18px; }
+.try-tab { border: 1px solid var(--line-strong); background: var(--card); color: var(--ink-2); border-radius: 999px; height: 36px; padding: 0 14px; font-weight: 500; font-size: 13.5px; cursor: pointer; }
+.try-tab:hover { background: var(--surface); }
+.try-tab.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.try-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.try-card { border: 1px solid var(--line); border-radius: 16px; background: var(--card); padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.try-card p { margin: 0; font-size: 15px; line-height: 1.5; color: var(--ink); }
+.try-card .btn { align-self: flex-start; margin-top: auto; }
+.btn.sm { height: 34px; padding: 0 13px; font-size: 13.5px; }
+/* product pages */
+.prod-hero { padding: 56px 24px 28px; text-align: center; }
+.prod-hero .kicker { font: 600 11.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+.prod-hero h1 { font-family: var(--sans); font-weight: 500; font-size: 46px; line-height: 1.1; letter-spacing: -.03em; margin: 0 0 16px; text-wrap: balance; }
+.prod-hero .lede { font-size: 18px; color: var(--ink-2); max-width: 62ch; margin: 0 auto 26px; line-height: 1.6; }
+.prod-hero .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.prod-shot { margin: 8px auto 0; max-width: 1080px; padding: 0 24px; }
+.prod-shot figure { margin: 0; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: var(--card); box-shadow: var(--shadow-3); }
+.prod-shot img { display: block; width: 100%; height: auto; }
+.prod-shot figcaption { font-size: 12.5px; color: var(--ink-3); text-align: center; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--surface); }
+.prod-points { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; text-align: left; }
+.prod-points .pt { border: 1px solid var(--line); border-radius: 16px; background: var(--card); padding: 20px 22px; }
+.prod-points .pt h3 { margin: 0 0 6px; font-size: 16.5px; font-weight: 600; letter-spacing: -.01em; }
+.prod-points .pt p { margin: 0; color: var(--ink-2); font-size: 14.5px; line-height: 1.55; }
+.prod-related { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.prod-related a { border: 1px solid var(--line-strong); border-radius: 999px; padding: 7px 14px; font-size: 13.5px; font-weight: 500; color: var(--ink); background: var(--card); }
+.prod-related a:hover { background: var(--surface); text-decoration: none; }
 .middle-c .big { font-family: var(--serif); font-size: 32px; line-height: 1.25; letter-spacing: -.01em; margin: 0 auto 14px; max-width: 26ch; text-wrap: balance; }
 .middle-c .cta { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
 
@@ -126,7 +160,8 @@ button { font: inherit; cursor: pointer; }
   .hero-c { min-height: 0; padding: 56px 24px 64px; }
   .hero-c h1 { font-size: 44px; }
   .hero-c .lede { font-size: 17px; }
-  .stages, .plans, .cards { grid-template-columns: 1fr; }
+  .stages, .plans, .cards, .products, .try-grid, .prod-points { grid-template-columns: 1fr; }
+  .prod-hero h1 { font-size: 34px; }
   .section-c { padding: 48px 24px; }
   .middle-c .big { font-size: 26px; }
   .topnav .links .hide-sm { display: none; }

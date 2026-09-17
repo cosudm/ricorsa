@@ -2419,9 +2419,19 @@ async function checkProviderHealth() {
     $('[data-health-close]', bar).addEventListener('click', () => { try { sessionStorage.setItem('ricorsa.health.dismissed', String(h.checkedAt)); } catch (e) {} bar.remove(); });
   } catch (e) { /* the banner is a convenience */ }
 }
+/** A question handed over in the address (/app?q=… from the site's sample prompts): it lands in the composer, never sent on its own. */
+function takeHandedQuestion() {
+  try {
+    const q = new URLSearchParams(location.search).get('q');
+    if (!q) return;
+    state.composerDraft = q.slice(0, 4000);
+    history.replaceState(null, '', location.pathname + (location.hash || '#/home'));
+  } catch (e) { /* nothing handed over */ }
+}
 function init() {
   setupSidebar();
   ensureBridge();
+  takeHandedQuestion();
   window.addEventListener('hashchange', render);
   document.addEventListener('keydown', e => {
     const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '') || (e.target && e.target.isContentEditable);
