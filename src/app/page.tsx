@@ -32,12 +32,12 @@ export default async function Landing() {
 
         <section className="section-c wrap" id="how">
           <h2>How it works</h2>
-          <p className="sub">Three stages, one thread. Nothing you learn gets lost between them.</p>
+          <p className="sub">Research, data asset, working tools.</p>
           <div className="stages">
             <div className="stage-c">
               <div className="k"><span className="n">1</span>Research</div>
-              <h3>Ask, and get an answer you can check</h3>
-              <p>Ricorsa searches the live web, reads the pages, and answers with numbered citations that open the source. Attach files, or connect a website or a document vault, and it reads those first.</p>
+              <h3>Ask a question</h3>
+              <p>Ricorsa searches the live web and answers with numbered citations that open the source page. Files, websites and document vaults are read first.</p>
               <div className="mini">
                 <div className="src"><b>capitol.texas.gov</b>Texas Legislature Online</div>
                 <div className="src"><b>nyc.gov</b>Office of Special Enforcement</div>
@@ -45,8 +45,8 @@ export default async function Landing() {
             </div>
             <div className="stage-c">
               <div className="k"><span className="n">2</span>Data asset</div>
-              <h3>What you learn stays, and stays yours</h3>
-              <p>Every answer adds to an asset you can read: the topics, people, organizations, goals and sources of your work, kept in Spaces per client or project. It shapes how the next question is understood. Edit it, export it, forget any part of it.</p>
+              <h3>Keep what you learn</h3>
+              <p>Each answer adds to a graph you can read: topics, entities, goals, sources. It is yours to edit, export or delete.</p>
               <div className="mini chips">
                 <span className="nchip"><i className="dot" style={{ background: 'var(--n-topic)' }} />state pre-emption</span>
                 <span className="nchip"><i className="dot square" style={{ background: 'var(--n-entity)' }} />Florida DBPR</span>
@@ -55,8 +55,8 @@ export default async function Landing() {
             </div>
             <div className="stage-c">
               <div className="k"><span className="n">3</span>Working tools</div>
-              <h3>Turn the asset into something that runs</h3>
-              <p>Describe a tool, or pick an idea Ricorsa draws from your asset, and get a working app, agent or dataset, checked in a real browser and improved with you in a chat. It speaks MCP, so your other AI tools can join in.</p>
+              <h3>Build a tool</h3>
+              <p>Turn the graph into an app, agent or dataset. Built in the studio, tested in a browser, connected over MCP.</p>
               <div className="mini tools">
                 <span className="tool-pill">Rule checker · app</span>
                 <span className="tool-pill">Change alert · agent</span>
@@ -67,8 +67,7 @@ export default async function Landing() {
         </section>
 
         <section className="section-c wrap" id="products">
-          <h2>What Ricorsa gives you</h2>
-          <p className="sub">One place to ask, keep and build. Each part works on its own; together they carry a question through to a tool.</p>
+          <h2>Products</h2>
           <div className="products">
             {PRODUCTS.map(p => (
               <div key={p.slug} className="product">
@@ -82,13 +81,13 @@ export default async function Landing() {
 
         <section className="section-c wrap" id="try">
           <h2>Try Ricorsa</h2>
-          <p className="sub">Get to know it with a few sample questions. Each one lands in the composer, ready to send.</p>
+          <p className="sub">Sample questions. Each opens in the composer.</p>
           <TryRicorsa groups={SAMPLE_PROMPTS} signedIn={!!v} />
         </section>
 
         <section className="section-c wrap middle-c">
           <p className="big">Ricorsa sits in the middle: between a search box that hands you links, and a software team you do not have.</p>
-          <p className="sub">Research it properly, keep what you learn, turn it into a tool. Organizations run the same loop on a map with the SMEPro Identity Graph; <a href="mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise">talk to us about a deployment</a>.</p>
+          <p className="sub">For organizations, the same graph on a map. <a href="mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise">Contact us</a>.</p>
           <div className="cta">
             <a className="btn primary lg" href={start}>{v ? 'Open Ricorsa' : 'Start free'}</a>
             <a className="btn lg" href="/pricing">See plans</a>

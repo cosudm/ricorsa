@@ -38,20 +38,20 @@ export default async function ProductPage({ params }: Props) {
         <div className="prod-shot">
           <figure>
             <img src={`/brand/shots/${p.shot}.png`} alt={p.shotAlt} width={1120} height={700} loading="eager" />
-            <figcaption>The app as it looks in use, shown with example content.</figcaption>
+            <figcaption>Example content.</figcaption>
           </figure>
         </div>
         <section className="section-c wrap" style={{ borderTop: 0 }}>
-          <h2>What you can do with it</h2>
+          <h2>What it does</h2>
           <div className="prod-points">
             {p.points.map(pt => <div key={pt.title} className="pt"><h3>{pt.title}</h3><p>{pt.text}</p></div>)}
           </div>
         </section>
         <section className="section-c wrap">
-          <h2>Worth reading next</h2>
+          <h2>Related</h2>
           <div className="prod-related">
             {related.map(r => <a key={r.slug} href={`/product/${r.slug}`}>{r.name}</a>)}
-            <a href="/#products">Everything Ricorsa gives you</a>
+            <a href="/#products">All products</a>
           </div>
         </section>
       </main>
