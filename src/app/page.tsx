@@ -1,44 +1,33 @@
 import './globals.css'; // site styles load only on these pages; the app under /app has its own
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { TryRicorsa } from '@/components/TryRicorsa';
-import { LivingBrain } from '@/components/LivingBrain';
 import { viewer } from '@/lib/viewer';
 import { PRODUCTS, SAMPLE_PROMPTS } from '@/lib/products';
-import { sampleBrain } from '@/lib/brain-sample';
 
 // Rendered per request: the nav reflects the signed-in state, which comes from the session cookie.
 export const dynamic = 'force-dynamic';
 
 /**
- * The landing page: the living brain as the hero, running on example data with the same renderer the app uses, then
- * the three stages in the fewest words that still say what happens (research with citations, a data asset you own,
- * working tools that speak MCP). Plans live on /pricing; the footer carries the tagline and the SMEPro Identity Graph line.
+ * The landing page: one centered promise, two buttons, and below the fold the three stages in the fewest words
+ * that still say what happens (research with citations, a data asset you own, working tools that speak MCP).
+ * Plans live on /pricing; the footer carries the tagline and the SMEPro Identity Graph line.
  */
 export default async function Landing() {
   const v = await viewer();
   const signup = '/auth/login?screen_hint=signup&returnTo=/app';
   const start = v ? '/app' : signup;
-  const brain = sampleBrain();
   return (
     <>
       <SiteNav signedIn={!!v} />
       <main>
         <section className="hero-c wrap">
-          <h1>Your Living <span className="hl">Intelligence.</span></h1>
-          <p className="lede">Watch your intelligence come alive.</p>
+          <h1>Answers that <span className="hl">understand you.</span></h1>
+          <p className="lede">Live web answers. More personal with every conversation.</p>
           <div className="cta">
             <a className="btn primary lg" href={start}>{v ? 'Open Ricorsa' : 'Start free'}</a>
             <a className="btn lg" href="#how">How it works</a>
           </div>
           <div className="fine">14-day free trial on every plan. Cancel any time.</div>
-        </section>
-        <section className="brain-hero wrap">
-          <LivingBrain model={brain} />
-          <ul className="beats" aria-label="What you are watching">
-            <li>The brain grows.</li><li>The pathways illuminate.</li><li>Discover traverses.</li><li>IGL governs.</li><li>Time reshapes it.</li>
-          </ul>
-          <p className="brain-line">You are not looking at data. You are looking at the visible evolution of your personal and organizational intelligence.</p>
-          <p className="powered">Powered by Identity Graphs, Memory Graphs, Discover and Identity Governed Logic.</p>
         </section>
 
         <section className="section-c wrap" id="how">
