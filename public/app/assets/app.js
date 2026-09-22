@@ -1913,7 +1913,8 @@ function openSettings() {
     <div class="setting"><div class="l"><b>Default focus</b><small>Shapes the framing and the kind of references used.</small></div>${sel('stFocus', FOCI, s.focus)}</div>
     <div class="setting"><div class="l"><b>Answer length</b><small>Applies to Search mode.</small></div>${sel('stLen', LENGTHS, s.length)}</div>
     <div class="setting"><div class="l"><b>Learning loop</b><small>Let each answer update your identity graph, which shapes how later questions are read.</small></div><select id="stLearn"><option value="on"${state.graph && state.graph.paused ? '' : ' selected'}>On</option><option value="paused"${state.graph && state.graph.paused ? ' selected' : ''}>Paused</option></select></div>
-    ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Essentials, Professional or Enterprise customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="essentials"${s.demoPlan === 'essentials' || s.demoPlan === 'pro' ? ' selected' : ''}>Essentials</option><option value="professional"${s.demoPlan === 'professional' || s.demoPlan === 'team' ? ' selected' : ''}>Professional</option><option value="enterprise"${s.demoPlan === 'enterprise' ? ' selected' : ''}>Enterprise</option></select></div>
+    ${state.user && state.user.admin ? `<div class="setting"><div class="l"><b>Sign-ups and activity</b><small>Admin only. Every account on Ricorsa: when it signed up, its plan, what it has asked and built, when it was last seen.</small></div><button type="button" class="btn sm" data-accounts>${icon('users', 14)}Accounts</button></div>
+    <div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Essentials, Professional or Enterprise customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="essentials"${s.demoPlan === 'essentials' || s.demoPlan === 'pro' ? ' selected' : ''}>Essentials</option><option value="professional"${s.demoPlan === 'professional' || s.demoPlan === 'team' ? ' selected' : ''}>Professional</option><option value="enterprise"${s.demoPlan === 'enterprise' ? ' selected' : ''}>Enterprise</option></select></div>
     <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Essentials, Professional or Enterprise without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>
     <div class="setting"><div class="l"><b>Model accounts</b><small>Admin only. Add a provider's API key (Anthropic, OpenAI, Google, xAI, Mistral, DeepSeek, Groq, Moonshot, OpenRouter, Together or any compatible endpoint), see what each account answers, and choose the active model for each part of Ricorsa.</small></div><button type="button" class="btn sm" data-models>${icon('zap', 14)}Manage</button></div>` : ''}
     <div class="setting"><div class="l"><b>Plan and usage</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. No question limits. Today ${state.usage.today} questions, this month ${state.usage.month}${state.usage.research ? `, Research ${state.usage.research}` : ''}.` : `${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.`}</small></div><a class="btn sm" href="/account">Account</a></div>
@@ -1928,6 +1929,7 @@ function openSettings() {
       $('#stLearn').addEventListener('change', async e => { try { await setGraphPaused(e.target.value === 'paused'); } catch (err) { apiToast(err); } });
       const gr = $('[data-grants]', ov); if (gr) gr.addEventListener('click', () => grantsModal());
       const mo = $('[data-models]', ov); if (mo) mo.addEventListener('click', () => modelsModal());
+      const ac = $('[data-accounts]', ov); if (ac) ac.addEventListener('click', () => accountsModal());
     }
   });
 }
@@ -2093,6 +2095,56 @@ function providerKeyModal(p) {
         } catch (err) { b.disabled = false; b.textContent = 'Save and check'; apiToast(err, 'Could not save the key'); }
       });
       const first = $('#pkName', ov) || $('#pkKey', ov); if (first) first.focus();
+    }
+  });
+}
+/**
+ * Admins: who has signed up and what they are doing. Totals, sign-ups per day, the plan mix, and every account
+ * with its plan, usage this month and last visit; searchable, exportable as CSV. The staff console at
+ * manage.ricorsa.com has the full grid with customers, licenses and invoices.
+ */
+async function accountsModal() {
+  openModal(`<h2>${icon('users', 20)}Sign-ups and activity</h2><p class="sub">Loading the accounts.</p><div class="skel"><i></i><i></i><i></i></div>`, { wide: true });
+  let r;
+  try { r = await api('/api/admin/accounts'); } catch (e) { apiToast(e, 'Could not load the accounts'); return; }
+  const t = r.totals || {}; const accounts = r.accounts || [];
+  const day = v => v ? new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const n = v => Number(v || 0).toLocaleString('en-US');
+  const tile = (label, value, small) => `<div class="stat"><small>${esc(label)}</small><b>${esc(String(value))}</b>${small ? `<span>${esc(small)}</span>` : ''}</div>`;
+  const days = Object.entries(r.signupsByDay || {}); const peak = Math.max(1, ...days.map(([, v]) => v));
+  const spark = days.map(([d, v]) => `<i style="height:${Math.max(2, Math.round(v / peak * 100))}%" title="${esc(day(d + 'T12:00:00Z'))}: ${v} sign-up${v === 1 ? '' : 's'}"></i>`).join('');
+  const planChips = Object.entries(r.plans || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<span class="chip">${esc(planLabel(k))} <b>${n(v)}</b></span>`).join('');
+  const status = a => a.admin ? 'staff' : a.subscriptionStatus ? a.subscriptionStatus.toLowerCase().replace(/_/g, ' ') : a.plan === 'free' ? '' : 'granted';
+  const row = a => `<tr><td><div class="who"><b>${esc(a.email || a.name || a.id)}</b>${a.name && a.email ? `<small>${esc(a.name)}</small>` : ''}</div></td><td>${esc(a.planName || planLabel(a.plan))}${status(a) ? ` <small class="muted">${esc(status(a))}</small>` : ''}</td><td>${esc(day(a.createdAt))}</td><td>${a.lastSeenAt ? esc(relTime(a.lastSeenAt)) : '<span class="muted">never</span>'}</td><td class="num">${n(a.questionsThisMonth)}${a.researchThisMonth ? ` <small class="muted">+${n(a.researchThisMonth)} reports</small>` : ''}</td><td class="num">${n(a.threads)}</td><td class="num">${n(a.builds)}</td></tr>`;
+  openModal(`<h2>${icon('users', 20)}Sign-ups and activity</h2><p class="sub">Everyone with a Ricorsa account, newest first. Usage is this calendar month. The full picture, with customers, licenses and invoices, is the staff console at <a href="https://manage.ricorsa.com" target="_blank" rel="noopener">manage.ricorsa.com</a>.</p>
+    <div class="stat-grid">
+      ${tile('Accounts', n(t.accounts), t.staff ? `${n(t.staff)} staff` : '')}
+      ${tile('New, 7 days', n(t.new7), `${n(t.new30)} in 30 days`)}
+      ${tile('Active, 7 days', n(t.active7), `${n(t.active30)} in 30 days`)}
+      ${tile('Questions', n(t.questionsThisMonth), `this month${t.researchThisMonth ? `, ${n(t.researchThisMonth)} reports` : ''}`)}
+      ${tile('Threads', n(t.threads))}
+      ${tile('Apps built', n(t.builds))}
+    </div>
+    <div class="spark-row"><div class="spark" aria-label="Sign-ups per day, last 30 days">${spark}</div><small class="muted">Sign-ups per day, last 30 days</small></div>
+    <div class="chips" style="margin:10px 0 14px">${planChips || '<span class="muted">No accounts yet.</span>'}</div>
+    <div class="sec-h"><span>${accounts.length} account${accounts.length === 1 ? '' : 's'}</span><span class="spacer"></span><input type="search" id="acFind" placeholder="Find by email or name" aria-label="Find an account" style="max-width:240px"><button type="button" class="btn sm" id="acCsv">${icon('download', 13)}CSV</button></div>
+    <div class="grant-list tall"><table class="grants accounts"><thead><tr><th>Account</th><th>Plan</th><th>Signed up</th><th>Last seen</th><th class="num">Questions</th><th class="num">Threads</th><th class="num">Apps</th></tr></thead><tbody id="acRows">${accounts.length ? accounts.map(row).join('') : '<tr><td colspan="7" class="muted">Nobody has signed up yet.</td></tr>'}</tbody></table></div>
+    <div class="modal-actions"><span class="muted" style="margin-right:auto;font-size:12px">As of ${esc(new Date(r.at || Date.now()).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))}</span><button type="button" class="btn" id="acAgain">${icon('refresh', 14)}Refresh</button><button type="button" class="btn primary" data-close>Done</button></div>`, {
+    wide: true,
+    onMount: ov => {
+      $('#acFind', ov).addEventListener('input', e => {
+        const q = e.target.value.trim().toLowerCase();
+        const list = q ? accounts.filter(a => (a.email || '').toLowerCase().includes(q) || (a.name || '').toLowerCase().includes(q)) : accounts;
+        $('#acRows', ov).innerHTML = list.length ? list.map(row).join('') : '<tr><td colspan="7" class="muted">No account matches.</td></tr>';
+      });
+      $('#acCsv', ov).addEventListener('click', () => {
+        const cell = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+        const lines = [['email', 'name', 'plan', 'status', 'signed_up', 'last_seen', 'questions_this_month', 'reports_this_month', 'threads', 'apps'].join(',')]
+          .concat(accounts.map(a => [a.email, a.name, a.plan, status(a), a.createdAt ? new Date(a.createdAt).toISOString() : '', a.lastSeenAt ? new Date(a.lastSeenAt).toISOString() : '', a.questionsThisMonth, a.researchThisMonth, a.threads, a.builds].map(cell).join(',')));
+        downloadFile(`ricorsa-accounts-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\n'), 'text/csv');
+        toast('Saved the account list');
+      });
+      $('#acAgain', ov).addEventListener('click', () => accountsModal());
     }
   });
 }
