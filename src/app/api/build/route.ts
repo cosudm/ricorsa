@@ -9,6 +9,7 @@ import { statusGrants, planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
 import { buildSystem, buildMessages, parseBuild, applyEdits, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, repairRequestFor, type BuildSpec, type BuildCheck } from '@/lib/build';
 import { auditApp } from '@/lib/build-audit';
+import { withKit, stripKit } from '@/lib/app-kit';
 import { runApp, runFindings, seriousFindings, browserRunAvailable } from '@/lib/build-run';
 import { describeProviderError } from '@/lib/llm';
 import { recordUsage } from '@/lib/usage';
@@ -212,12 +213,14 @@ export async function POST(req: Request) {
         }
         if (!p.html && p.edits && latest?.html) {
           // A change written as edits to the current version: apply them here.
-          const r = applyEdits(latest.html, p.edits);
+          const r = applyEdits(stripKit(latest.html), p.edits);
           console.log('[build] edits', JSON.stringify({ applied: r.applied, total: r.total, failed: r.failed.slice(0, 4) }));
           if (r.applied) p = { ...p, html: r.html };
           else throw new Error('The builder sent edits that do not match the current version');
         }
         if (!p.html || !/<\/html>|<body|<script|<div/i.test(p.html)) throw new Error('The builder did not return an app');
+        // The app kit (design system and runtime) rides inside every version; the builder wrote against its API without seeing its code.
+        p = { ...p, html: withKit(p.html) };
         await ensureRow();
         await save({ plan: p.plan, html: p.html });
 
@@ -251,13 +254,14 @@ export async function POST(req: Request) {
             addUsage(fix.usage);
             const p2 = parseBuild(fix.text);
             let fixed = '';
-            if (p2.html && /<\/html>|<body|<script|<div/i.test(p2.html) && p2.html.length > p.html.length * 0.5) { fixed = p2.html; failedEdits = []; }
+            if (p2.html && /<\/html>|<body|<script|<div/i.test(p2.html) && p2.html.length > stripKit(p.html).length * 0.5) { fixed = p2.html; failedEdits = []; }
             else if (p2.edits) {
-              const r = applyEdits(p.html, p2.edits);
+              const r = applyEdits(stripKit(p.html), p2.edits);
               console.log('[build] repair edits', JSON.stringify({ round: rounds, applied: r.applied, total: r.total, failed: r.failed.slice(0, 4) }));
               if (r.applied) { fixed = r.html; failedEdits = r.failed; }
             }
             if (fixed) {
+              fixed = withKit(fixed);
               p = { ...p, html: fixed, plan: p.plan + (p2.plan ? '\n' + p2.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean).map((l, i) => i === 0 ? `After the check: ${l}` : l).join('\n') : ''), next: p2.next.length ? p2.next : p.next };
               await save({ plan: p.plan, html: p.html });
               phaseLabel = 'Checking the fixed version in a browser'; send('status', { text: phaseLabel }); send('phase', { text: 'review', round: rounds });

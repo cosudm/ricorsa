@@ -10,7 +10,7 @@ import puppeteer, { type Browser, type Page } from '@cloudflare/puppeteer';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 import { INSTALL_SRC, EXERCISER_SRC, type ExerciseReport } from './build-exerciser';
 
-export type RunIssue = { kind: 'error' | 'dead' | 'missing' | 'blank' | 'overflow' | 'dialog' | 'network' | 'persist' | 'navigated'; detail: string };
+export type RunIssue = { kind: 'error' | 'dead' | 'missing' | 'blank' | 'overflow' | 'dialog' | 'network' | 'persist' | 'navigated' | 'quality'; detail: string };
 export type RunResult = { ran: boolean; issues: RunIssue[]; report: ExerciseReport | null; seconds: number; why?: string; clicked: number; controls: number };
 
 const ORIGIN = 'https://app.ricorsa.invalid';
@@ -73,6 +73,7 @@ export async function runApp(html: string, opts: { budgetMs?: number; onStatus?:
       for (const m of report.navMissing) add('missing', m);
       for (const d of report.dialogs) add('dialog', `a browser dialog is used (${d}); use in-page messages and confirmations instead`);
       if (report.overflow) add('overflow', 'the page overflows horizontally at desktop width');
+      for (const q of report.quality || []) add('quality', q);
     }
     // Load it again: saved state must come back without errors, and something must still be on screen.
     opts.onStatus?.('Loading it again to check saved data');
@@ -112,7 +113,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 
 /** The findings as the builder should read them: one line each, most serious first, capped. */
 export function runFindings(r: RunResult): string[] {
-  const order: RunIssue['kind'][] = ['error', 'blank', 'persist', 'navigated', 'missing', 'dead', 'dialog', 'network', 'overflow'];
+  const order: RunIssue['kind'][] = ['error', 'blank', 'persist', 'navigated', 'missing', 'dead', 'dialog', 'network', 'overflow', 'quality'];
   return [...r.issues].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind)).map(i => i.detail).slice(0, 18);
 }
 /** Findings that mean the app is broken for the person, as opposed to rough edges. */

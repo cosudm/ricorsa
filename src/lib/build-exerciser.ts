@@ -23,6 +23,7 @@ export type ExerciseReport = {
   blank: boolean;         // nothing visible after load
   overflow: boolean;      // horizontal overflow at the viewport used
   timedOut: boolean;
+  quality: string[];      // rough edges: unlabeled inputs, images without alt, buttons without a name, placeholder-looking copy
 };
 
 /** Installed before any app script runs: records errors, dialogs, downloads, clipboard writes, window.open and form submits. */
@@ -55,7 +56,7 @@ export const EXERCISER_SRC = `(async (opts) => {
   const maxClicks = (opts && opts.maxClicks) || 160;
   const started = Date.now();
   const R = window.__ricorsaRun || (window.__ricorsaRun = { errors: [], dialogs: [], events: 0, external: [] });
-  const report = { clicked: 0, controls: 0, screensSeen: [], errors: [], dead: [], navMissing: [], dialogs: [], external: [], blank: false, overflow: false, timedOut: false };
+  const report = { clicked: 0, controls: 0, screensSeen: [], errors: [], dead: [], navMissing: [], dialogs: [], external: [], blank: false, overflow: false, timedOut: false, quality: [] };
   const text = (el) => ((el.getAttribute('aria-label') || el.textContent || el.value || el.title || '').replace(/\\s+/g, ' ').trim().slice(0, 40)) || (el.id ? '#' + el.id : el.tagName.toLowerCase());
   const visible = (el) => { if (!el || !el.isConnected) return false; const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false; const r = el.getBoundingClientRect(); if (r.width < 2 || r.height < 2) return false; let p = el.parentElement; while (p) { const pc = getComputedStyle(p); if (pc.display === 'none' || pc.visibility === 'hidden') return false; p = p.parentElement; } return true; };
   const enabled = (el) => !el.disabled && el.getAttribute('aria-disabled') !== 'true';
@@ -116,5 +117,18 @@ export const EXERCISER_SRC = `(async (opts) => {
   report.dialogs = R.dialogs.slice(0, 12);
   report.screensSeen = Array.from(seenScreens).slice(0, 40);
   report.errors = report.errors.slice(0, 30);
+  // Quality: the whole document, hidden screens included, since the person will reach them.
+  try {
+    const named = (el) => !!((el.getAttribute('aria-label') || '').trim() || el.getAttribute('aria-labelledby') || (el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]')) || el.closest('label') || (el.getAttribute('title') || '').trim());
+    const unlabeled = Array.from(document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=image]), select, textarea')).filter(el => !el.closest('[data-ricorsa-ignore]') && !named(el));
+    if (unlabeled.length) report.quality.push(unlabeled.length + ' form field' + (unlabeled.length === 1 ? ' has' : 's have') + ' no label (add a <label for> or aria-label): ' + unlabeled.slice(0, 4).map(el => el.name || el.id || el.placeholder || el.tagName.toLowerCase()).join(', '));
+    const noAlt = Array.from(document.querySelectorAll('img:not([alt])'));
+    if (noAlt.length) report.quality.push(noAlt.length + ' image' + (noAlt.length === 1 ? ' has' : 's have') + ' no alt text');
+    const nameless = Array.from(document.querySelectorAll('button')).filter(b => !(b.textContent || '').trim() && !(b.getAttribute('aria-label') || '').trim() && !(b.getAttribute('title') || '').trim());
+    if (nameless.length) report.quality.push(nameless.length + ' button' + (nameless.length === 1 ? ' has' : 's have') + ' no text or aria-label');
+    const copy = (document.body ? document.body.innerText : '') || '';
+    const fake = copy.match(/\\b(lorem ipsum|TODO|coming soon|placeholder|Item [12]\\b|John Doe|Jane Doe|Acme Corp|example\\.com|Sample (?:Item|Text|Title)\\b|\\[(?:name|title|date|company)\\])/i);
+    if (fake) report.quality.push('placeholder-looking copy on screen: "' + fake[0] + '"; use real, specific content');
+  } catch (e) {}
   return report;
 })`;

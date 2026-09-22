@@ -15,6 +15,7 @@ An answer engine that learns you. Live web citations, a recursive learning loop 
 | Plans and quotas | `src/lib/plans.ts`, `src/lib/usage.ts` | Edit prices and limits here |
 | PayPal | `src/lib/paypal.ts`, `src/lib/billing.ts`, `src/app/api/billing/paypal/*`, `scripts/paypal-*.ts` | Subscriptions API, signature-verified webhooks |
 | Auth | `src/lib/auth0.ts`, `src/proxy.ts`, `src/lib/session.ts` | Auth0 Next.js SDK v4; users are upserted on first request |
+| Built apps | `src/lib/build.ts`, `src/lib/app-kit.ts`, `src/lib/app-kit/` | The builder's standard and the app kit (design system + `window.rk` runtime) inlined into every generated app; edit `kit.css`/`kit.js`, then `npm run kit:build` |
 | Database | `src/lib/db/schema.ts`, `drizzle/` | Drizzle ORM on Cloudflare D1 (SQLite); the same binding serves `next dev` through a local miniflare |
 | Deploy | `wrangler.jsonc` | Cloudflare Workers Builds from GitHub: migrate, build with OpenNext, deploy |
 
