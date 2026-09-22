@@ -2119,7 +2119,7 @@ async function accountsModal() {
   openModal(`<h2>${icon('users', 20)}Sign-ups and activity</h2><p class="sub">Everyone with a Ricorsa account, newest first. Usage is this calendar month. The full picture, with customers, licenses and invoices, is the staff console at <a href="https://manage.ricorsa.com" target="_blank" rel="noopener">manage.ricorsa.com</a>.</p>
     <div class="stat-grid">
       ${tile('Accounts', n(t.accounts), t.staff ? `${n(t.staff)} staff` : '')}
-      ${tile('New, 7 days', n(t.new7), `${n(t.new30)} in 30 days`)}
+      ${tile('New, 24 hours', n(t.new1), `${n(t.new7)} in 7 days, ${n(t.new30)} in 30`)}
       ${tile('Active, 7 days', n(t.active7), `${n(t.active30)} in 30 days`)}
       ${tile('Questions', n(t.questionsThisMonth), `this month${t.researchThisMonth ? `, ${n(t.researchThisMonth)} reports` : ''}`)}
       ${tile('Threads', n(t.threads))}

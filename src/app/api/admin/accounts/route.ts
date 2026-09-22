@@ -10,8 +10,8 @@ export const dynamic = 'force-dynamic';
 const DAY = 86_400_000;
 
 /**
- * GET /api/admin/accounts — admins only: who has signed up and what they are doing. Totals (accounts, new and
- * active in the last 7 and 30 days, questions and reports this month, threads, built apps), the plan mix,
+ * GET /api/admin/accounts — admins only: who has signed up and what they are doing. Totals (accounts, new in the
+ * last 24 hours, new and active in the last 7 and 30 days, questions and reports this month, threads, built apps), the plan mix,
  * sign-ups per day for the last 30 days, and the 200 most recent accounts with plan, subscription status,
  * usage this month and when they were last seen. The full grid, with customers and licences, is the staff
  * console at manage.ricorsa.com; this is the quick read from inside the product.
@@ -35,13 +35,14 @@ export const GET = handle(async () => {
   const plans: Record<string, number> = {};
   const byDay: Record<string, number> = {};
   for (let i = 29; i >= 0; i--) byDay[new Date(now - i * DAY).toISOString().slice(0, 10)] = 0;
-  let new7 = 0, new30 = 0, active7 = 0, active30 = 0, questions = 0, research = 0, searches = 0, costMicros = 0, threads = 0, builds = 0, staff = 0;
+  let new1 = 0, new7 = 0, new30 = 0, active7 = 0, active30 = 0, questions = 0, research = 0, searches = 0, costMicros = 0, threads = 0, builds = 0, staff = 0;
   const accounts = users.map(u => {
     const created = ms(u.createdAt), seen = ms(u.lastSeenAt);
     const plan = normalizePlanKey(u.plan);
     const admin = isAdminEmail(u.email);
     if (admin) staff++;
     plans[plan] = (plans[plan] || 0) + 1;
+    if (now - created < DAY) new1++;
     if (now - created < 7 * DAY) new7++;
     if (now - created < 30 * DAY) { new30++; const k = new Date(created).toISOString().slice(0, 10); if (k in byDay) byDay[k]++; }
     if (now - seen < 7 * DAY) active7++;
@@ -53,7 +54,7 @@ export const GET = handle(async () => {
   });
   return json({
     at: now,
-    totals: { accounts: users.length, staff, new7, new30, active7, active30, questionsThisMonth: questions, researchThisMonth: research, searchesThisMonth: searches, costThisMonthUsd: Math.round(costMicros / 10_000) / 100, threads, builds },
+    totals: { accounts: users.length, staff, new1, new7, new30, active7, active30, questionsThisMonth: questions, researchThisMonth: research, searchesThisMonth: searches, costThisMonthUsd: Math.round(costMicros / 10_000) / 100, threads, builds },
     plans, signupsByDay: byDay,
     accounts: accounts.slice(0, 200),
   });
