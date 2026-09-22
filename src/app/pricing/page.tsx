@@ -38,7 +38,7 @@ export default async function Pricing() {
               return (
                 <div key={p.key} className={'plan' + (p.key === 'professional' ? ' hot' : '')}>
                   <div className="name">{p.name}{p.key === 'professional' && <span className="tag">Most popular</span>}{isCurrent && <span className="tag" style={{ background: '#E6F3EA', color: 'var(--good)' }}>Current</span>}</div>
-                  <div className="price">${p.priceUsd}<small>/ month</small></div>
+                  <div className="price">${p.priceUsd}<small>/ month</small>{p.priceMarker && <sup className="mark" title={p.licensing}>{p.priceMarker}</sup>}</div>
                   <div className="trial">{TRIAL_DAYS}-day free trial, then ${p.priceUsd} a month</div>
                   <p className="blurb">{p.blurb}</p>
                   <ul>{p.features.map(f => <li key={f}>{f}</li>)}</ul>
@@ -57,7 +57,10 @@ export default async function Pricing() {
               );
             })}
           </div>
-          <p className="note" style={{ marginTop: 18 }}>Limits reset daily at midnight UTC and monthly on the first. Research reports and the Reasoning model cost more to run, which is why they are counted separately. Taxes may be added at checkout where PayPal collects them.</p>
+          {OFFERED_PLANS.map(key => PLANS[key]).filter(p => p.priceMarker && p.licensing).map(p => (
+            <p key={p.key} className="note licensing" style={{ marginTop: 18 }}><b>{p.priceMarker}</b> {(p.licensing || '').replace(/\s*Call for pricing\.?$/, '')} <a href="mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise%20licensing">Call for pricing</a>.</p>
+          ))}
+          <p className="note" style={{ marginTop: 10 }}>Limits reset daily at midnight UTC and monthly on the first. Research reports and the Reasoning model cost more to run, which is why they are counted separately. Taxes may be added at checkout where PayPal collects them.</p>
         </section>
       </main>
       <SiteFooter />

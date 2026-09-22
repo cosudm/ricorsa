@@ -32,6 +32,10 @@ export type Plan = {
   spaces: number;              // max Spaces
   blurb: string;
   features: string[];
+  /** A marker after the price (***) pointing at `licensing`, printed as a footnote under the plans. */
+  priceMarker?: string;
+  /** How organizations license the plan, when the per-person price is not the whole story. */
+  licensing?: string;
 };
 
 export const PLANS: Record<PlanKey, Plan> = {
@@ -91,6 +95,8 @@ export const PLANS: Record<PlanKey, Plan> = {
     spaces: 100000,
     blurb: 'For firms that run on research: the highest limits, every connector, and a direct line to us.',
     features: ['Everything in Professional', 'Up to 15,000 questions a month', '500 Research reports a month', '100 Connectors', 'Unlimited Spaces', 'Larger files: 20 per question, up to 60 MB each', 'A direct line to us, with onboarding for your team', 'Deployment options on your own data and geography with the SMEPro Identity Graph'],
+    priceMarker: '***',
+    licensing: 'Enterprise licensing for organizations: seat licenses, 60 seats or more at $85 per seat a month, or floating licenses shared across a team. Call for pricing.',
   },
 };
 
