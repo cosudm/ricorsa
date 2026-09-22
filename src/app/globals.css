@@ -43,7 +43,33 @@ button { font: inherit; cursor: pointer; }
 .btn[disabled] { opacity: .5; cursor: not-allowed; }
 
 /* hero: one centered promise, as on the design */
-.hero-c { min-height: calc(100vh - 64px - 160px); display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 72px 24px 88px; }
+/* The living brain on the landing page */
+.brain-hero { padding: 0 24px 56px; display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.brain { width: 100%; max-width: 1080px; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; background: var(--card); box-shadow: var(--shadow-2); }
+.brain-stage { position: relative; background: #0B1220; min-height: 360px; }
+.brain-stage canvas { display: block; width: 100%; outline: none; }
+.brain-tip { position: absolute; pointer-events: none; background: #fff; color: var(--ink); font-size: 12.5px; padding: 6px 9px; border-radius: 7px; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: 240px; line-height: 1.35; opacity: 0; transition: opacity .1s; z-index: 5; }
+.brain-tip b { display: block; font-weight: 600; }
+.brain-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line); flex-wrap: wrap; font-size: 12.5px; color: var(--ink-3); }
+.brain-bar .spacer { flex: 1; }
+.brain-bar .btn.on { background: #FBE7EF; border-color: #E9A9C2; color: #A02556; }
+.brain-when { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.brain-legend { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+.brain-cortex { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: left; font: inherit; border: 0; border-right: 1px solid var(--line); background: none; padding: 10px 12px; cursor: pointer; color: var(--ink); min-width: 0; }
+.brain-cortex:last-child { border-right: 0; }
+.brain-cortex:hover, .brain-cortex.on { background: color-mix(in srgb, var(--rc) 9%, var(--card)); }
+.brain-cortex.on { box-shadow: inset 0 -2px 0 var(--rc); }
+.brain-cortex b { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+.brain-cortex b i { width: 9px; height: 9px; border-radius: 50%; background: var(--rc); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc) 22%, transparent); }
+.brain-cortex span { font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
+.beats { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; font-size: 15px; font-weight: 500; color: var(--ink); }
+.beats li { position: relative; }
+.beats li + li::before { content: ""; position: absolute; left: -14px; top: 50%; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); transform: translateY(-50%); }
+.brain-line { margin: 0; max-width: 640px; text-align: center; color: var(--ink-2); font-size: 16px; line-height: 1.55; }
+.powered { margin: 0; font-size: 12.5px; color: var(--ink-3); text-align: center; letter-spacing: .01em; }
+@media (max-width: 900px) { .brain-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); } .brain-cortex:nth-child(3n) { border-right: 0; } .brain-cortex:nth-child(-n+3) { border-bottom: 1px solid var(--line); } }
+@media (max-width: 640px) { .brain-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); } .brain-cortex:nth-child(3n) { border-right: 1px solid var(--line); } .brain-cortex:nth-child(2n) { border-right: 0; } .brain-cortex:nth-child(-n+4) { border-bottom: 1px solid var(--line); } .beats { font-size: 14px; gap: 6px 18px; } .beats li + li::before { left: -12px; } }
+.hero-c { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 56px 24px 30px; }
 .hero-c h1 { font-family: var(--sans); font-weight: 500; font-size: 64px; line-height: 1.08; letter-spacing: -.03em; margin: 0 0 22px; max-width: 14ch; text-wrap: balance; }
 .hero-c h1 .hl { display: block; color: var(--accent); }
 .hero-c .lede { font-size: 19px; color: var(--ink-2); margin: 0 0 32px; max-width: 46ch; }

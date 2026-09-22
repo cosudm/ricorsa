@@ -2,10 +2,10 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
   title: { default: 'Ricorsa', template: '%s | Ricorsa' },
-  description: 'Answers that understand you. Live web answers with citations, a data asset that grows with every conversation, and working tools built from it that speak MCP.',
+  description: 'Your living intelligence. Ricorsa organizes your people, conversations, documents, projects and experiences into a living cognitive map that grows with you over time, with live web answers, a data asset you own, and working tools that speak MCP.',
   metadataBase: new URL(process.env.APP_BASE_URL || 'https://ricorsa.com'),
-  openGraph: { title: 'Ricorsa', description: 'Answers that understand you. Live web answers, more personal with every conversation.', type: 'website', images: ['/brand/og.png'] },
-  twitter: { card: 'summary_large_image', title: 'Ricorsa', description: 'Answers that understand you. Live web answers, more personal with every conversation.', images: ['/brand/og.png'] },
+  openGraph: { title: 'Ricorsa', description: 'Your living intelligence. A living cognitive map of your people, conversations, documents, projects and experiences that grows with you over time.', type: 'website', images: ['/brand/og.png'] },
+  twitter: { card: 'summary_large_image', title: 'Ricorsa', description: 'Your living intelligence. A living cognitive map of your people, conversations, documents, projects and experiences that grows with you over time.', images: ['/brand/og.png'] },
   icons: { icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }, { url: '/favicon.png', type: 'image/png', sizes: '32x32' }], apple: '/apple-touch-icon.png' },
 };
 
