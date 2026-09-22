@@ -1918,6 +1918,8 @@ async function mountGraph3D(main, g, fallback) {
   $('#g3dLabels', main).addEventListener('change', e => ctl.setLabels(e.target.checked));
   $('#g3dReset', main).addEventListener('click', () => ctl.resetView());
   const em = $('#g3dEmerging', main); if (em) em.addEventListener('click', () => { const on = ctl.setEmerging(!em.classList.contains('on')); em.classList.toggle('on', on); em.setAttribute('aria-pressed', String(on)); });
+  const la = $('#g3dLattice', main); if (la) la.addEventListener('click', () => { const on = ctl.setLattice(!la.classList.contains('on')); la.classList.toggle('on', on); la.setAttribute('aria-pressed', String(on)); });
+  const de = $('#g3dDensity', main); if (de) de.addEventListener('change', e => ctl.setDensity(e.target.value));
   const setStop = (days) => { const { first, now } = ctl.range(); const t = days ? Math.max(first, now - days * 86400000) : now; ctl.setTime(t); if (when) when.textContent = days ? fmtWhen(t, now) : 'Today'; if (scrub) scrub.value = String(Math.round(1000 * (t - first) / Math.max(1, now - first))); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.toggle('on', Number(b.dataset.g3dStop) === days)); };
   $$('[data-g3d-stop]', main).forEach(b => b.addEventListener('click', () => setStop(Number(b.dataset.g3dStop))));
   if (scrub) scrub.addEventListener('input', () => { const { first, now } = ctl.range(); const t = first + (now - first) * (Number(scrub.value) / 1000); ctl.setTime(t); if (when) when.textContent = fmtWhen(t, now); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.remove('on')); });
@@ -1956,8 +1958,8 @@ function nodePanel(n, ctl) {
     ${linked.length ? `<div class="node-links"><small>Connected to</small><div class="chips">${linked.map(l => `<span class="chip" style="cursor:default">${esc(truncate(l.label, 30))}</span>`).join('')}</div></div>` : ''}
     ${taught.length ? `<div class="node-links"><small>Taught Ricorsa</small><div class="chips">${taught.map(l => `<span class="chip" style="cursor:default">${esc(truncate(l.label, 30))}</span>`).join('')}</div></div>` : ''}
     ${learned && n.origin ? `<p class="sub" style="margin-top:10px">Learned from a conversation${n.meta && n.meta.origin && n.meta.origin.ideaId ? ' started from a Discover idea' : ''}.</p>` : ''}
-    <div class="modal-actions">${learned ? `<button type="button" class="btn danger left" id="npForget">Forget</button>` : ''}${open ? `<a class="btn" href="${open}" data-close>${n.kind === 'thread' ? 'Open the conversation' : n.kind === 'build' ? 'Open in the studio' : n.kind === 'connector' ? 'Open Connectors' : 'Open the conversation'}</a>` : ''}<button type="button" class="btn primary" data-close>Done</button></div>`, {
-    onMount: () => { const f = $('#npForget'); if (f) f.addEventListener('click', async () => { closeModal(); try { await forgetNode(n.id); } catch (e) { apiToast(e); return; } renderGraph(); toast(`Forgot “${truncate(n.label, 30)}”`); }); }
+    <div class="modal-actions">${learned ? `<button type="button" class="btn danger left" id="npForget">Forget</button>` : ''}${n.kind === 'thread' && taught.length && ctl ? `<button type="button" class="btn left" id="npTrace">${icon('sparkles', 14)}Trace what it taught</button>` : ''}${open ? `<a class="btn" href="${open}" data-close>${n.kind === 'thread' ? 'Open the conversation' : n.kind === 'build' ? 'Open in the studio' : n.kind === 'connector' ? 'Open Connectors' : 'Open the conversation'}</a>` : ''}<button type="button" class="btn primary" data-close>Done</button></div>`, {
+    onMount: () => { const f = $('#npForget'); if (f) f.addEventListener('click', async () => { closeModal(); try { await forgetNode(n.id); } catch (e) { apiToast(e); return; } renderGraph(); toast(`Forgot “${truncate(n.label, 30)}”`); }); const tr = $('#npTrace'); if (tr) tr.addEventListener('click', () => { closeModal(); ctl.traceThread(n.meta.id, { label: 'What “' + truncate(n.label, 60) + '” taught Ricorsa' }); }); }
   });
 }
 function renderGraph() {
@@ -1984,7 +1986,7 @@ function renderGraph() {
   const preview = caps().graph !== 'full';
   main.innerHTML = `<div class="view">${topbarHtml('Your graph')}<div class="scroll"><div class="col wide">
     <div class="page-h"><h1>${icon('loop', 26)}Your graph</h1><div class="g-controls"><label class="switch${g.paused ? '' : ' on'}" id="learnSwitch"><i></i><span>${g.paused ? 'Learning paused' : 'Learning on'}</span></label><button type="button" class="btn sm" id="gExport">${icon('download', 14)}<span>Export</span></button><button type="button" class="btn sm danger" id="gReset">Reset</button></div></div>
-    <p class="page-sub">What Ricorsa has learned about you from ${g.events} conversation${g.events === 1 ? '' : 's'}. It belongs to your account, follows you across devices, and is folded into every question you ask so your intent is read better each time. Weights strengthen with repetition and fade when unused; forget anything with the \u00d7 on a chip.</p>
+    <p class="page-sub">Your living intelligence: everything Ricorsa has learned from ${g.events} conversation${g.events === 1 ? '' : 's'}, the conversations themselves, what you built and what you connected, inside your governed boundary. It belongs to your account and is folded into every question you ask. Weights strengthen with repetition and fade when unused; forget anything with the \u00d7 on a chip.</p>
     ${g.paused ? `<div class="paused-banner">${icon('pause', 16)}<span>Learning is paused. Answers still use what’s here, but new conversations won’t change it.</span></div>` : ''}
     <div class="g-stats"><div class="g-stat"><b>${all.length}</b><span>nodes</span></div><div class="g-stat"><b>${Object.keys(g.edges).length}</b><span>connections</span></div><div class="g-stat"><b>${g.events}</b><span>learning events</span></div><div class="g-stat"><b>${g.intents.length}</b><span>intents recorded</span></div></div>
     ${preview ? upgradeCard('This is the preview of your graph', `Ricorsa is learning you on every plan. Essentials shows the whole graph: the living map, how nodes connect, what you have been trying to do lately, and where each node came from.${all.length ? ` You have ${state.graphSize || all.length} nodes so far.` : ''}`, 'Essentials') : ''}
@@ -1993,7 +1995,9 @@ function renderGraph() {
       <div class="g3d-bar">
         <input type="search" id="g3dFind" placeholder="Find anything in your brain" aria-label="Find a node" autocomplete="off">
         <button type="button" class="g3d-toggle" id="g3dEmerging" aria-pressed="false" title="Light what is strengthening right now">${icon('sparkles', 13)}<span>Emerging</span></button>
+        <button type="button" class="g3d-toggle on" id="g3dLattice" aria-pressed="true" title="The IGL governance lattice: every pathway Discover walks is checked against it">${icon('key', 13)}<span>Governance</span></button>
         <span class="spacer"></span>
+        <label class="g3d-check">Density <select id="g3dDensity" aria-label="Intelligence density"><option value="min">Minimal</option><option value="std" selected>Standard</option><option value="max">Maximum</option></select></label>
         <label class="g3d-check"><input type="checkbox" id="g3dLabels" checked> Labels</label>
         <button type="button" class="btn sm" id="g3dReset" title="Back to the starting angle">${icon('refresh', 13)}<span>Reset view</span></button>
       </div>
@@ -2005,7 +2009,7 @@ function renderGraph() {
         <span class="g3d-when" id="g3dWhen">Today</span>
       </div>
       <div class="g3d-regions" id="g3dRegions"></div>
-      <div class="g3d-note">Six cortices are the layers of your intelligence, not brain anatomy; the membrane is your organization, the governed boundary. What Ricorsa learns is born beside the conversation that taught it and settles into its cortex as it recurs. Drag to orbit, scroll to zoom.</div>
+      <div class="g3d-note">Six cortices are the layers of your intelligence, not brain anatomy. The body is your organization, the governed boundary; the blue lattice is IGL, which checks every pathway Discover walks. What Ricorsa learns is born beside the conversation that taught it and settles into its cortex as it recurs. Click a conversation and trace what it taught. Drag to orbit, scroll to zoom.</div>
     </div>`
       : drawn.length ? '' : `<div class="g-empty">${icon('loop', 30)}<div>Nothing learned yet.</div><p>Ask a few questions and come back, each answer adds what it revealed about what you’re working on.</p><p><a href="#/">Ask something</a></p></div>`}
     <div class="g-types">${typeCards}</div>
