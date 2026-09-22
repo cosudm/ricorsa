@@ -148,7 +148,7 @@ async function bootstrap() {
   api('/api/files').then(r => { state.fileLimits = { accept: r.accept || [], perQuestion: r.perQuestion || 1, maxMb: r.maxMb || 10 }; }).catch(() => {});
   if (!state.healthChecked) { state.healthChecked = true; void checkProviderHealth(); }
 }
-async function refreshGraph() { try { const r = await api('/api/graph'); state.graph = r.graph; } catch {} }
+async function refreshGraph() { try { const r = await api('/api/graph'); state.graph = r.graph; refreshBrain(); } catch {} }
 function persistSettings() { api('/api/me', { method: 'PATCH', body: state.settings }).catch(() => {}); }
 function persistGraph() { /* server-owned; see graph actions */ }
 
@@ -1852,6 +1852,114 @@ function layoutGraph(nodes, edges, W, H) {
   }
   return pos;
 }
+/** Load the living-brain module once (graph3d.js); the flat SVG map is the fallback if it cannot be fetched. */
+function ensureGraph3D() {
+  if (window.RicorsaGraph3D) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let sc = document.querySelector('script[data-graph3d]');
+    if (!sc) { sc = document.createElement('script'); sc.src = '/app/assets/graph3d.js'; sc.dataset.graph3d = '1'; document.head.appendChild(sc); }
+    sc.addEventListener('load', () => resolve(!!window.RicorsaGraph3D)); sc.addEventListener('error', () => resolve(false));
+    if (window.RicorsaGraph3D) resolve(true);
+  });
+}
+/**
+ * The brain's model, assembled from what the account holds: the graph's nodes and edges, the threads (Memory, grouped
+ * by Space), the intents (Discovery), the built apps (Action) and the connectors (Communication), plus the pathways
+ * from each learned node to the conversation that taught it.
+ */
+function brainModel(g) {
+  const nodes = []; const edges = [];
+  const graphNodes = Object.values(g.nodes || {}).sort((a, b) => b.weight - a.weight).slice(0, 260);
+  const kept = new Set(graphNodes.map(n => n.id));
+  for (const n of graphNodes) nodes.push({ id: n.id, kind: n.type, label: n.label, weight: n.weight, count: n.count, firstSeen: n.firstSeen, lastSeen: n.lastSeen, level: n.level, origin: n.origin && n.origin.threadId ? n.origin.threadId : null, meta: n });
+  for (const e of Object.values(g.edges || {})) if (kept.has(e.a) && kept.has(e.b)) edges.push({ a: e.a, b: e.b, weight: e.weight, at: e.lastSeen });
+  const threads = (state.threads || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 140);
+  const newest = threads.length ? (threads[0].updatedAt || Date.now()) : Date.now();
+  for (const t of threads) {
+    const age = Math.max(0, newest - (t.updatedAt || 0)) / 86400000;
+    nodes.push({ id: 'thread:' + t.id, kind: 'thread', label: t.title || 'Conversation', weight: Math.min(1, 0.22 + 0.05 * Math.min(8, t.turnCount || 1) + 0.3 * Math.max(0, 1 - age / 60)), count: t.turnCount || 1, firstSeen: t.createdAt || t.updatedAt, lastSeen: t.updatedAt || t.createdAt, spaceId: t.spaceId || null, meta: t });
+  }
+  for (const n of graphNodes) if (n.origin && n.origin.threadId && nodes.some(x => x.id === 'thread:' + n.origin.threadId)) edges.push({ a: n.id, b: 'thread:' + n.origin.threadId, weight: 0.35, at: n.firstSeen });
+  (g.intents || []).slice(0, 40).forEach((it, i) => { const id = 'intent:' + (it.turnId || i); nodes.push({ id, kind: 'intent', label: it.text.replace(/^You(’|')re\s+/i, '').replace(/^You\s+(want|need|are)\s+/i, ''), weight: Math.max(0.15, 0.5 - i * 0.01), count: 1, firstSeen: it.at, lastSeen: it.at, meta: it }); if (it.threadId && nodes.some(x => x.id === 'thread:' + it.threadId)) edges.push({ a: id, b: 'thread:' + it.threadId, weight: 0.25, at: it.at }); });
+  for (const b of (state.builds || []).slice(0, 60)) nodes.push({ id: 'build:' + b.id, kind: 'build', label: b.title || 'Built app', weight: 0.55, count: (b.versions && b.versions.length) || 1, firstSeen: b.createdAt || b.updatedAt, lastSeen: b.updatedAt || b.createdAt, meta: b });
+  for (const c of (state.connectors || []).slice(0, 40)) nodes.push({ id: 'conn:' + c.id, kind: 'connector', label: c.name || c.preset || 'Connector', weight: 0.45, count: 1, firstSeen: c.createdAt || Date.now(), lastSeen: c.updatedAt || c.createdAt || Date.now(), meta: c });
+  const domain = state.user && state.user.email && state.user.email.includes('@') ? state.user.email.split('@')[1] : '';
+  return { nodes, edges, spaces: (state.spaces || []).map(s => ({ id: s.id, name: s.name })), org: { name: domain || 'Your organization' } };
+}
+const BRAIN_STOPS = [['Today', 0], ['1 week', 7], ['1 month', 30], ['6 months', 182], ['1 year', 365], ['5 years', 1826]];
+/** Mount the living brain into the graph page and wire the toolbar, the time controls, the cortex legend and the node panel. */
+async function mountGraph3D(main, g, fallback) {
+  const stage = $('#g3dStage', main); if (!stage) return;
+  const [ok] = await Promise.all([ensureGraph3D(), state.builds ? Promise.resolve() : loadBuilds().catch(() => {}), state.connectors ? Promise.resolve() : api('/api/connectors').then(r => { state.connectors = r.items || []; }).catch(() => {})]);
+  if (!stage.isConnected) return;
+  const tip = $('#gTip', main);
+  if (!ok) {
+    const box = $('#g3d', main); if (box) box.outerHTML = `<div class="g-wrap"><svg viewBox="0 0 ${fallback.W} ${fallback.H}" role="img" aria-label="Map of what Ricorsa has learned: ${fallback.all.length} nodes">${fallback.svg}</svg><div class="g-tip" id="gTip"></div></div>`;
+    return;
+  }
+  if (state.graph3d && state.graph3d.destroy) { try { state.graph3d.destroy(); } catch (e) {} }
+  const when = $('#g3dWhen', main), scrub = $('#g3dScrub', main), play = $('#g3dPlay', main);
+  const fmtWhen = (t, now) => t >= now - 60000 ? 'Today' : new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const kindLabel = (n) => n.kind === 'thread' ? 'Conversation' : n.kind === 'build' ? 'Built' : n.kind === 'connector' ? 'Connector' : n.kind === 'intent' ? 'Pattern' : (NODE_TYPES[n.kind] ? NODE_TYPES[n.kind].label.replace(/s$/, '').replace(/ie$/, 'y') : n.kind);
+  const ctl = window.RicorsaGraph3D.mount(stage, brainModel(g), {
+    onHover: (n, x, y) => {
+      if (!tip) return;
+      if (!n) { tip.style.opacity = '0'; return; }
+      const C = ctl.CORTEX[ctl.cortexOf(n)]; const settled = Math.round(ctl.settled(n) * 100);
+      const facts = n.kind === 'thread' ? `${n.count} turn${n.count === 1 ? '' : 's'}` : n.kind === 'intent' ? 'inferred from a conversation' : n.kind === 'build' ? 'built in the studio' : n.kind === 'connector' ? 'connected channel' : `seen ${n.count}× · weight ${(n.weight * 100).toFixed(0)}`;
+      tip.innerHTML = `<b>${esc(n.label)}</b>${esc(kindLabel(n))}${n.level ? ' · ' + esc(n.level) : ''} · ${facts}<br><span style="opacity:.75">${esc(C ? C.label : '')}${settled < 60 ? ` · settling (${settled}%)` : ''}${ctl.emerging(n) ? ' · strengthening' : ''} · ${relTime(n.lastSeen)} · click for details</span>`;
+      tip.style.opacity = '1'; const r = stage.getBoundingClientRect(); tip.style.left = Math.min(r.width - 280, Math.max(8, x + 14)) + 'px'; tip.style.top = Math.max(8, y - 10) + 'px';
+    },
+    onSelect: (n) => nodePanel(n, ctl),
+    onTime: (t, playing) => { const { first, now } = ctl.range(); if (scrub) scrub.value = String(Math.round(1000 * (t - first) / Math.max(1, now - first))); if (when) when.textContent = fmtWhen(t, now); if (play) play.querySelector('span').textContent = playing ? 'Stop' : 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.toggle('on', false)); },
+  });
+  state.graph3d = ctl;
+  $('#g3dFind', main).addEventListener('input', e => ctl.setQuery(e.target.value));
+  $('#g3dLabels', main).addEventListener('change', e => ctl.setLabels(e.target.checked));
+  $('#g3dReset', main).addEventListener('click', () => ctl.resetView());
+  const em = $('#g3dEmerging', main); if (em) em.addEventListener('click', () => { const on = ctl.setEmerging(!em.classList.contains('on')); em.classList.toggle('on', on); em.setAttribute('aria-pressed', String(on)); });
+  const setStop = (days) => { const { first, now } = ctl.range(); const t = days ? Math.max(first, now - days * 86400000) : now; ctl.setTime(t); if (when) when.textContent = days ? fmtWhen(t, now) : 'Today'; if (scrub) scrub.value = String(Math.round(1000 * (t - first) / Math.max(1, now - first))); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.toggle('on', Number(b.dataset.g3dStop) === days)); };
+  $$('[data-g3d-stop]', main).forEach(b => b.addEventListener('click', () => setStop(Number(b.dataset.g3dStop))));
+  if (scrub) scrub.addEventListener('input', () => { const { first, now } = ctl.range(); const t = first + (now - first) * (Number(scrub.value) / 1000); ctl.setTime(t); if (when) when.textContent = fmtWhen(t, now); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.remove('on')); });
+  if (play) play.addEventListener('click', () => { if (ctl.playing()) ctl.stop(); else ctl.play(); });
+  const reg = $('#g3dRegions', main);
+  if (reg) {
+    const counts = ctl.counts();
+    reg.innerHTML = Object.entries(ctl.CORTEX).map(([k, C]) => `<button type="button" class="g3d-region" data-g3d-region="${k}" style="--rc:${C.hex}" aria-pressed="true"><b><i></i>${esc(C.label)}</b><span>${esc(C.sub)}</span><em>${counts[k] || 0} node${(counts[k] || 0) === 1 ? '' : 's'}</em></button>`).join('');
+    $$('[data-g3d-region]', reg).forEach(b => {
+      const key = b.dataset.g3dRegion;
+      b.addEventListener('mouseenter', () => { if (!reg.querySelector('.pinned')) ctl.focus(key); });
+      b.addEventListener('mouseleave', () => { if (!reg.querySelector('.pinned')) ctl.focus(null); });
+      b.addEventListener('click', () => { const pinned = b.classList.contains('pinned'); $$('[data-g3d-region]', reg).forEach(x => x.classList.remove('pinned')); if (!pinned) { b.classList.add('pinned'); ctl.focus(key); } else ctl.focus(null); });
+    });
+  }
+}
+/** Refresh the mounted brain after the graph changed (learning while it is open): new nodes are born on screen. */
+function refreshBrain() { if (state.graph3d && state.graph && state.route && state.route.name === 'graph') { try { state.graph3d.update(brainModel(state.graph)); } catch (e) {} } }
+/** Everything about one node: what it is, where it came from, and what can be done with it. */
+function nodePanel(n, ctl) {
+  const C = ctl && ctl.CORTEX[ctl.cortexOf(n)]; const settled = ctl ? Math.round(ctl.settled(n) * 100) : 100;
+  const when = (v) => v ? `${new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${relTime(v)})` : '';
+  const g = state.graph;
+  const kindLabel = n.kind === 'thread' ? 'Conversation' : n.kind === 'build' ? 'Built in the studio' : n.kind === 'connector' ? 'Connected channel' : n.kind === 'intent' ? 'Pattern Ricorsa inferred' : (NODE_TYPES[n.kind] ? NODE_TYPES[n.kind].label.replace(/s$/, '').replace(/ie$/, 'y') : n.kind);
+  const learned = g && NODE_TYPES[n.kind];
+  const linked = learned && g ? Object.values(g.edges).filter(e => e.a === n.id || e.b === n.id).map(e => g.nodes[e.a === n.id ? e.b : e.a]).filter(Boolean).sort((a, b) => b.weight - a.weight).slice(0, 8) : [];
+  const taught = learned && g ? Object.values(g.nodes).filter(x => x.origin && n.kind === 'thread' && 'thread:' + x.origin.threadId === n.id) : (n.kind === 'thread' && g ? Object.values(g.nodes).filter(x => x.origin && 'thread:' + x.origin.threadId === n.id).sort((a, b) => b.weight - a.weight).slice(0, 10) : []);
+  const open = n.kind === 'thread' ? `#/thread/${esc(n.meta.id)}` : n.kind === 'build' ? `#/build/${esc(n.meta.id)}` : n.kind === 'connector' ? '#/connectors' : n.origin ? `#/thread/${esc(n.origin)}` : (n.meta && n.meta.threadId ? `#/thread/${esc(n.meta.threadId)}` : '');
+  openModal(`<h2><i style="display:inline-block;width:12px;height:12px;margin-right:8px;border-radius:${n.kind === 'entity' || n.kind === 'connector' ? '3px' : '50%'};background:${C ? C.hex : '#888'};vertical-align:-1px"></i>${esc(n.label)}</h2>
+    <p class="sub">${esc(kindLabel)}${n.level ? ` · ${esc(n.level)}` : ''}${C ? ` · ${esc(C.label)}` : ''}${settled < 60 ? ` · still settling (${settled}%)` : ''}${ctl && ctl.emerging(n) ? ' · strengthening now' : ''}</p>
+    <div class="node-facts">
+      ${learned ? `<div><small>Weight</small><b>${(n.weight * 100).toFixed(0)}</b></div><div><small>Seen</small><b>${n.count}×</b></div>` : n.kind === 'thread' ? `<div><small>Turns</small><b>${n.count}</b></div><div><small>Space</small><b>${esc((state.spaces.find(s => s.id === n.spaceId) || {}).name || 'None')}</b></div>` : ''}
+      <div><small>First</small><b>${esc(when(n.firstSeen))}</b></div>
+      <div><small>Last</small><b>${esc(when(n.lastSeen))}</b></div>
+    </div>
+    ${linked.length ? `<div class="node-links"><small>Connected to</small><div class="chips">${linked.map(l => `<span class="chip" style="cursor:default">${esc(truncate(l.label, 30))}</span>`).join('')}</div></div>` : ''}
+    ${taught.length ? `<div class="node-links"><small>Taught Ricorsa</small><div class="chips">${taught.map(l => `<span class="chip" style="cursor:default">${esc(truncate(l.label, 30))}</span>`).join('')}</div></div>` : ''}
+    ${learned && n.origin ? `<p class="sub" style="margin-top:10px">Learned from a conversation${n.meta && n.meta.origin && n.meta.origin.ideaId ? ' started from a Discover idea' : ''}.</p>` : ''}
+    <div class="modal-actions">${learned ? `<button type="button" class="btn danger left" id="npForget">Forget</button>` : ''}${open ? `<a class="btn" href="${open}" data-close>${n.kind === 'thread' ? 'Open the conversation' : n.kind === 'build' ? 'Open in the studio' : n.kind === 'connector' ? 'Open Connectors' : 'Open the conversation'}</a>` : ''}<button type="button" class="btn primary" data-close>Done</button></div>`, {
+    onMount: () => { const f = $('#npForget'); if (f) f.addEventListener('click', async () => { closeModal(); try { await forgetNode(n.id); } catch (e) { apiToast(e); return; } renderGraph(); toast(`Forgot “${truncate(n.label, 30)}”`); }); }
+  });
+}
 function renderGraph() {
   const main = $('#main'); const g = state.graph || { nodes: {}, edges: {}, intents: [], events: 0, paused: false, votes: { up: 0, down: 0 } };
   const all = Object.values(g.nodes).sort((a, b) => b.weight - a.weight || b.lastSeen - a.lastSeen);
@@ -1881,13 +1989,32 @@ function renderGraph() {
     <div class="g-stats"><div class="g-stat"><b>${all.length}</b><span>nodes</span></div><div class="g-stat"><b>${Object.keys(g.edges).length}</b><span>connections</span></div><div class="g-stat"><b>${g.events}</b><span>learning events</span></div><div class="g-stat"><b>${g.intents.length}</b><span>intents recorded</span></div></div>
     ${preview ? upgradeCard('This is the preview of your graph', `Ricorsa is learning you on every plan. Essentials shows the whole graph: the living map, how nodes connect, what you have been trying to do lately, and where each node came from.${all.length ? ` You have ${state.graphSize || all.length} nodes so far.` : ''}`, 'Essentials') : ''}
     ${g.intents.length ? `<div class="intents"><h3>Lately you’ve been trying to</h3><ol>${g.intents.slice(0, 5).map(i => `<li>${esc(i.text.replace(/^You(’|')re\s+/i, '').replace(/^You\s+(want|need|are)\s+/i, ''))}<span class="when">${relTime(i.at)}</span></li>`).join('')}</ol></div>` : ''}
-    ${drawn.length && !preview ? `<div class="g-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Map of what Ricorsa has learned: ${all.length} nodes">${svg}</svg><div class="g-tip" id="gTip"></div><div class="g-legend">${Object.entries(NODE_TYPES).map(([t, T]) => `<span><i class="sw ${T.shape}" style="background:${T.hex}"></i>${T.label}</span>`).join('')}<span style="margin-left:auto;color:var(--ink-3)">Size = weight · lines = asked about together</span></div></div>`
+    ${drawn.length && !preview ? `<div class="g3d" id="g3d">
+      <div class="g3d-bar">
+        <input type="search" id="g3dFind" placeholder="Find anything in your brain" aria-label="Find a node" autocomplete="off">
+        <button type="button" class="g3d-toggle" id="g3dEmerging" aria-pressed="false" title="Light what is strengthening right now">${icon('sparkles', 13)}<span>Emerging</span></button>
+        <span class="spacer"></span>
+        <label class="g3d-check"><input type="checkbox" id="g3dLabels" checked> Labels</label>
+        <button type="button" class="btn sm" id="g3dReset" title="Back to the starting angle">${icon('refresh', 13)}<span>Reset view</span></button>
+      </div>
+      <div class="g3d-stage" id="g3dStage"><div class="g-tip" id="gTip"></div></div>
+      <div class="g3d-time">
+        <button type="button" class="btn sm" id="g3dPlay" title="Watch your brain form from the first thing learned to now">${icon('clock', 13)}<span>Replay</span></button>
+        <div class="g3d-stops">${BRAIN_STOPS.map(([l, d]) => `<button type="button" data-g3d-stop="${d}" class="${d === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <input type="range" id="g3dScrub" min="0" max="1000" value="1000" aria-label="Point in time">
+        <span class="g3d-when" id="g3dWhen">Today</span>
+      </div>
+      <div class="g3d-regions" id="g3dRegions"></div>
+      <div class="g3d-note">Six cortices are the layers of your intelligence, not brain anatomy; the membrane is your organization, the governed boundary. What Ricorsa learns is born beside the conversation that taught it and settles into its cortex as it recurs. Drag to orbit, scroll to zoom.</div>
+    </div>`
       : drawn.length ? '' : `<div class="g-empty">${icon('loop', 30)}<div>Nothing learned yet.</div><p>Ask a few questions and come back, each answer adds what it revealed about what you’re working on.</p><p><a href="#/">Ask something</a></p></div>`}
     <div class="g-types">${typeCards}</div>
   </div></div></div>`;
   // interactions
+  const stage = $('#g3dStage', main);
+  if (stage) mountGraph3D(main, g, { W, H, svg, all });
   const wrap = $('.g-wrap', main), tip = $('#gTip', main);
-  if (wrap) {
+  if (wrap && !stage) {
     const show = (el, ev) => { const n = g.nodes[el.dataset.node]; if (!n) return; const T = NODE_TYPES[n.type]; tip.innerHTML = `<b>${esc(n.label)}</b>${T.label}${n.level ? ' · ' + esc(n.level) : ''} · seen ${n.count}× · weight ${(n.weight * 100).toFixed(0)}<br><span style="opacity:.75">first ${relTime(n.firstSeen)} · last ${relTime(n.lastSeen)} · click to forget</span>${n.origin ? `<br><span style="opacity:.75;font-family:var(--mono);font-size:11px">origin ${esc(shortHash(n.origin.lineage || n.origin.threadId))}${n.origin.ideaId ? ' · idea ' + esc(shortHash(n.origin.ideaId)) : ''}</span>` : ''}`; const r = wrap.getBoundingClientRect(); const x = ev ? ev.clientX - r.left : r.width / 2, y = ev ? ev.clientY - r.top : r.height / 2; tip.style.left = Math.min(x + 12, r.width - 250) + 'px'; tip.style.top = (y + 14) + 'px'; tip.style.opacity = '1'; };
     $$('.node', wrap).forEach(el => {
       el.addEventListener('mousemove', ev => show(el, ev)); el.addEventListener('mouseleave', () => tip.style.opacity = '0');

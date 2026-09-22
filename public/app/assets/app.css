@@ -684,6 +684,47 @@
   .g-legend span { display: inline-flex; align-items: center; gap: 6px; }
   .g-legend .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .g-legend .sw.square { border-radius: 2px; } .g-legend .sw.diamond { border-radius: 2px; transform: rotate(45deg) scale(.85); } .g-legend .sw.ring { background: transparent !important; border: 2px solid var(--n-style); box-sizing: border-box; } .g-legend .sw.hex { clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); border-radius: 0; }
+  /* The living brain */
+  .g3d { border: 1px solid var(--line); border-radius: 16px; background: var(--card); overflow: hidden; margin-bottom: 14px; }
+  .g3d-bar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .g3d-bar .spacer { flex: 1; }
+  .g3d-bar input[type="search"] { font: inherit; font-size: 13px; padding: 7px 11px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--card); color: var(--ink); min-width: 220px; }
+  .g3d-bar input[type="search"]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .g3d-toggle { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12.5px; font-weight: 500; padding: 6px 11px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--card); color: var(--ink-2); cursor: pointer; }
+  .g3d-toggle.on { background: #FBE7EF; border-color: #E9A9C2; color: #A02556; }
+  .g3d-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
+  .g3d-check input { accent-color: var(--accent); }
+  .g3d-stage { position: relative; background: #0B1220; }
+  .g3d-canvas { display: block; width: 100%; outline: none; }
+  .g3d-canvas:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .g3d-stage .g-tip { max-width: 280px; }
+  .g3d-time { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .g3d-stops { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r-sm); overflow: hidden; background: var(--card); }
+  .g3d-stops button { border: 0; background: none; font: inherit; font-size: 12px; font-weight: 500; padding: 5px 9px; cursor: pointer; color: var(--ink-2); }
+  .g3d-stops button + button { border-left: 1px solid var(--line); }
+  .g3d-stops button.on { background: var(--accent-soft); color: var(--accent); }
+  .g3d-time input[type="range"] { flex: 1; min-width: 140px; accent-color: var(--accent); }
+  .g3d-when { font-size: 12.5px; color: var(--ink-2); min-width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+  .g3d-regions { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+  .g3d-region { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: left; font: inherit; border: 0; border-right: 1px solid var(--line); background: none; padding: 10px 12px; cursor: pointer; color: var(--ink); min-width: 0; }
+  .g3d-region:last-child { border-right: 0; }
+  .g3d-region:hover, .g3d-region.pinned { background: color-mix(in srgb, var(--rc) 9%, var(--card)); }
+  .g3d-region.pinned { box-shadow: inset 0 -2px 0 var(--rc); }
+  .g3d-region b { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+  .g3d-region b i { width: 9px; height: 9px; border-radius: 50%; background: var(--rc); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc) 22%, transparent); }
+  .g3d-region span { font-size: 11.5px; color: var(--ink-3); line-height: 1.35; }
+  .g3d-region em { font-style: normal; font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .g3d-note { padding: 10px 14px; font-size: 12px; color: var(--ink-3); border-top: 1px solid var(--line); line-height: 1.45; }
+  .node-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 6px 0 10px; }
+  .node-facts div { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+  .node-facts small { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 600; }
+  .node-facts b { font-weight: 600; font-size: 13.5px; }
+  .node-links { margin-top: 8px; }
+  .node-links small { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 600; margin-bottom: 6px; }
+  .node-links .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .node-links .chip { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; color: var(--ink-2); background: var(--card); }
+  @media (max-width: 900px) { .g3d-regions { grid-template-columns: repeat(3, minmax(0, 1fr)); } .g3d-region:nth-child(3n) { border-right: 0; } .g3d-region:nth-child(-n+3) { border-bottom: 1px solid var(--line); } }
+  @media (max-width: 640px) { .g3d-regions { grid-template-columns: repeat(2, minmax(0, 1fr)); } .g3d-region:nth-child(3n) { border-right: 1px solid var(--line); } .g3d-region:nth-child(2n) { border-right: 0; } .g3d-region:nth-child(-n+4) { border-bottom: 1px solid var(--line); } .g3d-region:nth-child(3) { border-bottom: 1px solid var(--line); } .g3d-when { display: none; } .g3d-bar input[type="search"] { min-width: 0; flex: 1; } }
   .g-types { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding-bottom: 48px; }
   .g-type { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: var(--card); }
   .g-type h3 { margin: 0 0 2px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
