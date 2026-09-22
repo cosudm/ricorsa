@@ -9,7 +9,7 @@ export type TrialSettings = { days: number; plan: 'pro' | 'team' };
 export const DEFAULTS = {
   company: { name: 'SMEPro Technologies', email: 'support@smeprotech.com', website: 'https://ricorsa.com' } as CompanyProfile,
   invoice: { prefix: 'RIC-', nextNumber: 1001, dueDays: 14, taxRate: 0, currency: 'USD', terms: 'Payment is due within 14 days of the invoice date.', footer: 'Thank you for choosing Ricorsa.' } as InvoiceSettings,
-  email: { from: process.env.RESEND_FROM || 'Ricorsa <hello@ricorsa.com>', signature: 'The Ricorsa team\nhttps://ricorsa.com' } as EmailSettings,
+  email: { from: process.env.RESEND_FROM || 'Ricorsa <support@smeprotech.com>', signature: 'The Ricorsa team\nhttps://ricorsa.com' } as EmailSettings,
   trial: { days: 14, plan: 'pro' } as TrialSettings,
   /** Filled in by the console itself: the PayPal webhook it registered for invoice events. */
   paypal: { webhookId: '' } as { webhookId: string },

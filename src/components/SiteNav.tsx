@@ -34,7 +34,7 @@ export function SiteFooter() {
         </div>
         <div className="foot-legal">
           <span>© {new Date().getFullYear()} Ricorsa, an SMEPro company. Houston, TX.</span>
-          <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:hello@ricorsa.com">hello@ricorsa.com</a> · <a href="mailto:enterprise@ricorsa.com">Enterprise</a></span>
+          <span><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="mailto:support@smeprotech.com">support@smeprotech.com</a> · <a href="mailto:enterprise@ricorsa.com">Enterprise</a></span>
         </div>
       </div>
     </footer>
