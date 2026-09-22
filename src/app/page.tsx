@@ -21,7 +21,7 @@ export default async function Landing() {
       <SiteNav signedIn={!!v} />
       <main>
         <section className="hero-c wrap">
-          <h1>Ricorsa. <span className="hl">Identity Governed Logic (IGL)</span></h1>
+          <h1>Ricorsa.</h1>
           <p className="lede">Your Living Intelligence. Watch your intelligence come alive.</p>
           <div className="cta">
             <a className="btn primary lg" href={start}>{v ? 'Open Ricorsa' : 'Start free'}</a>
