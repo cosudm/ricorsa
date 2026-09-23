@@ -19,5 +19,5 @@ export const POST = handle(async (req: Request) => {
   if (sub.custom_id && sub.custom_id !== user.id) return fail(403, 'That subscription belongs to another account');
   const result = await applySubscription(sub, user.id);
   if (!result) return fail(400, 'Subscription plan not recognized.');
-  return json({ ok: true, plan: result.plan, planName: PLANS[result.plan]?.name || result.plan, status: result.status });
+  return json({ ok: true, plan: result.plan, planName: PLANS[result.plan]?.name || result.plan, cycle: result.cycle, status: result.status });
 });

@@ -22,7 +22,7 @@ export const GET = handle(async () => {
   const d = db();
   const now = Date.now();
   const { month } = periods();
-  const users = await d.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, plan: schema.users.plan, subscriptionStatus: schema.users.subscriptionStatus, planRenewsAt: schema.users.planRenewsAt, createdAt: schema.users.createdAt, lastSeenAt: schema.users.lastSeenAt })
+  const users = await d.select({ id: schema.users.id, email: schema.users.email, name: schema.users.name, plan: schema.users.plan, subscriptionStatus: schema.users.subscriptionStatus, billingCycle: schema.users.billingCycle, planRenewsAt: schema.users.planRenewsAt, createdAt: schema.users.createdAt, lastSeenAt: schema.users.lastSeenAt })
     .from(schema.users).orderBy(desc(schema.users.createdAt)).limit(5000);
   const usageRows = await d.select({ userId: schema.usage.userId, questions: schema.usage.questions, research: schema.usage.research, searches: schema.usage.searches, costMicros: schema.usage.costMicros }).from(schema.usage).where(sql`${schema.usage.period} = ${month}`);
   const usageBy = new Map(usageRows.map(r => [r.userId, r]));
@@ -50,7 +50,7 @@ export const GET = handle(async () => {
     const us = usageBy.get(u.id);
     questions += us?.questions || 0; research += us?.research || 0; searches += us?.searches || 0; costMicros += us?.costMicros || 0;
     const t = threadsBy.get(u.id) || 0, b = buildsBy.get(u.id) || 0; threads += t; builds += b;
-    return { id: u.id, email: u.email, name: u.name, plan, planName: PLANS[plan]?.name || plan, subscriptionStatus: u.subscriptionStatus, planRenewsAt: ms(u.planRenewsAt) || null, createdAt: created, lastSeenAt: seen, admin, questionsThisMonth: us?.questions || 0, researchThisMonth: us?.research || 0, threads: t, builds: b };
+    return { id: u.id, email: u.email, name: u.name, plan, planName: PLANS[plan]?.name || plan, subscriptionStatus: u.subscriptionStatus, billingCycle: u.billingCycle || null, planRenewsAt: ms(u.planRenewsAt) || null, createdAt: created, lastSeenAt: seen, admin, questionsThisMonth: us?.questions || 0, researchThisMonth: us?.research || 0, threads: t, builds: b };
   });
   return json({
     at: now,

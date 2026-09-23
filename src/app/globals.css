@@ -115,11 +115,21 @@ button { font: inherit; cursor: pointer; }
 .plan .trial { font-size: 12.5px; font-weight: 500; color: var(--accent); background: var(--accent-soft); border-radius: 8px; padding: 5px 9px; align-self: flex-start; }
 .plan { border: 1px solid var(--line); border-radius: 18px; background: var(--card); padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .plan.hot { border-color: var(--accent-line); box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-2); }
-.plan .name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; }
-.plan .tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 6px; }
+.plan .name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plan .tag { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 6px; white-space: nowrap; }
 .plan .price { font-size: 38px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
 .plan .price small { font-size: 14px; font-weight: 500; color: var(--ink-3); letter-spacing: 0; margin-left: 4px; }
 .plan .price sup.mark { font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: 0; margin-left: 3px; vertical-align: top; line-height: 1; }
+.plan .price .cents { font-size: 20px; font-weight: 600; letter-spacing: -.01em; color: var(--ink-2); }
+.plan .tag.current { background: #E6F3EA; color: var(--good); }
+/* billing cycle toggle: annual first, monthly beside it */
+.cycle-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 18px; }
+.cycle-toggle { display: inline-flex; padding: 3px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--card); }
+.cycle-toggle button { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px; border: 0; border-radius: 999px; background: transparent; color: var(--ink-2); font-weight: 500; font-size: 14px; transition: background .12s, color .12s; }
+.cycle-toggle button:hover { color: var(--ink); }
+.cycle-toggle button.on { background: var(--accent); color: #fff; }
+.cycle-toggle .save { font-size: 10.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--good); background: #E6F3EA; border-radius: 5px; padding: 2px 6px; }
+.cycle-toggle button.on .save { color: #fff; background: rgba(255,255,255,.2); }
 .note.licensing { color: var(--ink-2); }
 .note.licensing b { color: var(--accent); font-weight: 600; margin-right: 2px; }
 .plan .blurb { color: var(--ink-2); font-size: 14px; margin: 0; }

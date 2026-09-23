@@ -30,8 +30,10 @@ export const users = sqliteTable('users', {
 export const subscriptions = sqliteTable('subscriptions', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  planKey: text('plan_key').notNull(), // pro | team
+  planKey: text('plan_key').notNull(), // essentials | professional | enterprise (pro | team on rows from before September 2026)
   paypalPlanId: text('paypal_plan_id').notNull(),
+  /** How the subscription bills: monthly, or annual (one payment a year, two months free). */
+  billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
   status: text('status').notNull(),
   startedAt: ts('started_at'),
   nextBillingAt: ts('next_billing_at'),

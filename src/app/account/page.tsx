@@ -3,9 +3,13 @@ import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { CancelButton, DeleteAccountButton } from '@/components/AccountActions';
 import { currentUser } from '@/lib/session';
-import { planFor, statusGrants } from '@/lib/plans';
+import { planFor, statusGrants, annualSaving, ANNUAL_MONTHS_FREE } from '@/lib/plans';
 import { readUsage } from '@/lib/usage';
 import { loadGraph } from '@/lib/graph';
+import { currentSubscription } from '@/lib/billing';
+
+/** Months on a monthly plan before the Account page suggests paying yearly instead. */
+const SWITCH_NUDGE_MONTHS = 3;
 
 export const metadata: Metadata = { title: 'Account' };
 export const dynamic = 'force-dynamic';
@@ -13,10 +17,17 @@ export const dynamic = 'force-dynamic';
 export default async function Account() {
   const user = await currentUser();
   const plan = planFor(user.plan);
-  const [usage, graph] = await Promise.all([readUsage(user.id), loadGraph(user.id)]);
+  const [usage, graph, sub] = await Promise.all([readUsage(user.id), loadGraph(user.id), currentSubscription(user)]);
   const active = statusGrants(user.subscriptionStatus);
   const granted = user.subscriptionStatus === 'TRIAL' || user.subscriptionStatus === 'LICENSED';
   const ended = user.subscriptionStatus === 'TRIAL_ENDED' || user.subscriptionStatus === 'LICENSE_ENDED';
+  // How the subscription bills: the row says, or every subscription from before the annual option was monthly.
+  const paying = !!user.paypalSubscriptionId && active && !granted && plan.key !== 'free';
+  const cycle = paying ? (user.billingCycle || sub?.billingCycle || 'monthly') : null;
+  const startedAt = sub?.startedAt ? new Date(sub.startedAt) : null;
+  const monthsOn = startedAt ? Math.floor((Date.now() - startedAt.getTime()) / (30.4 * 86400e3)) : 0;
+  const saving = annualSaving(plan);
+  const nudge = cycle === 'monthly' && !!plan.priceUsdYear && monthsOn >= SWITCH_NUDGE_MONTHS;
   return (
     <>
       <SiteNav signedIn />
@@ -28,6 +39,12 @@ export default async function Account() {
             <div className="card">
               <h3>Plan</h3>
               <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}{user.admin ? ' · admin, all access' : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>{granted ? (user.subscriptionStatus === 'TRIAL' ? 'Trial ends' : 'Licensed until') : 'Renews'} {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
+              {cycle && <p className="note">Billed {cycle === 'annual' ? `yearly: $${plan.priceUsdYear} a year, ${ANNUAL_MONTHS_FREE} months free against monthly` : `monthly: $${plan.priceUsd} a month`}{startedAt ? `, since ${startedAt.toLocaleDateString()}` : ''}.</p>}
+              {nudge && (
+                <div className="notice info" style={{ marginBottom: 12 }}>
+                  <span>You have been on {plan.name} for {monthsOn} months. Paying yearly costs ${plan.priceUsdYear} instead of ${plan.priceUsd * 12}, so you keep ${saving} a year. Your monthly subscription ends when the annual one starts, so the best moment to switch is just before your renewal{user.planRenewsAt ? ` on ${new Date(user.planRenewsAt).toLocaleDateString()}` : ''}. <a href="/pricing?cycle=annual">See annual pricing</a></span>
+                </div>
+              )}
               {granted && !user.planRenewsAt && <p className="note">Your {plan.name} plan is licensed with no end date.</p>}
               {ended && <div className="notice" style={{ marginBottom: 12 }}>Your {user.subscriptionStatus === 'TRIAL_ENDED' ? 'trial' : 'license'} has ended, so the account has the free limits. Choose a plan on the pricing page to keep going; every plan starts with a free trial.</div>}
               {!active && !ended && <div className="notice" style={{ marginBottom: 12 }}>Your PayPal subscription is {user.subscriptionStatus?.toLowerCase()}. Update the payment method in PayPal, or subscribe again on the pricing page, to restore {plan.name} limits.</div>}

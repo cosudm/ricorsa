@@ -11,7 +11,7 @@ export function CancelButton({ hasSubscription }: { hasSubscription: boolean }) 
     setBusy(false);
     if (res.ok) { setMsg('Subscription canceled. You are on the Free plan.'); setTimeout(() => location.reload(), 1200); } else setMsg(body.error || 'Could not cancel. Try from your PayPal account.');
   };
-  return (<div><button className="btn danger" disabled={busy} onClick={go}>{busy ? 'Cancelling' : armed ? 'Click again to confirm' : 'Cancel subscription'}</button>{msg && <div className="notice info" style={{ marginTop: 8 }}>{msg}</div>}</div>);
+  return (<div><button className="btn danger" disabled={busy} onClick={go}>{busy ? 'Canceling' : armed ? 'Click again to confirm' : 'Cancel subscription'}</button>{msg && <div className="notice info" style={{ marginTop: 8 }}>{msg}</div>}</div>);
 }
 
 export function DeleteAccountButton() {

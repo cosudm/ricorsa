@@ -11,6 +11,10 @@ export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', te
 export const PLAN_ORDER: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
 /** Every paid plan starts with a free trial of this many days through PayPal; billing begins when it ends. */
 export const TRIAL_DAYS = 14;
+/** How a subscription bills. Monthly and annual plans are feature-identical; annual is ten months' price, two months free. */
+export type BillingCycle = 'monthly' | 'annual';
+export const BILLING_CYCLES: BillingCycle[] = ['monthly', 'annual'];
+export const ANNUAL_MONTHS_FREE = 2;
 /** The plans shown on the pricing page: the paid ones. Free is the state of an account with no subscription, not an offer. */
 export const OFFERED_PLANS: PlanKey[] = ['essentials', 'professional', 'enterprise'];
 
@@ -21,8 +25,12 @@ export type Plan = {
   key: PlanKey;
   name: string;
   priceUsd: number;            // per month, 0 for free
+  /** Per year, billed once; two months free against twelve monthly payments. Absent where the plan is not sold annually. */
+  priceUsdYear?: number;
   caps: Caps;                  // what the identity graph and Discover can do on this plan
   paypalPlanEnv?: string;      // env var holding the PayPal plan id
+  /** The env var that may name the annual PayPal plan id (otherwise the app provisions one). */
+  paypalPlanEnvAnnual?: string;
   /** The env var the plan's PayPal id lived in under its previous name and price, for subscriptions taken out then. */
   legacyPaypalPlanEnv?: string;
   questionsPerDay: number;     // Search-mode answers per day
@@ -62,7 +70,9 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'essentials',
     name: 'Essentials',
     priceUsd: 25,
+    priceUsdYear: 250,
     paypalPlanEnv: 'PAYPAL_PLAN_ESSENTIALS',
+    paypalPlanEnvAnnual: 'PAYPAL_PLAN_ESSENTIALS_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_PRO',
     caps: { graph: 'full', discover: 'locked', connectors: 3, files: { perQuestion: 5, maxMb: 25 } },
     questionsPerDay: 300,
@@ -79,7 +89,9 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'professional',
     name: 'Professional',
     priceUsd: 55,
+    priceUsdYear: 550,
     paypalPlanEnv: 'PAYPAL_PLAN_PROFESSIONAL',
+    paypalPlanEnvAnnual: 'PAYPAL_PLAN_PROFESSIONAL_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_TEAM',
     caps: { graph: 'full', discover: 'full', connectors: 25, files: { perQuestion: 10, maxMb: 40 } },
     questionsPerDay: 1000,
@@ -96,7 +108,9 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'enterprise',
     name: 'Enterprise',
     priceUsd: 85,
+    priceUsdYear: 850,
     paypalPlanEnv: 'PAYPAL_PLAN_ENTERPRISE',
+    paypalPlanEnvAnnual: 'PAYPAL_PLAN_ENTERPRISE_ANNUAL',
     caps: { graph: 'full', discover: 'full', connectors: 100, files: { perQuestion: 20, maxMb: 60 } },
     questionsPerDay: 3000,
     questionsPerMonth: 15000,
@@ -138,27 +152,69 @@ export function nextPlan(key: string | null | undefined): Plan | null {
   return i >= 0 && i < PLAN_ORDER.length - 1 ? PLANS[PLAN_ORDER[i + 1]] : null;
 }
 
-/** What the app keeps about the PayPal side: the current plan id per tier, and every earlier id (an old price, an old name) mapped to the tier it grants. */
+/**
+ * What the app keeps about the PayPal side: the current plan id per tier and cycle (`essentials` for monthly,
+ * `essentials:annual` for annual), and every earlier id (an old price, an old name) mapped to the tier it grants.
+ */
 export type ProvisionedPlans = { plans: Partial<Record<string, string>>; retired?: Record<string, string> };
 
-/** The PayPal plan id for a paid tier: an explicit env var wins, otherwise the id the app provisioned itself. */
-export function paypalPlanId(key: PlanKey, provisioned?: ProvisionedPlans | null): string | null {
-  const env = PLANS[key].paypalPlanEnv;
-  if (!env) return null;
-  return process.env[env] || provisioned?.plans?.[key] || null;
+/**
+ * The key a PayPal plan is stored under in the provisioned record: the tier, `:annual` when it bills yearly, and
+ * `:notrial` for the variant sold to people whose free trial is behind them (one trial per account).
+ */
+export function provisionKey(key: PlanKey, cycle: BillingCycle = 'monthly', trial = true): string {
+  return `${key}${cycle === 'annual' ? ':annual' : ''}${trial ? '' : ':notrial'}`;
+}
+/** A stored provision key back to its plan and cycle (the trial variant bills the same tier the same way). */
+export function parseProvisionKey(k: string): { key: PlanKey; cycle: BillingCycle } {
+  const [base, ...rest] = k.split(':');
+  return { key: normalizePlanKey(base), cycle: rest.includes('annual') ? 'annual' : 'monthly' };
+}
+/** The price a plan bills at for a cycle; null when the plan is not sold that way. */
+export function priceFor(plan: Plan, cycle: BillingCycle): number | null {
+  if (cycle === 'annual') return plan.priceUsdYear ?? null;
+  return plan.priceUsd || null;
+}
+/** What a year costs per month on the annual plan, to the cent, for the pricing page's monthly-equivalent figure. */
+export function monthlyEquivalent(plan: Plan): number | null {
+  return plan.priceUsdYear ? Math.round((plan.priceUsdYear / 12) * 100) / 100 : null;
+}
+/** What a year of monthly payments would cost beyond the annual price: the "two months free". */
+export function annualSaving(plan: Plan): number {
+  return plan.priceUsdYear ? Math.max(0, plan.priceUsd * 12 - plan.priceUsdYear) : 0;
 }
 
-/** Map a PayPal plan id back to our plan key, including ids from before a rename or a price change. */
-export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, provisioned?: ProvisionedPlans | null): PlanKey | null {
+/**
+ * The PayPal plan id for a paid tier, cycle and trial eligibility: an explicit env var wins for the standard (trial)
+ * plan, otherwise the id the app provisioned itself. When the no-trial variant is not provisioned yet the trial plan
+ * is sold instead, so a checkout is never blocked on it.
+ */
+export function paypalPlanId(key: PlanKey, provisioned?: ProvisionedPlans | null, cycle: BillingCycle = 'monthly', trial = true): string | null {
+  const plan = PLANS[key];
+  const env = cycle === 'annual' ? plan.paypalPlanEnvAnnual : plan.paypalPlanEnv;
+  if (!env) return null;
+  if (cycle === 'annual' && !plan.priceUsdYear) return null;
+  const standard = process.env[env] || provisioned?.plans?.[provisionKey(key, cycle)] || null;
+  if (trial) return standard;
+  return provisioned?.plans?.[provisionKey(key, cycle, false)] || standard;
+}
+
+/** Map a PayPal plan id back to our plan and its billing cycle, including ids from before a rename or a price change. */
+export function planFromPaypalPlan(paypalPlanId: string | null | undefined, provisioned?: ProvisionedPlans | null): { key: PlanKey; cycle: BillingCycle } | null {
   if (!paypalPlanId) return null;
   for (const p of Object.values(PLANS)) {
-    if (p.paypalPlanEnv && process.env[p.paypalPlanEnv] === paypalPlanId) return p.key;
-    if (p.legacyPaypalPlanEnv && process.env[p.legacyPaypalPlanEnv] === paypalPlanId) return p.key;
+    if (p.paypalPlanEnv && process.env[p.paypalPlanEnv] === paypalPlanId) return { key: p.key, cycle: 'monthly' };
+    if (p.paypalPlanEnvAnnual && process.env[p.paypalPlanEnvAnnual] === paypalPlanId) return { key: p.key, cycle: 'annual' };
+    if (p.legacyPaypalPlanEnv && process.env[p.legacyPaypalPlanEnv] === paypalPlanId) return { key: p.key, cycle: 'monthly' };
   }
-  for (const [key, id] of Object.entries(provisioned?.plans || {})) if (id === paypalPlanId) return normalizePlanKey(key);
+  for (const [k, id] of Object.entries(provisioned?.plans || {})) if (id === paypalPlanId) return parseProvisionKey(k);
   const retired = provisioned?.retired?.[paypalPlanId];
-  if (retired) return normalizePlanKey(retired);
+  if (retired) return parseProvisionKey(retired);
   return null;
+}
+/** The plan key alone, for callers that do not care how it bills. */
+export function planKeyFromPaypalPlan(paypalPlanId: string | null | undefined, provisioned?: ProvisionedPlans | null): PlanKey | null {
+  return planFromPaypalPlan(paypalPlanId, provisioned)?.key ?? null;
 }
 
 /** Rough per-answer cost estimate in micro-dollars, for the usage table. Adjust to current list prices. */

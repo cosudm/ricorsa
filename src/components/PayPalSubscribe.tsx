@@ -16,11 +16,23 @@ function loadSdk(clientId: string) {
   return sdkPromise;
 }
 
+export type SubscribeProps = {
+  planId: string; planKey: string; planName?: string; clientId: string; userId: string; disabled?: boolean;
+  /** Days of free trial on this plan; 0 when the account's trial is behind it and billing starts today. */
+  trialDays?: number;
+  /** How the plan bills, for the wording under the button. */
+  cycle?: 'monthly' | 'annual';
+  /** The amount PayPal bills each cycle, in US dollars. */
+  priceUsd?: number;
+  /** The subscription this one replaces (its plan and cycle, in words), when the account already has one. */
+  replaces?: string | null;
+};
+
 /**
  * Renders PayPal's subscription button for one plan. On approval the subscription id goes to
  * our server, which verifies it with PayPal before changing the account.
  */
-export function PayPalSubscribe({ planId, planKey, planName, clientId, userId, disabled, trialDays = 0 }: { planId: string; planKey: string; planName?: string; clientId: string; userId: string; disabled?: boolean; trialDays?: number }) {
+export function PayPalSubscribe({ planId, planKey, planName, clientId, userId, disabled, trialDays = 0, cycle = 'monthly', priceUsd, replaces }: SubscribeProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'approving' | 'done' | 'error'>('idle');
   const [msg, setMsg] = useState('');
@@ -39,7 +51,8 @@ export function PayPalSubscribe({ planId, planKey, planName, clientId, userId, d
           setState('approving'); setMsg('Confirming with PayPal');
           const res = await fetch('/api/billing/paypal/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscriptionId: data.subscriptionID }) });
           const body = await res.json().catch(() => ({}));
-          if (res.ok) { setState('done'); setMsg(`Your ${body.planName || planName || planKey} trial has started. Opening Ricorsa.`); setTimeout(() => { location.href = '/app'; }, 1200); }
+          const name = body.planName || planName || planKey;
+          if (res.ok) { setState('done'); setMsg(trialDays > 0 ? `Your ${name} trial has started. Opening Ricorsa.` : `Your ${name} plan is active. Opening Ricorsa.`); setTimeout(() => { location.href = '/app'; }, 1200); }
           else { setState('error'); setMsg(body.error || 'PayPal approved the subscription but we could not confirm it. It will be applied automatically within a few minutes.'); }
         },
         onError: (err: unknown) => { console.error(err); setState('error'); setMsg('PayPal could not complete that. Try again or use a different funding source.'); },
@@ -48,15 +61,21 @@ export function PayPalSubscribe({ planId, planKey, planName, clientId, userId, d
       instance.render(ref.current).then(() => { if (!closed) setState('ready'); }).catch(() => setState('error'));
     }).catch(() => { setState('error'); setMsg('PayPal did not load. Disable ad blockers for this page and reload.'); });
     return () => { closed = true; try { instance?.close?.(); } catch {} };
-  }, [planId, clientId, userId, disabled]);
+  }, [planId, clientId, userId, disabled, trialDays, planName, planKey]);
 
   if (disabled) return null;
+  const name = planName || planKey;
+  const amount = priceUsd ? `$${priceUsd}` : '';
+  const per = cycle === 'annual' ? 'a year' : 'a month';
+  const billing = trialDays > 0
+    ? `Nothing is charged for ${trialDays} days; then ${name} is billed ${amount ? amount + ' ' : ''}${per} by PayPal.`
+    : `${name} is billed ${amount ? amount + ' ' : ''}${per} by PayPal, starting today.`;
   return (
     <div>
       <div ref={ref} className="paypal-slot" aria-busy={state === 'loading' || state === 'approving'} />
       {state === 'loading' && <div className="note">Loading PayPal</div>}
       {msg && <div className={'notice ' + (state === 'error' ? '' : state === 'done' ? 'good' : 'info')} style={{ marginTop: 8 }}>{msg}</div>}
-      <div className="note" style={{ marginTop: 8 }}>{trialDays > 0 ? `Nothing is charged for ${trialDays} days; then` : ''} {planName || planKey} is billed monthly by PayPal. Cancel any time from your Account page or your PayPal account.</div>
+      <div className="note" style={{ marginTop: 8 }}>{billing} Cancel any time from your Account page or your PayPal account.{replaces ? ` Your current ${replaces} subscription is canceled when this one starts; the unused part of its period is not refunded.` : ''}</div>
     </div>
   );
 }
