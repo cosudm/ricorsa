@@ -6,16 +6,19 @@
  *   Identity        the people, organizations, tools and places Ricorsa has learned
  *   Memory          conversations and their documents; each Space is a governed sub-boundary around its threads
  *   Knowledge       topics and expertise
- *   Discovery       the patterns Ricorsa inferred about what the person is trying to do
- *   Action          goals, and the apps, agents and tools that were built
+ *   Opportunity     goals and the patterns Ricorsa inferred about what the person is trying to do
+ *   Action          the apps, agents and tools that were built
  *   Communication   how the person likes things said, and the channels connected
- * The tissue of the brain is drawn as thousands of fibers and motes that follow the folds of a brain-shaped surface,
- * colored by the cortex they lie in; the identity core sits at the center; footprints (recent conversations,
- * documents, built apps, channels) stream in from the edge into Memory. Connections are pathways: node to node,
- * and node to the conversation that taught it. A thing Ricorsa learns is born beside that conversation and settles
- * into its cortex as it recurs over weeks. Time is the fourth dimension: the scrubber shows the brain as it was,
- * Replay shows it forming, Emerging lights what is strengthening now, and learning that happens while the brain is
- * open is drawn as it happens. Identity Governed Logic is not a region: the boundary and the Space rings are where it shows.
+ * The body is anatomical: two cerebral hemispheres with the fissure between them, the temporal lobes under the
+ * lateral sulcus, the cerebellum tucked under the occipital lobes, the brainstem. Its surface is drawn as gyri, the
+ * folds of the cortex, traced as evenly spaced flow lines that light up by the cortex they lie in, with signals
+ * running along them; motes glow under the surface; the identity core sits at the center; footprints (recent
+ * conversations, documents, built apps, channels) stream in from the edge into Memory. Connections are pathways:
+ * node to node, and node to the conversation that taught it. A thing Ricorsa learns is born beside that conversation
+ * and settles into its cortex as it recurs over weeks. Time is the fourth dimension: the scrubber shows the brain as
+ * it was, Replay shows it forming, Emerging lights what is strengthening now, and learning that happens while the
+ * brain is open is drawn as it happens. Identity Governed Logic is not a region: the boundary and the Space rings
+ * are where it shows.
  *
  * Plain canvas, no library, additive light. window.RicorsaGraph3D.mount(container, model, options) returns a
  * controller; the model is assembled by the app from the graph, the threads, the builds and the connectors.
@@ -23,14 +26,19 @@
 (function () {
   'use strict';
   const DAY = 86400000;
+  // Front faces -x, up is +y, the hemispheres sit at +z and -z. Directions are from the center of the body; a cortex
+  // shows on both hemispheres. The regions follow the anatomy loosely: planning at the frontal pole, doing along the
+  // motor strip, knowing across the parietal lobe, remembering in the temporal lobe, recognizing at the back, and
+  // language on the lateral surface.
   const CORTEX = {
-    identity: { label: 'Identity', hex: '#F08A3C', dir: [0.5, -0.28, 0.72], spread: 0.44, depth: 0.16, sub: 'People, organizations, tools and places', what: 'Who and what is in your world' },
-    memory: { label: 'Memory', hex: '#34D4C0', dir: [-0.72, -0.3, 0.32], spread: 0.56, depth: 0.34, sub: 'Conversations and documents, by Space', what: 'What happened, and where' },
-    knowledge: { label: 'Knowledge', hex: '#5AA0FF', dir: [-0.26, 0.76, 0.26], spread: 0.6, depth: 0.18, sub: 'Topics and expertise', what: 'What you know' },
-    opportunity: { label: 'Opportunity', hex: '#FF6FA0', dir: [0.5, -0.74, 0.12], spread: 0.42, depth: 0.2, sub: 'Goals, targets and what you are working toward', what: 'What could come next' },
-    action: { label: 'Action', hex: '#58D68D', dir: [0.74, 0.5, 0.3], spread: 0.46, depth: 0.18, sub: 'What you built and ran', what: 'What gets done' },
-    communication: { label: 'Communication', hex: '#B08CFF', dir: [-0.15, 0.08, 0.92], spread: 0.4, depth: 0.12, sub: 'Style and connected channels', what: 'How you say it, where it flows' },
+    identity: { label: 'Identity', hex: '#F08A3C', dir: [0.72, -0.28, 0.6], spread: 0.42, depth: 0.16, sub: 'People, organizations, tools and places', what: 'Who and what is in your world' },
+    memory: { label: 'Memory', hex: '#34D4C0', dir: [-0.18, -0.5, 0.84], spread: 0.5, depth: 0.32, sub: 'Conversations and documents, by Space', what: 'What happened, and where' },
+    knowledge: { label: 'Knowledge', hex: '#5AA0FF', dir: [0.5, 0.7, 0.4], spread: 0.56, depth: 0.18, sub: 'Topics and expertise', what: 'What you know' },
+    opportunity: { label: 'Opportunity', hex: '#FF6FA0', dir: [-0.9, 0.22, 0.36], spread: 0.4, depth: 0.2, sub: 'Goals, targets and what you are working toward', what: 'What could come next' },
+    action: { label: 'Action', hex: '#58D68D', dir: [-0.28, 0.86, 0.36], spread: 0.44, depth: 0.18, sub: 'What you built and ran', what: 'What gets done' },
+    communication: { label: 'Communication', hex: '#B08CFF', dir: [0.12, 0.08, 0.98], spread: 0.38, depth: 0.12, sub: 'Style and connected channels', what: 'How you say it, where it flows' },
   };
+
   const KIND = {
     topic: { cortex: 'knowledge', shape: 'circle' }, expertise: { cortex: 'knowledge', shape: 'hex' },
     entity: { cortex: 'identity', shape: 'square' },
@@ -52,45 +60,178 @@
   const rgba = (hex, a) => { const c = hexRgb(hex); return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + clamp(a, 0, 1).toFixed(3) + ')'; };
   const mix = (h1, h2, t) => { const a = hexRgb(h1), b = hexRgb(h2); return 'rgb(' + Math.round(lerp(a[0], b[0], t)) + ',' + Math.round(lerp(a[1], b[1], t)) + ',' + Math.round(lerp(a[2], b[2], t)) + ')'; };
   const mixA = (h1, h2, t, al) => { const a = hexRgb(h1), b = hexRgb(h2); return 'rgba(' + Math.round(lerp(a[0], b[0], t)) + ',' + Math.round(lerp(a[1], b[1], t)) + ',' + Math.round(lerp(a[2], b[2], t)) + ',' + clamp(al, 0, 1).toFixed(3) + ')'; };
+  const mixHex = (h1, h2, t) => { const a = hexRgb(h1), b = hexRgb(h2); return [Math.round(lerp(a[0], b[0], t)), Math.round(lerp(a[1], b[1], t)), Math.round(lerp(a[2], b[2], t))]; };
 
-  // ---------- The shape: a brain seen from the side, front toward +x, the viewer's side toward +z ----------
-  const gauss = (d, c, k) => Math.exp(-k * (1 - dot(d, c)));
-  const LOBES = [[norm([0.85, 0.35, 0.35]), 0.09, 4], [norm([0.85, 0.35, -0.35]), 0.09, 4], [norm([-0.3, 0.9, 0.3]), 0.07, 4], [norm([-0.3, 0.9, -0.3]), 0.07, 4], [norm([0.35, -0.6, 0.75]), 0.14, 5], [norm([0.35, -0.6, -0.75]), 0.14, 5], [norm([-0.95, 0.1, 0.25]), 0.06, 5], [norm([-0.95, 0.1, -0.25]), 0.06, 5]];
-  /** Radius of the surface in a unit direction: ellipsoid, lobes, a flatter underside, a midline groove and folds. */
+  // ---------- The body: cerebral hemispheres, temporal lobes, cerebellum, brainstem ----------
+  // A signed field, negative inside, built from smooth unions of the parts. The unit is half the brain's length.
+  const smin = (a, b, k) => { const h = clamp(0.5 + 0.5 * (b - a) / k, 0, 1); return lerp(b, a, h) - k * h * (1 - h); };
+  function ell(x, y, z, rx, ry, rz) { const qx = x / rx, qy = y / ry, qz = z / rz; const k0 = Math.sqrt(qx * qx + qy * qy + qz * qz); const ax = qx / rx, ay = qy / ry, az = qz / rz; const k1 = Math.sqrt(ax * ax + ay * ay + az * az) || 1e-6; return k0 * (k0 - 1) / k1; }
+  function capsule(x, y, z, a, b, r0, r1) {
+    const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2]; const apx = x - a[0], apy = y - a[1], apz = z - a[2];
+    const h = clamp((apx * abx + apy * aby + apz * abz) / (abx * abx + aby * aby + abz * abz), 0, 1);
+    const dx = apx - abx * h, dy = apy - aby * h, dz = apz - abz * h; return Math.sqrt(dx * dx + dy * dy + dz * dz) - lerp(r0, r1, h);
+  }
+  const PART = { cerebrum: 0, temporal: 1, cerebellum: 2, stem: 3 };
+  function body(x, y, z, want) {
+    const az = Math.abs(z);
+    const back = clamp(x, 0, 1), front = clamp(-x, 0, 1);
+    // Cerebrum: one hemisphere, mirrored. Lower and narrower toward the occipital pole, a little narrower at the frontal pole.
+    const hy = (y - 0.10 + 0.05 * back * back) / (1 - 0.16 * back * back);
+    const hz = (az - 0.19) / (1 - 0.12 * front * front);
+    const cer = ell(x + 0.02, hy, hz, 1.0, 0.60, 0.55);
+    // Temporal lobe: reaches forward under the lateral sulcus, its pole a little lower than its back.
+    const ty = (y + 0.35) - 0.14 * (x + 0.22);
+    const tem = ell(x + 0.22, ty, az - 0.40, 0.62, 0.22, 0.24);
+    // Cerebellum, tucked under the occipital lobe, wider than tall.
+    const cb = ell(x - 0.55, y + 0.50, z, 0.40, 0.25, 0.46);
+    // Brainstem, angled back as it descends, the pons a fuller ring near the top.
+    const stm = Math.min(capsule(x, y, z, [0.14, -0.30, 0], [0.30, -0.98, 0], 0.15, 0.10), ell(x - 0.20, y + 0.58, z, 0.17, 0.16, 0.17));
+    let f = smin(cer, tem, 0.07); f = smin(f, cb, 0.10); f = smin(f, stm, 0.09);
+    if (want) { const m = Math.min(cer, tem, cb, stm); want.part = m === cer ? PART.cerebrum : m === tem ? PART.temporal : m === cb ? PART.cerebellum : PART.stem; }
+    return f;
+  }
+  const CENTER = [-0.02, -0.02, 0];
+  /** Surface grooves as a factor on the radius: the fissure between the hemispheres, the lateral sulcus on each side, the groove over the cerebellum. */
+  function grooves(p, part) {
+    let g = 0;
+    if (part === PART.cerebrum && p[1] > -0.15) g += 0.055 * Math.exp(-Math.pow(p[2] / 0.05, 2)) * clamp((p[1] + 0.1) / 0.4, 0, 1);
+    if (part === PART.cerebrum || part === PART.temporal) { const sy = -0.12 + 0.22 * (p[0] + 0.25); const lat = clamp((Math.abs(p[2]) - 0.35) / 0.25, 0, 1); g += 0.05 * lat * Math.exp(-Math.pow((p[1] - sy) / 0.045, 2)) * clamp((p[0] + 0.85) / 0.2, 0, 1) * clamp((0.35 - p[0]) / 0.3, 0, 1); }
+    if (part === PART.cerebellum) g += 0.03 * Math.exp(-Math.pow(p[2] / 0.05, 2));
+    return 1 - g;
+  }
+  // Direction to radius: from the center, march inward along each direction to the outer surface and bisect the crossing.
+  // The body is symmetric, so half the directions are computed and mirrored. Built once, when the module loads.
+  const LAT = 128, LON = 256; const RAD = new Float32Array(LAT * LON); const PARTS = new Uint8Array(LAT * LON);
+  (function buildLookup() {
+    const w = {}; const f = (d, r) => body(CENTER[0] + d[0] * r, CENTER[1] + d[1] * r, CENTER[2] + d[2] * r);
+    let prev = 1.0; const step = 0.04;
+    for (let la = 0; la < LAT; la++) for (let lo = 0; lo < LON / 2; lo++) {
+      const phi = ((la + 0.5) / LAT - 0.5) * Math.PI, th = ((lo + 0.5) / LON - 0.5) * Math.PI * 2;
+      const d = [Math.cos(phi) * Math.cos(th), Math.sin(phi), Math.cos(phi) * Math.sin(th)];
+      let out = Math.min(1.6, prev + 0.12); while (out < 1.6 && f(d, out) < 0) out += step;
+      while (out > 0.05 && f(d, out) > 0) out -= step;
+      let a = out, b = out + step; for (let i = 0; i < 9; i++) { const m = (a + b) / 2; if (f(d, m) > 0) b = m; else a = m; }
+      const r = (a + b) / 2; const p = [CENTER[0] + d[0] * r, CENTER[1] + d[1] * r, CENTER[2] + d[2] * r]; body(p[0], p[1], p[2], w); prev = r;
+      const rr = r * grooves(p, w.part); const i1 = la * LON + lo, i2 = la * LON + (LON - 1 - lo);
+      RAD[i1] = rr; PARTS[i1] = w.part; RAD[i2] = rr; PARTS[i2] = w.part;
+    }
+    const src = Float32Array.from(RAD);
+    for (let la = 0; la < LAT; la++) for (let lo = 0; lo < LON; lo++) { let s = 0, n = 0; for (let dl = -1; dl <= 1; dl++) { const l2 = la + dl; if (l2 < 0 || l2 >= LAT) continue; for (let dg = -1; dg <= 1; dg++) { s += src[l2 * LON + ((lo + dg + LON) % LON)]; n++; } } RAD[la * LON + lo] = s / n; }
+  })();
+  /** Radius of the surface in a unit direction from the center. */
   function radius(d) {
-    let r = 1 / Math.sqrt((d[0] * d[0]) / 1.0 + (d[1] * d[1]) / (0.74 * 0.74) + (d[2] * d[2]) / (0.8 * 0.8));
-    let bump = 0; for (const L of LOBES) bump += L[1] * gauss(d, L[0], L[2]);
-    r *= 1 + bump;
-    if (d[1] < -0.35) r *= 1 - 0.14 * ((-d[1] - 0.35) / 0.65);              // the flatter underside
-    if (d[1] > 0.2) r *= 1 - 0.06 * Math.exp(-(d[2] * d[2]) / 0.012);        // the groove between the hemispheres
-    r *= 1 + 0.028 * Math.sin(9.5 * d[0] + 2.1 * Math.sin(5.3 * d[1])) * Math.cos(7.7 * d[2] + 1.7 * d[0]);   // folds
-    return r;
+    const laf = (Math.asin(clamp(d[1], -1, 1)) / Math.PI + 0.5) * LAT - 0.5, lof = (Math.atan2(d[2], d[0]) / (Math.PI * 2) + 0.5) * LON - 0.5;
+    const la0 = clamp(Math.floor(laf), 0, LAT - 1), la1 = clamp(la0 + 1, 0, LAT - 1), lo0 = ((Math.floor(lof) % LON) + LON) % LON, lo1 = (lo0 + 1) % LON;
+    const fa = clamp(laf - Math.floor(laf), 0, 1), fo = lof - Math.floor(lof);
+    return (RAD[la0 * LON + lo0] * (1 - fo) + RAD[la0 * LON + lo1] * fo) * (1 - fa) + (RAD[la1 * LON + lo0] * (1 - fo) + RAD[la1 * LON + lo1] * fo) * fa;
   }
-  const shell = (d) => { const r = radius(d); return [d[0] * r, d[1] * r, d[2] * r]; };
-  const inside = (d, k) => { const p = shell(d); return [p[0] * k, p[1] * k, p[2] * k]; };
-  /** A smooth tangent field on the surface, so fibers follow fold-like flow lines. */
-  function flow(d) {
-    const g = [Math.cos(3.1 * d[1] + 1.2) + 0.6 * Math.sin(2.2 * d[2]), Math.sin(2.7 * d[0]) * 0.8 + 0.5 * Math.cos(3.5 * d[2] + 0.4), Math.cos(2.9 * d[0] + 2.3 * d[1])];
-    return norm(cross(d, g));
+  function partOf(d) { const la = clamp(Math.round((Math.asin(clamp(d[1], -1, 1)) / Math.PI + 0.5) * LAT - 0.5), 0, LAT - 1), lo = ((Math.round((Math.atan2(d[2], d[0]) / (Math.PI * 2) + 0.5) * LON - 0.5) % LON) + LON) % LON; return PARTS[la * LON + lo]; }
+  const shell = (d) => { const r = radius(d); return [CENTER[0] + d[0] * r, CENTER[1] + d[1] * r, CENTER[2] + d[2] * r]; };
+  const inside = (d, k) => { const r = radius(d) * k; return [CENTER[0] + d[0] * r, CENTER[1] + d[1] * r, CENTER[2] + d[2] * r]; };
+  const dirOf = (p) => norm([p[0] - CENTER[0], p[1] - CENTER[1], p[2] - CENTER[2]]);
+  /** The surface normal, from the radius field. */
+  function normalAt(d) {
+    const e = 0.01; const p = shell(d);
+    const u = norm(cross(d, Math.abs(d[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), v = cross(d, u);
+    const pu = shell(norm([d[0] + u[0] * e, d[1] + u[1] * e, d[2] + u[2] * e])), pv = shell(norm([d[0] + v[0] * e, d[1] + v[1] * e, d[2] + v[2] * e]));
+    const n = norm(cross([pu[0] - p[0], pu[1] - p[1], pu[2] - p[2]], [pv[0] - p[0], pv[1] - p[1], pv[2] - p[2]]));
+    return dot(n, d) < 0 ? [-n[0], -n[1], -n[2]] : n;
   }
+  /** The outline of the body as seen along a view direction: for each screen angle, the surface point that reaches farthest. */
+  function silhouette(right, up, view, count) {
+    const out = [];
+    for (let k = 0; k < count; k++) {
+      const a = Math.PI * 2 * k / count; const ca = Math.cos(a), sa = Math.sin(a);
+      const u = [right[0] * ca + up[0] * sa, right[1] * ca + up[1] * sa, right[2] * ca + up[2] * sa];
+      const at = (t) => { const ct = Math.cos(t), s = Math.sin(t); const p = shell([u[0] * ct + view[0] * s, u[1] * ct + view[1] * s, u[2] * ct + view[2] * s]); return { p, e: (p[0] - CENTER[0]) * u[0] + (p[1] - CENTER[1]) * u[1] + (p[2] - CENTER[2]) * u[2] }; };
+      let best = at(0), bt = 0;
+      for (let ti = -8; ti <= 8; ti++) { if (!ti) continue; const t = ti * 0.1; const r = at(t); if (r.e > best.e) { best = r; bt = t; } }
+      for (let ti = -4; ti <= 4; ti++) { if (!ti) continue; const t = bt + ti * 0.02; const r = at(t); if (r.e > best.e) best = r; }   // refine around the coarse best
+      out.push(best.p);
+    }
+    return out;
+  }
+  /** Which cortex a direction belongs to; the same on both hemispheres. */
   function cortexAt(d) {
-    let best = null, bd = -2;
-    for (const k of Object.keys(CORTEX)) { const s = dot(d, norm(CORTEX[k].dir)); if (s > bd) { bd = s; best = k; } }
+    const m = [d[0], d[1], Math.abs(d[2])]; let best = null, bd = -2;
+    for (const k of Object.keys(CORTEX)) { const s = dot(m, norm(CORTEX[k].dir)); if (s > bd) { bd = s; best = k; } }
     return best;
   }
-  /** The tissue: fibers along the surface and motes just under it, generated once and colored by cortex. */
-  function tissue(fiberCount, moteCount) {
+
+  // ---------- Gyri: the folds of the cortex, as evenly spaced flow lines over the surface ----------
+  function noise3(x, y, z) { return Math.sin(2.1 * x + 1.3 * y - 0.7 * z + 0.4) + 0.7 * Math.sin(-1.4 * x + 2.6 * y + 1.9 * z + 2.1) + 0.5 * Math.sin(3.3 * x - 1.1 * y + 2.4 * z + 4.0) + 0.35 * Math.sin(1.7 * x + 3.9 * y - 3.1 * z + 1.1); }
+  /** The fold direction at a surface point: front to back along the sides, turned by a smooth field; the cerebellum's folia run across; the stem runs down. */
+  function fold(p, d, part) {
+    const n = normalAt(d);
+    const base = part === PART.cerebellum ? [0, 0, 1] : part === PART.stem ? [0, 1, 0] : [1, 0, 0];
+    let t = [base[0] - n[0] * dot(base, n), base[1] - n[1] * dot(base, n), base[2] - n[2] * dot(base, n)];
+    if (Math.hypot(t[0], t[1], t[2]) < 0.05) t = cross(n, [0, 0, 1]);
+    t = norm(t); const b = cross(n, t);
+    const ang = (part === PART.cerebellum ? 0.25 : 1.15) * noise3(p[0] * 2.4, p[1] * 2.4, p[2] * 2.4);
+    const c = Math.cos(ang), s = Math.sin(ang);
+    return [t[0] * c + b[0] * s, t[1] * c + b[1] * s, t[2] * c + b[2] * s];
+  }
+  /**
+   * Evenly spaced flow lines over the surface (Jobard and Lefer): each gyrus is traced until it comes within half a
+   * spacing of another; new gyri are seeded one spacing beside finished ones. The big fissures are blockers, so gyri
+   * stop at them instead of crossing. Cerebellar folia are finer. Returns short chunks, each with its own normal,
+   * so a long fold that wraps around the body can fade with the side it is on.
+   */
+  function gyri(dsep) {
+    const step = dsep / 3, maxLen = 80, minLen = 4; const r = rand(9001);
+    const cell = dsep; const grid = new Map(); const key = (p) => Math.floor(p[0] / cell) + ',' + Math.floor(p[1] / cell) + ',' + Math.floor(p[2] / cell);
+    const put = (p, id) => { const k = key(p); let a = grid.get(k); if (!a) { a = []; grid.set(k, a); } a.push([p, id]); };
+    const near = (p, dist, skipId) => {
+      const cx = Math.floor(p[0] / cell), cy = Math.floor(p[1] / cell), cz = Math.floor(p[2] / cell); const d2 = dist * dist;
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (let k = -1; k <= 1; k++) { const a = grid.get((cx + i) + ',' + (cy + j) + ',' + (cz + k)); if (!a) continue; for (const [q, id] of a) { if (id === skipId) continue; const dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2]; if (dx * dx + dy * dy + dz * dz < d2) return true; } }
+      return false;
+    };
+    for (let x = -0.98; x <= 0.98; x += step) put(shell(norm([x - CENTER[0], 1.2, 0])), -1);
+    for (const s of [-1, 1]) for (let x = -0.85; x <= 0.35; x += step) { const y = -0.12 + 0.22 * (x + 0.25); put(shell(norm([x - CENTER[0], y - CENTER[1], s * 1.4])), -1); }
+    const partAt = (p) => partOf(dirOf(p));
+    const spacing = (part) => part === PART.cerebellum ? 0.55 : part === PART.stem ? 1.4 : 1;
+    const curves = []; let nextId = 0;
+    const trace = (p0, sign) => {
+      const pts = []; let p = p0; const id = nextId; const part0 = partAt(p0); const sep = dsep * spacing(part0);
+      for (let i = 0; i < maxLen; i++) {
+        const d = dirOf(p); const part = partAt(p); if (part !== part0 && i > 0) break;
+        const f = fold(p, d, part); const on = shell(dirOf([p[0] + f[0] * step * sign, p[1] + f[1] * step * sign, p[2] + f[2] * step * sign]));
+        if (i > 0 && near(on, sep * 0.5, id)) break;
+        if (pts.length > 6) { const back = pts[pts.length - 6]; if (Math.hypot(on[0] - back[0], on[1] - back[1], on[2] - back[2]) < sep * 0.5) break; }
+        pts.push(on); p = on;
+      }
+      return pts;
+    };
+    const seeds = []; const randDir = () => { const u = r() * 2 - 1, t = r() * Math.PI * 2, s = Math.sqrt(1 - u * u); return [s * Math.cos(t), u, s * Math.sin(t)]; };
+    for (let i = 0; i < 40; i++) seeds.push(shell(randDir()));
+    let guard = 0;
+    while (seeds.length && guard++ < 20000) {
+      const s = seeds.shift(); const part = partAt(s); const sep = dsep * spacing(part);
+      if (near(s, sep * 0.9, -2)) continue;
+      const id = nextId; const fwd = trace(s, 1); const bwd = trace(s, -1);
+      const pts = bwd.reverse().concat([s], fwd);
+      if (pts.length < minLen) { put(s, -1); continue; }
+      nextId++;
+      for (const p of pts) put(p, id);
+      curves.push({ pts, part });
+      for (let i = 1; i < pts.length - 1; i += 2) { const p = pts[i]; const d = dirOf(p); const n = normalAt(d); const t = norm([pts[i + 1][0] - pts[i - 1][0], pts[i + 1][1] - pts[i - 1][1], pts[i + 1][2] - pts[i - 1][2]]); const b = cross(n, t); for (const sg of [-1, 1]) seeds.push(shell(dirOf([p[0] + b[0] * sep * sg, p[1] + b[1] * sep * sg, p[2] + b[2] * sep * sg]))); }
+    }
+    // Chunks of at most 12 points, each with the normal and cortex at its middle.
+    const chunks = [];
+    for (const c of curves) for (let i = 0; i < c.pts.length - 1; i += 11) {
+      const pts = c.pts.slice(i, Math.min(c.pts.length, i + 12)); if (pts.length < 2) continue;
+      const mid = pts[Math.floor(pts.length / 2)]; const d = dirOf(mid);
+      chunks.push({ pts, part: c.part, n: normalAt(d), cortex: cortexAt(d), phase: r() * Math.PI * 2, w: 0.85 + r() * 0.3 });
+    }
+    return chunks;
+  }
+  /** The tissue: gyri over the surface and motes just under it, generated once and colored by cortex. */
+  function tissue(dsep, moteCount) {
     const r = rand(1234567);
     const randDir = () => { const u = r() * 2 - 1, t = r() * Math.PI * 2, s = Math.sqrt(1 - u * u); return [s * Math.cos(t), u, s * Math.sin(t)]; };
-    const fibers = [];
-    for (let i = 0; i < fiberCount; i++) {
-      let d = randDir(); const depth = 0.9 + r() * 0.1; const pts = []; const steps = 10 + Math.floor(r() * 10); const sign = r() < 0.5 ? -1 : 1;
-      for (let k = 0; k < steps; k++) { pts.push(inside(d, depth)); const f = flow(d); d = norm([d[0] + f[0] * 0.075 * sign, d[1] + f[1] * 0.075 * sign, d[2] + f[2] * 0.075 * sign]); }
-      fibers.push({ pts, cortex: cortexAt(pts[Math.floor(pts.length / 2)].map((v, j) => v)), a: 0.35 + r() * 0.5, w: 0.6 + r() * 0.9, phase: r() * Math.PI * 2 });
-    }
     const motes = [];
-    for (let i = 0; i < moteCount; i++) { const d = randDir(); const k = 0.72 + Math.pow(r(), 0.5) * 0.28; motes.push({ p: inside(d, k), cortex: cortexAt(d), a: 0.25 + r() * 0.75, s: 0.6 + r() * 1.6, phase: r() * Math.PI * 2, tw: 0.4 + r() * 1.2 }); }
-    return { fibers, motes };
+    for (let i = 0; i < moteCount; i++) { const d = randDir(); const k = 0.7 + Math.pow(r(), 0.5) * 0.28; motes.push({ p: inside(d, k), cortex: cortexAt(d), a: 0.25 + r() * 0.75, s: 0.6 + r() * 1.6, phase: r() * Math.PI * 2, tw: 0.4 + r() * 1.2 }); }
+    return { gyri: gyri(dsep), motes };
   }
 
   /** How settled a learned node is at time t: recurrence and age both move it from the conversation that taught it into its cortex. */
@@ -122,6 +263,8 @@
     return { homes, spaceCenter };
   }
 
+  const VIEW = { yaw: 0.38, pitch: 0.16 };   // the resting view: from the front left, a little above, so the lobes read at a glance
+
   function mount(container, model, opts) {
     opts = opts || {};
     let nodes = [], edges = [], byId = {}, homes = {}, spaceCenter = {}, spaces = [], org = { name: '' };
@@ -131,9 +274,9 @@
     const ctx = canvas.getContext('2d');
     const now = () => Date.now();
     const small = (container.getBoundingClientRect().width || 800) < 640;
-    const T = tissue(small ? 220 : 420, small ? 900 : 1900);
-    let lod = 1;   // 1 draws everything, 2 every second mote, 3 every third: chosen from the measured frame time
-    const st = { lattice: opts.lattice !== false, density: opts.density || 'std', route: null, yaw: -0.62, pitch: 0.16, zoom: 1, t: now(), playing: false, labels: opts.labels !== false, cortices: new Set(Object.keys(CORTEX)), query: '', hover: null, selected: null, focus: null, emerging: false, idle: !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches), lastPointer: 0, w: 0, h: 0, dpr: 1, stars: null };
+    const T = tissue(small ? 0.095 : 0.078, small ? 350 : 800);
+    let lod = 1;   // 1 draws everything, 2 every second mote and no glow pass, 3 every third: chosen from the measured frame time
+    const st = { lattice: opts.lattice !== false, density: opts.density || 'std', route: null, yaw: VIEW.yaw, pitch: VIEW.pitch, zoom: 1, sway: 0, t: now(), playing: false, labels: opts.labels !== false, cortices: new Set(Object.keys(CORTEX)), query: '', hover: null, selected: null, focus: null, emerging: false, idle: !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches), lastPointer: 0, w: 0, h: 0, dpr: 1, stars: null, signals: [], nextSignal: 0 };
     const listeners = []; const on = (el, ev, fn, o) => { el.addEventListener(ev, fn, o); listeners.push(() => el.removeEventListener(ev, fn, o)); };
     // The tissue is drawn at half resolution on its own layer (soft light does not need every pixel), then composited.
     const layer = document.createElement('canvas'); const lctx = layer.getContext('2d'); const HALF = 0.5;
@@ -141,6 +284,8 @@
     const sprites = {};
     for (const k of Object.keys(CORTEX)) { const s = document.createElement('canvas'); s.width = s.height = 32; const g = s.getContext('2d'); const gr = g.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, rgba(CORTEX[k].hex, 0.9)); gr.addColorStop(0.35, rgba(CORTEX[k].hex, 0.35)); gr.addColorStop(1, rgba(CORTEX[k].hex, 0)); g.fillStyle = gr; g.fillRect(0, 0, 32, 32); sprites[k] = s; }
     const white = (() => { const s = document.createElement('canvas'); s.width = s.height = 32; const g = s.getContext('2d'); const gr = g.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(0.4, 'rgba(210,225,255,0.35)'); gr.addColorStop(1, 'rgba(200,220,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 32, 32); return s; })();
+    // Gyrus colors: the cortex hue lifted toward pale light, so the whole body reads as one tissue with tinted regions.
+    const GYRUS = {}; for (const k of Object.keys(CORTEX)) GYRUS[k] = mixHex(CORTEX[k].hex, '#DCE8FF', 0.42);
 
     function load(m, announce) {
       const prev = new Set(nodes.map(n => n.id));
@@ -162,6 +307,11 @@
       layer.width = Math.max(1, Math.floor(w * HALF)); layer.height = Math.max(1, Math.floor(h * HALF));
       const r2 = rand(7); st.stars = Array.from({ length: 160 }, () => [r2() * w, r2() * h, 0.4 + r2() * 1.1, 0.12 + r2() * 0.45]);
       draw();
+    }
+    /** The camera basis for the current yaw and pitch: screen right, screen up, and the direction toward the viewer. */
+    function basis() {
+      const cy = Math.cos(st.yaw), sy = Math.sin(st.yaw), cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
+      return { right: [cy, 0, sy], up: [sy * sp, cp, -cy * sp], view: [-sy * cp, sp, cy * cp] };
     }
     function project(p) {
       const cy = Math.cos(st.yaw), sy = Math.sin(st.yaw), cp = Math.cos(st.pitch), sp = Math.sin(st.pitch);
@@ -188,25 +338,62 @@
       c.fillStyle = g; c.fillRect(0, 0, st.w, st.h);
       for (const s of st.stars) { c.fillStyle = 'rgba(200,215,240,' + s[3].toFixed(2) + ')'; c.beginPath(); c.arc(s[0], s[1], s[2], 0, Math.PI * 2); c.fill(); }
     }
-    /** The tissue, in additive light: cortex fields, fibers along the folds, motes under the surface, the core. */
+    /** Signals: points of light that run along front-facing gyri, a few at a time, so the surface is visibly working. */
+    function stepSignals(ts, view) {
+      st.signals = st.signals.filter(s => ts - s.t0 < s.dur);
+      const want = st.density === 'min' ? 3 : st.density === 'max' ? 14 : 8;
+      if (st.signals.length < want && ts > st.nextSignal) {
+        for (let tries = 0; tries < 12; tries++) { const g = T.gyri[Math.floor(Math.random() * T.gyri.length)]; if (dot(g.n, view) > 0.35 && g.pts.length >= 6 && dimOf(g.cortex) === 1) { st.signals.push({ g, t0: ts, dur: 1100 + Math.random() * 1600, dir: Math.random() < 0.5 ? 1 : -1 }); break; } }
+        st.nextSignal = ts + 140 + Math.random() * 260;
+      }
+    }
+    /** The tissue, in additive light: the body, cortex fields, gyri, signals, motes under the surface, the core, the rim. */
     function drawTissue(ts) {
+      const B = basis(); const sil = silhouette(B.right, B.up, B.view, 200).map(project);
+      // The body: a dark, faintly lit volume the light sits in, so the brain reads as a solid against the stage.
+      const core = project(CENTER);
+      ctx.beginPath(); sil.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); }); ctx.closePath();
+      const bodyGrad = ctx.createRadialGradient(core.x - core.base * 0.15, core.y - core.base * 0.2, core.base * 0.1, core.x, core.y, core.base * 1.05);
+      bodyGrad.addColorStop(0, 'rgba(34,58,104,0.92)'); bodyGrad.addColorStop(0.7, 'rgba(22,40,76,0.9)'); bodyGrad.addColorStop(1, 'rgba(16,30,60,0.86)');
+      ctx.fillStyle = bodyGrad; ctx.fill();
       const c = lctx; c.setTransform(HALF, 0, 0, HALF, 0, 0); c.clearRect(0, 0, st.w, st.h); c.globalCompositeOperation = 'lighter';
       // Cortex fields: soft light where each layer lives.
       for (const key of Object.keys(CORTEX)) {
         const C = CORTEX[key]; const d = norm(C.dir); const a = project(inside(d, 1 - C.depth * 0.5));
         const facing = clamp((a.z + 0.7) / 1.3, 0.2, 1);
         const rad = C.spread * 1.7 * a.base * a.s * 0.62;
-        const gr = c.createRadialGradient(a.x, a.y, 0, a.x, a.y, rad); gr.addColorStop(0, rgba(C.hex, 0.22 * facing * dimOf(key))); gr.addColorStop(0.5, rgba(C.hex, 0.07 * facing * dimOf(key))); gr.addColorStop(1, rgba(C.hex, 0));
+        const gr = c.createRadialGradient(a.x, a.y, 0, a.x, a.y, rad); gr.addColorStop(0, rgba(C.hex, 0.16 * facing * dimOf(key))); gr.addColorStop(0.5, rgba(C.hex, 0.05 * facing * dimOf(key))); gr.addColorStop(1, rgba(C.hex, 0));
         c.fillStyle = gr; c.beginPath(); c.arc(a.x, a.y, rad, 0, Math.PI * 2); c.fill();
       }
-      // Fibers.
+      // Gyri: two passes, a soft glow under a fine bright line, faded by how much each fold faces the viewer.
       c.lineCap = 'round'; c.lineJoin = 'round';
-      for (let i = 0; i < T.fibers.length; i++) {
-        const f = T.fibers[i]; if ((lod > 2 || st.density === 'min') && i % 2) continue;
-        const pts = f.pts.map(project); const zm = pts.reduce((s, p) => s + p.z, 0) / pts.length; const depth = clamp((zm + 1.1) / 2.1, 0.08, 1);
-        const pulse = 0.75 + 0.25 * Math.sin(ts / 1400 + f.phase);
-        c.strokeStyle = rgba(CORTEX[f.cortex].hex, f.a * 0.5 * depth * depth * pulse * dimOf(f.cortex)); c.lineWidth = f.w * (0.6 + 0.6 * depth);
-        c.beginPath(); c.moveTo(pts[0].x, pts[0].y); for (let k = 1; k < pts.length; k++) c.lineTo(pts[k].x, pts[k].y); c.stroke();
+      const px = core.base * core.s; const glowPass = lod < 2 && st.density !== 'min';
+      const G = T.gyri; const proj = new Array(G.length);
+      for (let i = 0; i < G.length; i++) {
+        const g = G[i]; const facing = dot(g.n, B.view); if (facing < -0.3) { proj[i] = null; continue; }
+        proj[i] = { pts: g.pts.map(project), vis: facing < 0 ? 0.05 * (1 + facing / 0.3) : 0.16 + 0.84 * Math.min(1, facing * 1.25) };
+      }
+      const strokeAll = (width, alphaScale) => {
+        for (let i = 0; i < G.length; i++) {
+          const g = G[i], P = proj[i]; if (!P) continue;
+          const col = GYRUS[g.cortex]; const pulse = 0.86 + 0.14 * Math.sin(ts / 1700 + g.phase);
+          c.strokeStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + (P.vis * pulse * alphaScale * dimOf(g.cortex)).toFixed(3) + ')';
+          c.lineWidth = width * g.w * (g.part === PART.cerebellum ? 0.6 : 1);
+          c.beginPath(); c.moveTo(P.pts[0].x, P.pts[0].y); for (let k = 1; k < P.pts.length; k++) c.lineTo(P.pts[k].x, P.pts[k].y); c.stroke();
+        }
+      };
+      if (glowPass) strokeAll(px * 0.046, 0.12);
+      strokeAll(Math.max(1.1, px * 0.0075), 0.7);
+      // Signals along the gyri.
+      stepSignals(ts, B.view);
+      for (const s of st.signals) {
+        const P = proj[G.indexOf(s.g)]; if (!P) continue;
+        const u = clamp((ts - s.t0) / s.dur, 0, 1); const f = (s.dir > 0 ? u : 1 - u) * (P.pts.length - 1); const i0 = Math.floor(f), i1 = Math.min(P.pts.length - 1, i0 + 1), k = f - i0;
+        const x = lerp(P.pts[i0].x, P.pts[i1].x, k), y = lerp(P.pts[i0].y, P.pts[i1].y, k); const fade = Math.sin(u * Math.PI);
+        const col = GYRUS[s.g.cortex]; c.strokeStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + (0.9 * fade).toFixed(3) + ')'; c.lineWidth = Math.max(1.6, px * 0.012);
+        const last = P.pts.length - 1; const tail = clamp(s.dir > 0 ? i0 - 4 : i1 + 4, 0, last), head = s.dir > 0 ? i0 : i1;   // the trail runs from the tail to the head, then to the light
+        c.beginPath(); c.moveTo(P.pts[tail].x, P.pts[tail].y); for (let j = tail; j !== head; j += s.dir) c.lineTo(P.pts[j].x, P.pts[j].y); c.lineTo(P.pts[head].x, P.pts[head].y); c.lineTo(x, y); c.stroke();
+        const sz = 5 + 3 * fade; c.globalAlpha = fade; c.drawImage(white, x - sz, y - sz, sz * 2, sz * 2); c.globalAlpha = 1;
       }
       // Motes.
       for (let i = 0; i < T.motes.length; i++) {
@@ -214,16 +401,20 @@
         const p = project(m.p); const depth = clamp((p.z + 1.1) / 2.1, 0.05, 1);
         const tw = 0.7 + 0.3 * Math.sin(ts / (900 * m.tw) + m.phase);
         const sz = (2.2 + 5.5 * m.s) * (0.5 + 0.7 * depth) * p.s * Math.min(1.3, st.zoom);
-        c.globalAlpha = m.a * depth * depth * tw * dimOf(m.cortex);
+        c.globalAlpha = m.a * depth * depth * tw * dimOf(m.cortex) * 0.8;
         c.drawImage(sprites[m.cortex], p.x - sz, p.y - sz, sz * 2, sz * 2);
       }
       c.globalAlpha = 1;
       // The identity core: the organization at the center of everything it governs.
-      const core = project([0.02, -0.02, 0]); const cr = 0.14 * core.base * core.s;
+      const cr = 0.14 * core.base * core.s;
       const gr = c.createRadialGradient(core.x, core.y, 0, core.x, core.y, cr * 2.4); gr.addColorStop(0, 'rgba(255,236,190,0.55)'); gr.addColorStop(0.25, 'rgba(255,200,120,0.22)'); gr.addColorStop(1, 'rgba(255,190,110,0)');
       c.fillStyle = gr; c.beginPath(); c.arc(core.x, core.y, cr * 2.4, 0, Math.PI * 2); c.fill();
       c.globalCompositeOperation = 'source-over';
-      ctx.globalCompositeOperation = 'lighter'; ctx.imageSmoothingEnabled = true; ctx.drawImage(layer, 0, 0, layer.width, layer.height, 0, 0, st.w, st.h); ctx.globalCompositeOperation = 'source-over';
+      ctx.globalCompositeOperation = 'lighter'; ctx.imageSmoothingEnabled = true; ctx.drawImage(layer, 0, 0, layer.width, layer.height, 0, 0, st.w, st.h);
+      // The rim: the body's outline from this angle, a soft glow under a fine line.
+      ctx.beginPath(); sil.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); }); ctx.closePath();
+      ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(120,170,255,0.11)'; ctx.lineWidth = 12; ctx.stroke(); ctx.strokeStyle = 'rgba(205,225,255,0.5)'; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
       return core;
     }
     /** Footprints: what came in lately, streaming from the edge into Memory. */
@@ -270,13 +461,13 @@
       const hop = Math.min(pts.length - 1, Math.floor(el / per)); const seg = clamp((el - hop * per) / per, 0, 1);
       const a = pts[hop], b = pts[Math.min(pts.length - 1, hop + 1)]; const x = el >= total ? pts[pts.length - 1].p.x : lerp(a.p.x, b.p.x, seg), y = el >= total ? pts[pts.length - 1].p.y : lerp(a.p.y, b.p.y, seg);
       const sz = 14 + 4 * Math.sin(ts / 120); c.globalAlpha = fade; c.drawImage(white, x - sz, y - sz, sz * 2, sz * 2); c.globalAlpha = 1;
-      for (let i = 0; i <= Math.min(pts.length - 1, hop + (el >= total ? 0 : 0)); i++) { const q = pts[i]; c.globalAlpha = 0.7 * fade; c.drawImage(white, q.p.x - q.r * 2.2, q.p.y - q.r * 2.2, q.r * 4.4, q.r * 4.4); }
+      for (let i = 0; i <= Math.min(pts.length - 1, hop); i++) { const q = pts[i]; c.globalAlpha = 0.7 * fade; c.drawImage(white, q.p.x - q.r * 2.2, q.p.y - q.r * 2.2, q.r * 4.4, q.r * 4.4); }
       c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
       if (st.labels) {
         c.font = '600 10.5px ' + font(); c.textAlign = 'left'; c.textBaseline = 'top';
-        const head = 'DISCOVER \u00b7 ' + (el >= total ? 'route complete' : 'traversing') + ' \u00b7 IGL ' + (el >= total ? 'allowed' : 'checking hop ' + (hop + 1) + ' of ' + (pts.length - 1));
+        const head = 'DISCOVER · ' + (el >= total ? 'route complete' : 'traversing') + ' · IGL ' + (el >= total ? 'allowed' : 'checking hop ' + (hop + 1) + ' of ' + (pts.length - 1));
         c.fillStyle = 'rgba(255,236,190,' + (0.95 * fade).toFixed(2) + ')'; c.fillText(head, 14, st.h - 40);
-        if (R.label) { c.font = '500 11px ' + font(); c.fillStyle = 'rgba(236,241,250,' + (0.9 * fade).toFixed(2) + ')'; c.fillText(R.label.length > 90 ? R.label.slice(0, 89) + '\u2026' : R.label, 14, st.h - 24); }
+        if (R.label) { c.font = '500 11px ' + font(); c.fillStyle = 'rgba(236,241,250,' + (0.9 * fade).toFixed(2) + ')'; c.fillText(R.label.length > 90 ? R.label.slice(0, 89) + '…' : R.label, 14, st.h - 24); }
       }
     }
     function drawCortexLabels(core) {
@@ -402,7 +593,7 @@
     let raf = 0, lastFrame = 0, playStart = 0, onScreen = true;
     function frame(ts) {
       raf = 0; const dt = lastFrame ? Math.min(50, ts - lastFrame) : 16; lastFrame = ts;
-      if (st.idle && Date.now() - st.lastPointer > 2500) st.yaw += 0.00009 * dt;
+      if (st.idle && Date.now() - st.lastPointer > 2500) { st.sway += 0.00020 * dt; st.yaw = VIEW.yaw + 0.24 * Math.sin(st.sway); st.pitch = VIEW.pitch + 0.05 * Math.sin(st.sway * 0.7); }
       if (st.playing) { const span = Math.max(1, now() - first); const k = clamp((ts - playStart) / 16000, 0, 1); st.t = first + span * k; if (k >= 1) { st.playing = false; st.t = now(); if (opts.onTime) opts.onTime(st.t, false); } else if (opts.onTime) opts.onTime(st.t, true); }
       draw();
       if (onScreen && !document.hidden) raf = requestAnimationFrame(frame);
@@ -454,7 +645,7 @@
       /** The route a conversation taught: the thread, then every node it added, heaviest first. */
       traceThread: (threadId, o) => { const id = 'thread:' + threadId; if (!byId[id]) return false; const taught = nodes.filter(n => n.origin === threadId && n.kind !== 'intent').sort((a, b) => b.weight - a.weight).slice(0, 7).map(n => n.id); return api.traverse([id].concat(taught), o); },
       select: (id) => { st.selected = id || null; kick(); },
-      resetView: () => { st.yaw = -0.62; st.pitch = 0.16; st.zoom = 1; st.idle = true; st.lastPointer = 0; kick(); },
+      resetView: () => { st.yaw = VIEW.yaw; st.pitch = VIEW.pitch; st.zoom = 1; st.sway = 0; st.idle = true; st.lastPointer = 0; kick(); },
       cortexOf: (n) => KIND[n.kind] ? KIND[n.kind].cortex : null,
       settled: (n) => settledAt(n, st.t),
       emerging: (n) => emerging(n, st.t),
