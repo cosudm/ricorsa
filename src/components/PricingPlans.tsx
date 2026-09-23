@@ -30,7 +30,7 @@ export type PricingPlansProps = {
   signupHref: string;
 };
 
-const money = (n: number) => n % 1 === 0 ? `$${n}` : `$${n.toFixed(2)}`;
+const money = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
 /**
  * The plan cards with the billing toggle. Annual is the default: the card shows what the year costs per month
@@ -64,7 +64,7 @@ export function PricingPlans({ plans, signedIn, current, currentCycle, currentNa
           return (
             <div key={p.key} className={'plan' + (p.hot ? ' hot' : '')}>
               <div className="name">{p.name}{p.hot && <span className="tag">Most popular</span>}{onThisPlan && <span className="tag current">Current{currentCycle ? `, ${currentCycle}` : ''}</span>}</div>
-              <div className="price">${shown}{p.priceMarker && <sup className="mark" title={p.licensing}>{p.priceMarker}</sup>}<small>/ month{annual ? '*' : ''}</small></div>
+              <div className="price">{money(shown)}{p.priceMarker && <sup className="mark" title={p.licensing}>{p.priceMarker}</sup>}<small>/ month{annual ? '*' : ''}</small></div>
               {price != null && (
                 <div className="trial">{trialDays > 0 ? `${trialDays}-day free trial, then ${money(price)} ${per}` : `${money(price)} ${per}, billed from today`}</div>
               )}

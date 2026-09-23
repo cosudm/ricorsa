@@ -9,18 +9,26 @@ const now = () => new Date();
 const ts = (name: string) => integer(name, { mode: 'timestamp_ms' });
 const tsNow = (name: string) => ts(name).notNull().default(sql`(strftime('%s','now') * 1000)`).$defaultFn(now);
 
+/** Per-account allowances the console may set above the plan's, with who set them and why (operator information). */
+export type Allowance = { buildsPerMonth?: number; ideaSetsPerMonth?: number; questionsPerMonth?: number; questionsPerDay?: number; researchPerMonth?: number; note?: string; setBy?: string; setAt?: number };
+
 /** One row per signed-in person. `id` is the Auth0 subject (`sub`). */
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email'),
   name: text('name'),
   picture: text('picture'),
-  plan: text('plan').notNull().default('free'), // free | pro | team
+  plan: text('plan').notNull().default('free'), // free | essentials | professional | enterprise (pro | team on rows from before September 2026)
   paypalSubscriptionId: text('paypal_subscription_id'),
   subscriptionStatus: text('subscription_status'), // ACTIVE | SUSPENDED | CANCELLED | EXPIRED | APPROVAL_PENDING
   planRenewsAt: ts('plan_renews_at'),
   /** How the current subscription bills: monthly or annual (null for the free state and for console grants that did not say). */
   billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
+  /**
+   * Monthly allowances set by hand from the Manager Console, above the plan's own (an annual account that bought
+   * more app versions mid-year, a pilot). Only the keys given are overridden; null means the plan's numbers apply.
+   */
+  allowance: text('allowance', { mode: 'json' }).$type<Allowance | null>(),
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull().$defaultFn(() => ({})).default(sql`'{}'`),
   createdAt: tsNow('created_at'),
   lastSeenAt: tsNow('last_seen_at'),

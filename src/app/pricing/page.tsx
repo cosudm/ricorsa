@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { PricingPlans, type PlanCard, type Cycle } from '@/components/PricingPlans';
 import { viewer } from '@/lib/viewer';
-import { PLANS, OFFERED_PLANS, TRIAL_DAYS, ANNUAL_MONTHS_FREE, paypalPlanId, normalizePlanKey, monthlyEquivalent, annualSaving, type PlanKey } from '@/lib/plans';
+import { PLANS, OFFERED_PLANS, TRIAL_DAYS, ANNUAL_MONTHS_FREE, paypalPlanId, normalizePlanKey, monthlyEquivalent, annualSaving, usd, type PlanKey } from '@/lib/plans';
 import { paypalProvisioned } from '@/lib/paypal-setup';
 import { currentUser } from '@/lib/session';
 import { trialEligible } from '@/lib/billing';
@@ -41,7 +41,7 @@ export default async function Pricing({ searchParams }: { searchParams: Promise<
     priceMarker: p.priceMarker, licensing: p.licensing,
     planIds: { monthly: paypalPlanId(p.key, provisioned, 'monthly', trial), annual: paypalPlanId(p.key, provisioned, 'annual', trial) },
   }));
-  const yearPrices = OFFERED_PLANS.map(k => PLANS[k].priceUsdYear).filter((n): n is number => !!n).map(n => `$${n}`);
+  const yearPrices = OFFERED_PLANS.map(k => PLANS[k].priceUsdYear).filter((n): n is number => !!n).map(usd);
   return (
     <>
       <SiteNav signedIn={!!v} />

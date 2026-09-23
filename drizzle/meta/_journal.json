@@ -99,6 +99,13 @@
       "when": 1790194913520,
       "tag": "0013_subscription-billing-cycle",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790196032505,
+      "tag": "0014_allowance",
+      "breakpoints": true
     }
   ]
 }

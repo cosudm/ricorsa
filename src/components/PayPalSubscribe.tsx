@@ -65,7 +65,7 @@ export function PayPalSubscribe({ planId, planKey, planName, clientId, userId, d
 
   if (disabled) return null;
   const name = planName || planKey;
-  const amount = priceUsd ? `$${priceUsd}` : '';
+  const amount = priceUsd ? '$' + priceUsd.toLocaleString('en-US') : '';
   const per = cycle === 'annual' ? 'a year' : 'a month';
   const billing = trialDays > 0
     ? `Nothing is charged for ${trialDays} days; then ${name} is billed ${amount ? amount + ' ' : ''}${per} by PayPal.`

@@ -122,7 +122,7 @@ export const PRODUCTS: Product[] = [
       { title: 'Supply chain and fleet', text: 'Corporate identities and freight manifests on moving lanes and geofenced hubs.' },
       { title: 'Fraud and risk', text: 'Financial entities and transaction behavior linked to locations and high-risk zones.' },
       { title: 'Cities and planning', text: 'Demographic, commercial and sensor data tied to zoning boundaries and transit corridors.' },
-      { title: 'Licensing', text: 'Seat licenses, 60 seats or more at $85 per seat a month, or floating licenses shared across a team. Call for pricing.' },
+      { title: 'Licensing', text: 'The online Enterprise plan is $129 a month or $1,290 a year for one account. Organizations license by the seat: 60 seats or more at $85 per seat a month, or floating licenses shared across a team. Call for pricing.' },
     ],
     shot: 'graph', shotAlt: 'The identity graph: nodes for topics, entities, goals and expertise, connected',
     open: { label: 'Contact us', href: 'mailto:enterprise@ricorsa.com?subject=Ricorsa%20Enterprise' }, related: ['graph', 'connectors', 'spaces'],

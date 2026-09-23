@@ -3,8 +3,8 @@ import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { CancelButton, DeleteAccountButton } from '@/components/AccountActions';
 import { currentUser } from '@/lib/session';
-import { planFor, statusGrants, annualSaving, ANNUAL_MONTHS_FREE } from '@/lib/plans';
-import { readUsage } from '@/lib/usage';
+import { planFor, statusGrants, annualSaving, ANNUAL_MONTHS_FREE, usd } from '@/lib/plans';
+import { readUsage, limitsFor } from '@/lib/usage';
 import { loadGraph } from '@/lib/graph';
 import { currentSubscription } from '@/lib/billing';
 
@@ -28,6 +28,7 @@ export default async function Account() {
   const monthsOn = startedAt ? Math.floor((Date.now() - startedAt.getTime()) / (30.4 * 86400e3)) : 0;
   const saving = annualSaving(plan);
   const nudge = cycle === 'monthly' && !!plan.priceUsdYear && monthsOn >= SWITCH_NUDGE_MONTHS;
+  const lim = limitsFor(plan, user.allowance);
   return (
     <>
       <SiteNav signedIn />
@@ -39,10 +40,10 @@ export default async function Account() {
             <div className="card">
               <h3>Plan</h3>
               <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}{user.admin ? ' · admin, all access' : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>{granted ? (user.subscriptionStatus === 'TRIAL' ? 'Trial ends' : 'Licensed until') : 'Renews'} {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
-              {cycle && <p className="note">Billed {cycle === 'annual' ? `yearly: $${plan.priceUsdYear} a year, ${ANNUAL_MONTHS_FREE} months free against monthly` : `monthly: $${plan.priceUsd} a month`}{startedAt ? `, since ${startedAt.toLocaleDateString()}` : ''}.</p>}
+              {cycle && <p className="note">Billed {cycle === 'annual' ? `yearly: ${usd(plan.priceUsdYear || 0)} a year, ${ANNUAL_MONTHS_FREE} months free against monthly` : `monthly: ${usd(plan.priceUsd)} a month`}{startedAt ? `, since ${startedAt.toLocaleDateString()}` : ''}.</p>}
               {nudge && (
                 <div className="notice info" style={{ marginBottom: 12 }}>
-                  <span>You have been on {plan.name} for {monthsOn} months. Paying yearly costs ${plan.priceUsdYear} instead of ${plan.priceUsd * 12}, so you keep ${saving} a year. Your monthly subscription ends when the annual one starts, so the best moment to switch is just before your renewal{user.planRenewsAt ? ` on ${new Date(user.planRenewsAt).toLocaleDateString()}` : ''}. <a href="/pricing?cycle=annual">See annual pricing</a></span>
+                  <span>You have been on {plan.name} for {monthsOn} months. Paying yearly costs {usd(plan.priceUsdYear || 0)} instead of {usd(plan.priceUsd * 12)}, so you keep {usd(saving)} a year. Your monthly subscription ends when the annual one starts, so the best moment to switch is just before your renewal{user.planRenewsAt ? ` on ${new Date(user.planRenewsAt).toLocaleDateString()}` : ''}. <a href="/pricing?cycle=annual">See annual pricing</a></span>
                 </div>
               )}
               {granted && !user.planRenewsAt && <p className="note">Your {plan.name} plan is licensed with no end date.</p>}
@@ -55,13 +56,13 @@ export default async function Account() {
             </div>
             <div className="card">
               <h3>Usage</h3>
-              <p>Counters reset daily at midnight UTC and monthly on the first.</p>
+              <p>Counters reset daily at midnight UTC and monthly on the first.{lim.raised ? ' Your allowances have been raised above the plan.' : ''}</p>
               <div className="stats">
-                <div className="stat"><b>{usage.day.questions} / {plan.questionsPerDay}</b><span>questions today</span></div>
-                <div className="stat"><b>{usage.month.questions} / {plan.questionsPerMonth}</b><span>this month</span></div>
-                <div className="stat"><b>{usage.month.research} / {plan.researchPerMonth}</b><span>Research reports</span></div>
-                {plan.buildsPerMonth > 0 && <div className="stat"><b>{usage.month.builds} / {plan.buildsPerMonth}</b><span>app versions built</span></div>}
-                {plan.ideaSetsPerMonth > 0 && <div className="stat"><b>{usage.month.ideas} / {plan.ideaSetsPerMonth}</b><span>Discover idea sets</span></div>}
+                <div className="stat"><b>{usage.day.questions} / {lim.questionsPerDay}</b><span>questions today</span></div>
+                <div className="stat"><b>{usage.month.questions} / {lim.questionsPerMonth}</b><span>this month</span></div>
+                <div className="stat"><b>{usage.month.research} / {lim.researchPerMonth}</b><span>Research reports</span></div>
+                {lim.buildsPerMonth > 0 && <div className="stat"><b>{usage.month.builds} / {lim.buildsPerMonth}</b><span>app versions built</span></div>}
+                {lim.ideaSetsPerMonth > 0 && <div className="stat"><b>{usage.month.ideas} / {lim.ideaSetsPerMonth}</b><span>Discover idea sets</span></div>}
               </div>
             </div>
             <div className="card">

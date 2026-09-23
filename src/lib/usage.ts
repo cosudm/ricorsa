@@ -1,8 +1,19 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { db, schema } from './db';
-import { planFor, statusGrants, nextPlan } from './plans';
+import { planFor, statusGrants, nextPlan, type Plan } from './plans';
 import type { CurrentUser } from './session';
+import type { Allowance } from './db/schema';
 import { HttpError } from './http';
+
+/** The monthly and daily ceilings that apply to an account: the plan's, or the numbers the console set above them. */
+export type Limits = { questionsPerDay: number; questionsPerMonth: number; researchPerMonth: number; buildsPerMonth: number; ideaSetsPerMonth: number; raised: boolean };
+export function limitsFor(plan: Plan, allowance?: Allowance | null): Limits {
+  const a = allowance || {};
+  const pick = (mine: number | undefined, base: number) => (typeof mine === 'number' && mine >= 0 ? mine : base);
+  const out = { questionsPerDay: pick(a.questionsPerDay, plan.questionsPerDay), questionsPerMonth: pick(a.questionsPerMonth, plan.questionsPerMonth), researchPerMonth: pick(a.researchPerMonth, plan.researchPerMonth), buildsPerMonth: pick(a.buildsPerMonth, plan.buildsPerMonth), ideaSetsPerMonth: pick(a.ideaSetsPerMonth, plan.ideaSetsPerMonth) };
+  const raised = out.questionsPerDay !== plan.questionsPerDay || out.questionsPerMonth !== plan.questionsPerMonth || out.researchPerMonth !== plan.researchPerMonth || out.buildsPerMonth !== plan.buildsPerMonth || out.ideaSetsPerMonth !== plan.ideaSetsPerMonth;
+  return { ...out, raised };
+}
 
 export function periods(d = new Date()) {
   const day = d.toISOString().slice(0, 10);
@@ -27,9 +38,10 @@ export async function assertQuota(user: CurrentUser, mode: 'search' | 'research'
   if (mode === 'research' && plan.researchPerMonth === 0) throw new HttpError(402, 'Research mode needs an Essentials plan or above.', 'upgrade_required');
   const u = await readUsage(user.id);
   if (user.admin) return { plan, usage: u };
-  if (u.day.questions >= plan.questionsPerDay) throw new HttpError(429, `You have used today's ${plan.questionsPerDay} questions on the ${plan.name} plan.`, 'daily_limit');
-  if (u.month.questions >= plan.questionsPerMonth) throw new HttpError(429, `You have used this month's ${plan.questionsPerMonth} questions on the ${plan.name} plan.`, 'monthly_limit');
-  if (mode === 'research' && u.month.research >= plan.researchPerMonth) throw new HttpError(429, `You have used this month's ${plan.researchPerMonth} Research reports.`, 'research_limit');
+  const lim = limitsFor(plan, user.allowance);
+  if (u.day.questions >= lim.questionsPerDay) throw new HttpError(429, `You have used today's ${lim.questionsPerDay} questions on the ${plan.name} plan.`, 'daily_limit');
+  if (u.month.questions >= lim.questionsPerMonth) throw new HttpError(429, `You have used this month's ${lim.questionsPerMonth} questions on the ${plan.name} plan.`, 'monthly_limit');
+  if (mode === 'research' && u.month.research >= lim.researchPerMonth) throw new HttpError(429, `You have used this month's ${lim.researchPerMonth} Research reports.`, 'research_limit');
   return { plan, usage: u };
 }
 
@@ -44,9 +56,10 @@ export async function assertBuildQuota(user: CurrentUser) {
   if (!user.admin && !statusGrants(user.subscriptionStatus)) throw new HttpError(402, 'Your subscription is not active. Update your payment method or resubscribe.', 'subscription_inactive');
   const u = await readUsage(user.id);
   if (user.admin) return { plan, usage: u };
-  if (u.month.builds >= plan.buildsPerMonth) {
+  const lim = limitsFor(plan, user.allowance);
+  if (u.month.builds >= lim.buildsPerMonth) {
     const up = nextPlan(plan.key);
-    throw new HttpError(429, `You have used this month's ${plan.buildsPerMonth} app versions on the ${plan.name} plan. The count resets on the 1st${up && up.buildsPerMonth > plan.buildsPerMonth ? `; ${up.name} includes ${up.buildsPerMonth} a month` : ''}.`, 'build_limit');
+    throw new HttpError(429, `You have used this month's ${lim.buildsPerMonth} app versions on the ${plan.name} plan. The count resets on the 1st${up && up.buildsPerMonth > lim.buildsPerMonth ? `; ${up.name} includes ${up.buildsPerMonth} a month` : ''}.`, 'build_limit');
   }
   return { plan, usage: u };
 }
@@ -56,9 +69,10 @@ export async function assertIdeaQuota(user: CurrentUser) {
   const plan = planFor(user.plan);
   const u = await readUsage(user.id);
   if (user.admin || plan.ideaSetsPerMonth <= 0) return { plan, usage: u };
-  if (u.month.ideas >= plan.ideaSetsPerMonth) {
+  const lim = limitsFor(plan, user.allowance);
+  if (u.month.ideas >= lim.ideaSetsPerMonth) {
     const up = nextPlan(plan.key);
-    throw new HttpError(429, `You have used this month's ${plan.ideaSetsPerMonth} Discover idea sets on the ${plan.name} plan. The count resets on the 1st${up && up.ideaSetsPerMonth > plan.ideaSetsPerMonth ? `; ${up.name} includes ${up.ideaSetsPerMonth} a month` : ''}. The ideas already generated stay.`, 'idea_limit');
+    throw new HttpError(429, `You have used this month's ${lim.ideaSetsPerMonth} Discover idea sets on the ${plan.name} plan. The count resets on the 1st${up && up.ideaSetsPerMonth > lim.ideaSetsPerMonth ? `; ${up.name} includes ${up.ideaSetsPerMonth} a month` : ''}. The ideas already generated stay.`, 'idea_limit');
   }
   return { plan, usage: u };
 }

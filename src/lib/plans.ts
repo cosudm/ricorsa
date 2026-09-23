@@ -2,7 +2,8 @@
  * Plans, prices and quotas. Free, then Essentials, Professional and Enterprise. Prices here are what the app
  * creates on PayPal for itself (src/lib/paypal-setup.ts): PayPal plans are immutable once created, so a price
  * change makes a new PayPal plan and the old one is kept as retired, so people already subscribed keep their
- * price and their access.
+ * price and their access. Prices moved from $25 / $55 / $85 to $45 / $79 / $129 a month in September 2026, so
+ * that a heavy user at the metered ceilings still runs at a margin; annual is ten months' price.
  */
 export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
 /** The keys in use before September 2026. Rows and PayPal ids stored under them resolve to the plans that replaced them. */
@@ -64,13 +65,13 @@ export const PLANS: Record<PlanKey, Plan> = {
     tiers: ['quick', 'default'],
     spaces: 1,
     blurb: 'Try it and let the graph start learning you.',
-    features: ['10 questions a day', 'Live web citations', 'Attach files to a question: PDFs, documents, spreadsheets, images', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
+    features: ['10 questions a day, 150 a month', 'Live web citations', 'Attach files to a question, 2 at a time up to 10 MB each: ask anything about a PDF, document or spreadsheet and see the passage highlighted', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
   },
   essentials: {
     key: 'essentials',
     name: 'Essentials',
-    priceUsd: 25,
-    priceUsdYear: 250,
+    priceUsd: 45,
+    priceUsdYear: 450,
     paypalPlanEnv: 'PAYPAL_PLAN_ESSENTIALS',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_ESSENTIALS_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_PRO',
@@ -83,13 +84,13 @@ export const PLANS: Record<PlanKey, Plan> = {
     tiers: ['quick', 'default', 'complex'],
     spaces: 25,
     blurb: 'The full identity graph, for people who research every day.',
-    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month', '40 Research reports a month', 'Reasoning model', '3 Connectors: apps, MCP servers, websites and document vaults your answers can use', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
+    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month, 300 a day', '40 Research reports a month', 'Reasoning model', 'Memory: answers recall and cite your earlier answers and files', 'Files: 5 per question, up to 25 MB each', '3 Connectors: apps, MCP servers, websites and document vaults your answers can use', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
   },
   professional: {
     key: 'professional',
     name: 'Professional',
-    priceUsd: 55,
-    priceUsdYear: 550,
+    priceUsd: 79,
+    priceUsdYear: 790,
     paypalPlanEnv: 'PAYPAL_PLAN_PROFESSIONAL',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_PROFESSIONAL_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_TEAM',
@@ -102,13 +103,13 @@ export const PLANS: Record<PlanKey, Plan> = {
     tiers: ['quick', 'default', 'complex'],
     spaces: 100,
     blurb: 'Everything in Essentials, plus Discover: turn your research into working tools.',
-    features: ['Everything in Essentials', 'Discover, fully unlocked: apps, agents, tools, datasets and credentials built from your own asset, each checked in a real browser and stamped with a provenance id', 'Build studio: 30 app versions a month, 60 idea sets a month', 'Up to 5,000 questions a month', '150 Research reports a month', '25 Connectors, each usable everywhere or kept to one Space', '100 Spaces', 'Priority support'],
+    features: ['Everything in Essentials', 'Discover, fully unlocked: apps, agents, tools, datasets and credentials built from your own asset, each checked in a real browser and stamped with a provenance id', 'Build studio: 30 app versions a month, 60 idea sets a month', 'Up to 5,000 questions a month, 1,000 a day', '150 Research reports a month', 'Files: 10 per question, up to 40 MB each', '25 Connectors, each usable everywhere or kept to one Space', '100 Spaces', 'Priority support'],
   },
   enterprise: {
     key: 'enterprise',
     name: 'Enterprise',
-    priceUsd: 85,
-    priceUsdYear: 850,
+    priceUsd: 129,
+    priceUsdYear: 1290,
     paypalPlanEnv: 'PAYPAL_PLAN_ENTERPRISE',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_ENTERPRISE_ANNUAL',
     caps: { graph: 'full', discover: 'full', connectors: 100, files: { perQuestion: 20, maxMb: 60 } },
@@ -119,10 +120,10 @@ export const PLANS: Record<PlanKey, Plan> = {
     ideaSetsPerMonth: 200,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100000,
-    blurb: 'For firms that run on research: the highest limits, every connector, and a direct line to us.',
-    features: ['Everything in Professional', 'Build studio: 100 app versions a month, 200 idea sets a month', 'Up to 15,000 questions a month', '500 Research reports a month', '100 Connectors', 'Unlimited Spaces', 'Larger files: 20 per question, up to 60 MB each', 'A direct line to us, with onboarding for your team', 'Deployment options on your own data and geography with the SMEPro Identity Graph'],
+    blurb: 'The online plan for a firm that runs on research: the highest limits, every connector, and a direct line to us. Organizations license by the seat.',
+    features: ['Everything in Professional', 'Build studio: 100 app versions a month, 200 idea sets a month', 'Up to 15,000 questions a month, 3,000 a day', '500 Research reports a month', 'Files: 20 per question, up to 60 MB each', '100 Connectors', 'Unlimited Spaces', 'A direct line to us, with onboarding for your team', 'Seat and floating licenses for organizations, with deployment on your own data and geography (see below)'],
     priceMarker: '***',
-    licensing: 'Enterprise licensing for organizations: seat licenses, 60 seats or more at $85 per seat a month, or floating licenses shared across a team. Call for pricing.',
+    licensing: 'Enterprise licensing for organizations: seat licenses, 60 seats or more at $85 per seat a month, or floating licenses shared across a team, with deployment on your own data and geography. Call for pricing.',
   },
 };
 
@@ -170,6 +171,8 @@ export function parseProvisionKey(k: string): { key: PlanKey; cycle: BillingCycl
   const [base, ...rest] = k.split(':');
   return { key: normalizePlanKey(base), cycle: rest.includes('annual') ? 'annual' : 'monthly' };
 }
+/** A dollar amount for copy: whole dollars with a thousands separator, cents only when there are any. */
+export function usd(n: number): string { return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
 /** The price a plan bills at for a cycle; null when the plan is not sold that way. */
 export function priceFor(plan: Plan, cycle: BillingCycle): number | null {
   if (cycle === 'annual') return plan.priceUsdYear ?? null;
