@@ -27,7 +27,7 @@ function cleanPreview(p: unknown): Preview | undefined {
   return { layout, name: truncate(String(x.name || ''), 20), nav: strs(x.nav, 4, 14), items: strs(x.items, 5, 34), stat, cta: truncate(String(x.cta || ''), 14) || undefined };
 }
 
-const Body = z.object({ category: z.string().refine(c => (CATS as readonly string[]).includes(c)), refresh: z.boolean().optional() });
+const Body = z.object({ category: z.string().refine(c => (CATS as readonly string[]).includes(c)), refresh: z.boolean().optional(), /** A graph node id to center the ideas on (from the Graph page). */ anchor: z.string().max(120).optional() });
 
 /**
  * Discover: what the person's identity graph can become. Ideas are generated from their own
@@ -61,12 +61,14 @@ export const POST = handle(async (req: Request) => {
   if (nodeCount < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, graphHash: await graphFingerprint(graph) });
 
   // Ideas are cached per person and category against the exact graph they were drawn from, so they refresh
-  // when the graph moves and stay put while it does not. "Generate again" always writes a fresh set.
+  // when the graph moves and stay put while it does not. "Generate again" always writes a fresh set. Ideas anchored
+  // on one node (Discover from this, on the Graph page) are cached apart from the general set.
+  const anchorNode = b.data.anchor ? graph.nodes[b.data.anchor] || Object.values(graph.nodes).find(n => n.label.toLowerCase() === String(b.data.anchor).toLowerCase()) || null : null;
   const hash = await graphFingerprint(graph);
   const day = hash.slice(0, 32);
-  const key = `${user.id}|${cat}`;
+  const key = `${user.id}|${cat}${anchorNode ? '|' + anchorNode.id : ''}`;
   const cached = await db().select().from(schema.discoverCache).where(and(eq(schema.discoverCache.category, key), eq(schema.discoverCache.day, day))).limit(1);
-  if (cached[0] && !b.data.refresh) return json({ items: cached[0].items, personal: true, graphHash: hash });
+  if (cached[0] && !b.data.refresh) return json({ items: cached[0].items, personal: true, graphHash: hash, anchor: anchorNode ? { id: anchorNode.id, label: anchorNode.label, type: anchorNode.type } : null });
 
   const [threads, built] = await Promise.all([
     db().select({ title: schema.threads.title, updatedAt: schema.threads.updatedAt }).from(schema.threads).where(eq(schema.threads.userId, user.id)).orderBy(desc(schema.threads.updatedAt)).limit(12),
@@ -75,6 +77,7 @@ export const POST = handle(async (req: Request) => {
   const brief = graphBrief(graph, threads.map(t => t.title), [...new Set(built.map(x => x.title))]);
   const focus = CATEGORY_BRIEF[cat];
   const avoid = cached[0] && b.data.refresh ? (cached[0].items as Idea[]).map(i => i.title).filter(Boolean) : [];
+  const anchorLine = anchorNode ? `\n\nAnchor: the person opened "${anchorNode.label}" (a ${anchorNode.type} in their graph, seen ${anchorNode.count} time${anchorNode.count === 1 ? '' : 's'}) and asked what could be built from it. Every idea must center on "${anchorNode.label}" and combine it with two or three other parts of the graph; name it in each title or first sentence.` : '';
   const data = await quickJson<Idea[]>(`You propose things a person could build from their personal identity graph, inside Ricorsa. Ricorsa's builder turns any idea you propose into a working, self-contained web app (one HTML file: screens, data, logic, persistence in the browser, exports; no server, no live network), so every idea must be something that works well in that form and is worth using every week.
 
 The graph below was learned from the person's own questions. Read it as a whole: what they keep coming back to, what they are trying to achieve, where they are strong, what they use, how they like things. Propose exactly 6 ideas${focus}. Each idea must be specific to this person (named after their real topics, entities and goals, never generic), clearly different from the others, and useful to someone in their position now. Prefer ideas that combine two or three parts of the graph over ideas that use one. Every idea is a product someone in their position would pay for and open every week: a clear job, a primary workflow, an overview with real figures, and at least two supporting views (history, analysis, comparisons, settings, exports). Never propose a micro-tool on its own (a single checklist, a glossary, a prompt kit, a one-field calculator, a static list); fold such things into a fuller product. Do not propose anything on the "already built" list${avoid.length ? ' or on the "shown before" list' : ''}, nor anything that only makes sense with a live backend.
@@ -89,7 +92,7 @@ Reply with only a JSON array of 6 objects:
  "preview": what its main screen would show, as {"layout": one of dashboard|list|chat|form|table|map|editor|cards|profile|timeline (the screen shape that fits it best), "name": the product's own short name (under 18 characters, no quotes), "nav": 3 short menu labels it would have, "items": 3 to 5 short, specific things that would appear on that screen (real row titles, message snippets, field names, card names or headings drawn from the graph, with real names and numbers where they fit, under 30 characters each), "stat": for dashboards only, {"label", "value"} for the headline number, else null, "cta": the main button label (one or two words)}}.
 Vary the kinds and the layouts across the six. No markdown, valid JSON only.
 
-${brief}${avoid.length ? `\n\nShown before (propose different ideas): ${avoid.slice(0, 12).join('; ')}` : ''}`, 5000, 'ideas');
+${brief}${anchorLine}${avoid.length ? `\n\nShown before (propose different ideas): ${avoid.slice(0, 12).join('; ')}` : ''}`, 5000, 'ideas');
   const items = (Array.isArray(data) ? data : []).filter(x => x && typeof x.title === 'string' && typeof x.what === 'string').slice(0, 6).map(x => ({
     kind: truncate(x.kind || cat, 24), title: truncate(plain(x.title), 90), what: truncate(plain(x.what), 200), why: truncate(plain(x.why || ''), 120) || undefined,
     builds: Array.isArray(x.builds) ? x.builds.map(s => truncate(String(s), 40)).filter(Boolean).slice(0, 4) : [],
@@ -102,7 +105,7 @@ ${brief}${avoid.length ? `\n\nShown before (propose different ideas): ${avoid.sl
     .onConflictDoUpdate({ target: [schema.discoverCache.category, schema.discoverCache.day], set: { items: stamped } });
   // Older sets for this category (earlier graph states) are no longer needed.
   await db().delete(schema.discoverCache).where(and(eq(schema.discoverCache.category, key), ne(schema.discoverCache.day, day)));
-  return json({ items: stamped, personal: true, graphHash: hash });
+  return json({ items: stamped, personal: true, graphHash: hash, anchor: anchorNode ? { id: anchorNode.id, label: anchorNode.label, type: anchorNode.type } : null });
 });
 
 /**

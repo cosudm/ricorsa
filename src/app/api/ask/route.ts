@@ -19,6 +19,7 @@ import { loadAttachments, claimAttachments, filesBlock, metaOf } from '@/lib/fil
 import { isVaultConnector, numberVaultHits, numberVaultPages } from '@/lib/vault';
 import { CONSOLE_GUIDE, consoleContext } from '@/lib/console';
 import { SITE_PRESET, numberSiteHits, numberSitePage } from '@/lib/sites';
+import { geocodePending } from '@/lib/geo';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -185,9 +186,12 @@ export async function POST(req: Request) {
         turn.status = 'done';
 
         // 4. The loop: learn, then meter
-        if (turn.learned) { try { const touched = mergeLearned(graph, turn, th.id, { ideaId: th.origin?.ideaId }); if (touched) await saveGraph(user.id, graph); } catch (e) { console.warn('learn failed', e); } }
+        let touched: ReturnType<typeof mergeLearned> = null;
+        if (turn.learned) { try { touched = mergeLearned(graph, turn, th.id, { ideaId: th.origin?.ideaId }); if (touched) await saveGraph(user.id, graph); } catch (e) { console.warn('learn failed', e); } }
         await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches, result.model, result.usage.cacheWrite) });
         send('done', { turn, graphEvents: graph.events });
+        // 5. After the answer is on screen: put the places this turn named on the map (the geocoder is slow and polite).
+        if (touched && touched.some(n => n.place && !n.geo)) { try { if (await geocodePending(graph)) await saveGraph(user.id, graph); } catch (e) { console.warn('[geo] failed', e); } }
       } catch (e) {
         const err = e as { name?: string };
         if (err?.name === 'AbortError' || ctl.signal.aborted) {

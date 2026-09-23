@@ -56,6 +56,8 @@ export function mergeLearned(g: GraphData, turn: Turn, threadId: string, origin?
   };
   normList(L.topics, 4).forEach(t => bump('topic', t));
   normList(L.entities, 4).forEach(t => bump('entity', t));
+  // Places are entities with a spot on the map: the geocoder fills in the coordinates after the answer (src/lib/geo.ts).
+  normList(L.places, 3).forEach(t => bump('entity', t, { place: true }));
   normList(L.goals, 2).forEach(t => bump('goal', t));
   (Array.isArray(L.expertise) ? L.expertise : []).slice(0, 3).forEach((x: unknown) => {
     const area = cleanLabel(x);
@@ -78,14 +80,31 @@ export function mergeLearned(g: GraphData, turn: Turn, threadId: string, origin?
   return touched;
 }
 
-/** The graph as a plan may see it. Preview plans get the strongest nodes only, without the connections, intents or origins. */
+/**
+ * The graph as a plan may see it. Preview plans get the twelve strongest nodes, the connections between those nodes
+ * (up to ten) and the two most recent intents, so the recursive picture is visible; origins and the rest of the graph
+ * are part of the full plans.
+ */
+export const PREVIEW_NODES = 12;
+export const PREVIEW_EDGES = 10;
+export const PREVIEW_INTENTS = 2;
 export function graphView(g: GraphData, caps: { graph: 'preview' | 'full' }): GraphData & { preview?: boolean } {
   if (caps.graph === 'full') return g;
-  const keep = Object.values(g.nodes).sort((a, b) => b.weight - a.weight || b.lastSeen - a.lastSeen).slice(0, 12);
+  const keep = Object.values(g.nodes).sort((a, b) => b.weight - a.weight || b.lastSeen - a.lastSeen).slice(0, PREVIEW_NODES);
   const nodes: Record<string, GraphNode> = {};
   for (const n of keep) { const { origin: _o, ...rest } = n; void _o; nodes[n.id] = rest; }
-  return { ...g, nodes, edges: {}, intents: [], preview: true };
+  const edges: GraphData['edges'] = {};
+  for (const [k, e] of Object.entries(g.edges).filter(([, e]) => nodes[e.a] && nodes[e.b]).sort((a, b) => b[1].weight - a[1].weight).slice(0, PREVIEW_EDGES)) edges[k] = e;
+  const intents = g.intents.slice(0, PREVIEW_INTENTS).map(i => ({ text: i.text, at: i.at, threadId: '', turnId: '' }));
+  return { ...g, nodes, edges, intents, preview: true };
 }
+/** The nodes the geocoder still has to place: named as places, not yet anchored, and not tried within the last week. */
+export function placesToGeocode(g: GraphData, max = 3): GraphNode[] {
+  const week = 7 * 864e5;
+  return Object.values(g.nodes).filter(n => n.place && !n.geo && (!n.geoFailedAt || Date.now() - n.geoFailedAt > week)).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, max);
+}
+/** Nodes with a spot on the map. */
+export function anchoredNodes(g: GraphData): GraphNode[] { return Object.values(g.nodes).filter(n => n.geo && n.geo.type === 'Point'); }
 
 export function topNodes(g: GraphData, type: string, n = 8): GraphNode[] {
   return Object.values(g.nodes).filter(x => x.type === type).sort((a, b) => b.weight - a.weight || b.lastSeen - a.lastSeen).slice(0, n);

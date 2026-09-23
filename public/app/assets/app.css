@@ -738,6 +738,59 @@
   .paused-banner { display: flex; align-items: center; gap: 10px; background: var(--warn-soft); color: #6E4A0F; border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 13px; }
   .paused-banner .ico { color: var(--warn); }
   @media (max-width: 900px) { .g-types { grid-template-columns: 1fr; } .g-type.wide { grid-column: auto; } }
+  /* The Graph page's live chips: the weight as a fill in the type's color, marks for new, strengthening, fading and places,
+     and the hover/selection that ties each chip to its node in the brain. */
+  .nchip.live { cursor: pointer; position: relative; padding-right: 7px; transition: border-color .12s, box-shadow .12s, opacity .15s, transform .12s; background: linear-gradient(90deg, color-mix(in srgb, var(--ch) 13%, var(--card)) calc(var(--w, .3) * 100%), var(--card) 0); }
+  .nchip.live:hover, .nchip.live:focus-visible, .nchip.live.hot { border-color: var(--ch); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ch) 18%, transparent); outline: none; }
+  .nchip.live.on { border-color: var(--ch); background: color-mix(in srgb, var(--ch) 16%, var(--card)); }
+  .nchip.live.soft { opacity: .3; }
+  .nchip.live.fade { color: var(--ink-3); border-style: dashed; }
+  .nchip.live.fade .dot { opacity: .55; }
+  .nchip.live.new::after, .nchip.live.em::after { content: ""; position: absolute; top: -3px; right: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--ch); border: 2px solid var(--card); }
+  .nchip.live.em::after { background: #FF6FA0; animation: chip-pulse 1.6s ease-in-out infinite; }
+  @keyframes chip-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.35); opacity: .7; } }
+  .nchip .pin { color: var(--ch, var(--ink-3)); margin: 0 -2px; flex: none; }
+  .nchip .lbl { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .nchip.link { text-decoration: none; cursor: pointer; }
+  .nchip.link:hover { border-color: var(--accent-line); background: var(--accent-soft); text-decoration: none; }
+  .nchip.link .go { color: var(--ink-3); margin-left: -2px; }
+  .nchip.link:hover .go { color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .nchip.live.em::after { animation: none; } }
+  .g-list-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 2px 0 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 12.5px; color: var(--ink-2); }
+  .g-list-bar .spacer { flex: 1; }
+  .g-list-bar select { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--card); color: var(--ink); }
+  .g-list-count { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 72px; }
+  .g-list-hint { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
+  .g-list-hint .ico { color: var(--accent); flex: none; }
+  .g-type.flash, .disc.flash { animation: card-flash 2.4s ease-out; }
+  @keyframes card-flash { 0% { box-shadow: 0 0 0 0 var(--accent-soft), 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 12px transparent, 0 0 0 2px transparent; } }
+  .g3d-view { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 999px; overflow: hidden; background: var(--card); flex: none; }
+  .g3d-view button { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 500; padding: 6px 12px; cursor: pointer; color: var(--ink-2); }
+  .g3d-view button + button { border-left: 1px solid var(--line); }
+  .g3d-view button.on { background: var(--accent-soft); color: var(--accent); }
+  .g3d-view button em { font-style: normal; font: 600 11px var(--mono); color: var(--ink-3); }
+  .g3d-view button.on em { color: var(--accent); }
+  .g3d-bar [data-brain-only].off { opacity: .35; pointer-events: none; }
+  .gmap-canvas { display: block; width: 100%; outline: none; }
+  .node-geo { display: flex; align-items: flex-start; gap: 6px; margin: -2px 0 8px; }
+  .node-geo .ico { color: var(--accent); flex: none; margin-top: 2px; }
+  .node-links button.chip { display: inline-flex; align-items: center; gap: 6px; font: inherit; cursor: pointer; }
+  .node-links button.chip i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .node-links button.chip:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+  .np-ideas { display: flex; flex-direction: column; gap: 6px; }
+  .np-idea { display: flex; align-items: center; gap: 10px; text-align: left; font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); cursor: pointer; }
+  .np-idea:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+  .np-idea .k { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); flex: none; }
+  .modal-actions.wrap { flex-wrap: wrap; }
+  .anchor-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: -6px 0 12px; }
+  .anchor-chip { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 6px 0 11px; border-radius: 999px; border: 1px solid var(--ch); background: color-mix(in srgb, var(--ch) 12%, var(--card)); font-size: 13px; color: var(--ink); }
+  .anchor-chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ch); flex: none; }
+  .anchor-chip .dot.square { border-radius: 2px; } .anchor-chip .dot.diamond { border-radius: 2px; transform: rotate(45deg) scale(.85); } .anchor-chip .dot.ring { background: transparent; border: 2px solid var(--ch); box-sizing: border-box; } .anchor-chip .dot.hex { clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); border-radius: 0; }
+  .anchor-chip .nchip-x { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: var(--ink-3); }
+  .anchor-chip .nchip-x:hover { background: var(--bad-soft); color: var(--bad); }
+  .anchor-row .lnk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; }
+  .disc-builds { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 10px; margin-top: -4px; }
+  @media (max-width: 640px) { .g3d-bar input[type="search"] { flex: 1 1 100%; order: -1; } .g-list-bar .g-list-hint { flex-basis: 100%; } .anchor-row { margin-top: 0; } }
 
   [hidden] { display: none !important; }
 

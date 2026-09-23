@@ -6,6 +6,7 @@ import { planFor, normalizePlanKey } from '@/lib/plans';
 import { readUsage } from '@/lib/usage';
 import { listThreads } from '@/lib/threads';
 import { loadGraph, graphView } from '@/lib/graph';
+import { geocodingEnabled, geocoderIsOsm } from '@/lib/geo';
 import { db, schema } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -30,6 +31,8 @@ export const GET = handle(async () => {
     spaces: spaces.map(s => ({ ...s, createdAt: new Date(s.createdAt).getTime() })),
     graph: graphView(graph, plan.caps),
     graphSize: Object.keys(graph.nodes).length,
+    /** The map view's data note: places are looked up by OpenStreetMap's geocoder unless a deployment names another. */
+    geo: { enabled: geocodingEnabled(), provider: geocoderIsOsm() ? 'osm' : 'custom' },
   });
 });
 

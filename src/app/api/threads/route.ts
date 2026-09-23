@@ -11,7 +11,7 @@ export const GET = handle(async () => {
   return json({ threads: await listThreads(user.id) });
 });
 
-const Origin = z.object({ kind: z.enum(['discover', 'ask']), ideaId: z.string().regex(/^[a-f0-9]{64}$/).optional(), graphHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), category: z.string().max(40).optional(), title: z.string().max(120).optional(), at: z.number().optional(), subject: z.string().regex(/^[a-f0-9]{64}$/).optional() });
+const Origin = z.object({ kind: z.enum(['discover', 'ask', 'graph']), ideaId: z.string().regex(/^[a-f0-9]{64}$/).optional(), graphHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), category: z.string().max(40).optional(), title: z.string().max(120).optional(), nodeId: z.string().max(120).optional(), at: z.number().optional(), subject: z.string().regex(/^[a-f0-9]{64}$/).optional() });
 const Body = z.object({ title: z.string().trim().min(1).max(200), spaceId: z.string().nullable().optional(), origin: Origin.nullable().optional() });
 export const POST = handle(async (req: Request) => {
   const user = await currentUser();

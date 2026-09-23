@@ -276,7 +276,8 @@
     const small = (container.getBoundingClientRect().width || 800) < 640;
     const T = tissue(small ? 0.095 : 0.078, small ? 350 : 800);
     let lod = 1;   // 1 draws everything, 2 every second mote and no glow pass, 3 every third: chosen from the measured frame time
-    const st = { lattice: opts.lattice !== false, density: opts.density || 'std', route: null, yaw: VIEW.yaw, pitch: VIEW.pitch, zoom: 1, sway: 0, t: now(), playing: false, labels: opts.labels !== false, cortices: new Set(Object.keys(CORTEX)), query: '', hover: null, selected: null, focus: null, emerging: false, idle: !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches), lastPointer: 0, w: 0, h: 0, dpr: 1, stars: null, signals: [], nextSignal: 0 };
+    const st = { lattice: opts.lattice !== false, density: opts.density || 'std', route: null, yaw: VIEW.yaw, pitch: VIEW.pitch, zoom: 1, sway: 0, t: now(), playing: false, labels: opts.labels !== false, cortices: new Set(Object.keys(CORTEX)), query: '', hover: null, selected: null, highlight: null, highlightAt: 0, focus: null, emerging: false, idle: !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches), lastPointer: 0, w: 0, h: 0, dpr: 1, stars: null, signals: [], nextSignal: 0 };
+    let adj = {};   // node id -> Set of neighbor ids, for the highlight (the lit node keeps its neighbors bright)
     const listeners = []; const on = (el, ev, fn, o) => { el.addEventListener(ev, fn, o); listeners.push(() => el.removeEventListener(ev, fn, o)); };
     // The tissue is drawn at half resolution on its own layer (soft light does not need every pixel), then composited.
     const layer = document.createElement('canvas'); const lctx = layer.getContext('2d'); const HALF = 0.5;
@@ -292,6 +293,9 @@
       nodes = (m.nodes || []).filter(n => KIND[n.kind]).map(n => Object.assign({}, n, { weight: clamp(Number(n.weight) || 0.2, 0.05, 1), count: n.count || 1, firstSeen: n.firstSeen || now(), lastSeen: n.lastSeen || n.firstSeen || now() }));
       byId = {}; nodes.forEach(n => { byId[n.id] = n; });
       edges = (m.edges || []).filter(e => byId[e.a] && byId[e.b] && e.a !== e.b);
+      adj = {}; for (const e of edges) { (adj[e.a] = adj[e.a] || new Set()).add(e.b); (adj[e.b] = adj[e.b] || new Set()).add(e.a); }
+      if (st.highlight && !byId[st.highlight]) st.highlight = null;
+      if (st.selected && !byId[st.selected]) st.selected = null;
       spaces = m.spaces || []; org = m.org || org;
       const h = homesFor(nodes, spaces); homes = h.homes; spaceCenter = h.spaceCenter;
       first = nodes.length ? Math.min.apply(null, nodes.map(n => n.firstSeen)) : now();
@@ -519,6 +523,8 @@
         if (st.query) dim = n.label.toLowerCase().includes(st.query) ? 1 : 0.1;
         else if (st.focus) dim = K.cortex === st.focus ? 1 : 0.18;
         else if (st.emerging) dim = emerging(n, t) ? 1 : 0.14;
+        // A node lit from the lists keeps itself and its neighbors bright and softens everything else.
+        if (st.highlight && st.highlight !== n.id) dim *= adj[st.highlight] && adj[st.highlight].has(n.id) ? 0.85 : 0.35;
         const depth = clamp((p.z + 1) / 2, 0.15, 1);
         const r = (2.6 + 8.5 * w) * (0.72 + 0.28 * p.s) * Math.min(1.35, st.zoom) * (n.kind === 'intent' ? 0.7 : 1);
         return { n, p, w, dim, r, depth, hex: C.hex, cortex: K.cortex };
@@ -540,7 +546,7 @@
         const a = pi[e.a], b = pi[e.b]; if (!a || !b) continue;
         if (e.at && e.at > t) continue;
         const depth = clamp(((a.p.z + b.p.z) / 2 + 1) / 2, 0.15, 1); const dim = Math.min(a.dim, b.dim);
-        const hot = st.hover === a.n.id || st.hover === b.n.id || st.selected === a.n.id || st.selected === b.n.id;
+        const hot = st.hover === a.n.id || st.hover === b.n.id || st.selected === a.n.id || st.selected === b.n.id || st.highlight === a.n.id || st.highlight === b.n.id;
         const w = clamp(e.weight || 0.3, 0.05, 1);
         const young = born[e.b] || born[e.a]; const grow = young ? clamp((ts - young) / 1400, 0, 1) : 1;
         c.strokeStyle = hot ? rgba(a.hex, 0.95 * dim) : mixA(a.hex, b.hex, 0.5, (0.16 + 0.42 * w) * depth * dim);
@@ -550,18 +556,20 @@
       // Nodes, back to front: glow in light, body solid.
       P.sort((a, b) => a.p.z - b.p.z);
       for (const x of P) {
-        const hot = st.hover === x.n.id || st.selected === x.n.id; const em = st.emerging && emerging(x.n, t);
+        const lit = st.highlight === x.n.id; const hot = lit || st.hover === x.n.id || st.selected === x.n.id; const em = st.emerging && emerging(x.n, t);
         const age = born[x.n.id] ? (ts - born[x.n.id]) / 3000 : 2;
         const glow = x.r * (hot ? 4 : em ? 3.2 : 2.4) * (age < 1 ? 1 + (1 - age) * 1.6 : 1);
         c.globalAlpha = (hot ? 0.95 : em ? 0.8 : 0.55) * x.dim * (0.5 + 0.5 * x.depth);
         c.drawImage(sprites[x.cortex], x.p.x - glow, x.p.y - glow, glow * 2, glow * 2);
         if (age < 1) { c.globalAlpha = 1; c.strokeStyle = rgba(x.hex, (1 - age) * 0.9); c.lineWidth = 1.5; c.beginPath(); c.arc(x.p.x, x.p.y, x.r + 4 + age * 28, 0, Math.PI * 2); c.stroke(); }
         if (em) { const pulse = 0.5 + 0.5 * Math.sin(ts / 600 + hash(x.n.id) % 7); c.globalAlpha = 0.4 * pulse * x.dim; c.strokeStyle = rgba(x.hex, 1); c.lineWidth = 1; c.beginPath(); c.arc(x.p.x, x.p.y, x.r + 3 + 5 * pulse, 0, Math.PI * 2); c.stroke(); }
+        // The lit node: a ring that leaves it every 1.4 s, so the eye finds it from the list beside the brain.
+        if (lit) { const k = ((ts - st.highlightAt) % 1400) / 1400; c.globalAlpha = 1; c.strokeStyle = rgba(x.hex, 0.95 * (1 - k)); c.lineWidth = 2; c.beginPath(); c.arc(x.p.x, x.p.y, x.r + 4 + 26 * k, 0, Math.PI * 2); c.stroke(); c.strokeStyle = 'rgba(255,255,255,0.85)'; c.lineWidth = 1.5; c.beginPath(); c.arc(x.p.x, x.p.y, x.r + 4, 0, Math.PI * 2); c.stroke(); }
       }
       c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
       const boxes = [];
       for (const x of P) {
-        const hot = st.hover === x.n.id || st.selected === x.n.id; const em = st.emerging && emerging(x.n, t);
+        const hot = st.hover === x.n.id || st.selected === x.n.id || st.highlight === x.n.id; const em = st.emerging && emerging(x.n, t);
         const al = (0.7 + 0.3 * x.depth) * x.dim;
         shapePath(c, x.n.kind, x.p.x, x.p.y, x.r);
         if (KIND[x.n.kind].shape === 'ring') { c.lineWidth = 2; c.strokeStyle = rgba(x.hex, al); c.stroke(); }
@@ -593,7 +601,7 @@
     let raf = 0, lastFrame = 0, playStart = 0, onScreen = true;
     function frame(ts) {
       raf = 0; const dt = lastFrame ? Math.min(50, ts - lastFrame) : 16; lastFrame = ts;
-      if (st.idle && Date.now() - st.lastPointer > 2500) { st.sway += 0.00020 * dt; st.yaw = VIEW.yaw + 0.24 * Math.sin(st.sway); st.pitch = VIEW.pitch + 0.05 * Math.sin(st.sway * 0.7); }
+      if (st.idle && !st.highlight && Date.now() - st.lastPointer > 2500) { st.sway += 0.00020 * dt; st.yaw = VIEW.yaw + 0.24 * Math.sin(st.sway); st.pitch = VIEW.pitch + 0.05 * Math.sin(st.sway * 0.7); }
       if (st.playing) { const span = Math.max(1, now() - first); const k = clamp((ts - playStart) / 16000, 0, 1); st.t = first + span * k; if (k >= 1) { st.playing = false; st.t = now(); if (opts.onTime) opts.onTime(st.t, false); } else if (opts.onTime) opts.onTime(st.t, true); }
       draw();
       if (onScreen && !document.hidden) raf = requestAnimationFrame(frame);
@@ -644,7 +652,16 @@
       traverse: (ids, o) => { const list = (ids || []).filter(id => byId[id]); if (list.length < 1) return false; st.route = { ids: list, start: performance.now(), label: (o && o.label) || '' }; st.selected = null; kick(); return true; },
       /** The route a conversation taught: the thread, then every node it added, heaviest first. */
       traceThread: (threadId, o) => { const id = 'thread:' + threadId; if (!byId[id]) return false; const taught = nodes.filter(n => n.origin === threadId && n.kind !== 'intent').sort((a, b) => b.weight - a.weight).slice(0, 7).map(n => n.id); return api.traverse([id].concat(taught), o); },
-      select: (id) => { st.selected = id || null; kick(); },
+      select: (id) => { st.selected = id && byId[id] ? id : null; kick(); },
+      /** Light one node from outside (a chip in the lists, a Discover idea): it pulses, its neighbors stay bright, the rest softens. null clears. */
+      highlight: (id) => { const next = id && byId[id] ? id : null; if (next !== st.highlight) st.highlightAt = performance.now(); st.highlight = next; kick(); return !!next; },
+      has: (id) => !!byId[id],
+      node: (id) => byId[id] || null,
+      hovered: () => st.hover,
+      selectedId: () => st.selected,
+      highlighted: () => st.highlight,
+      /** The node's screen position, for anything the page wants to draw beside it. */
+      screenPosition: (id) => { const x = projected.find(p => p.n.id === id); return x ? { x: x.p.x, y: x.p.y, r: x.r, visible: x.dim > 0.3 } : null; },
       resetView: () => { st.yaw = VIEW.yaw; st.pitch = VIEW.pitch; st.zoom = 1; st.sway = 0; st.idle = true; st.lastPointer = 0; kick(); },
       cortexOf: (n) => KIND[n.kind] ? KIND[n.kind].cortex : null,
       settled: (n) => settledAt(n, st.t),

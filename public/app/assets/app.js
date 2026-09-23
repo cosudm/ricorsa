@@ -48,6 +48,8 @@ const ICONS = {
   compare: '<path d="M9 3v18M15 3v18"/><path d="M3 8h6M15 8h6M3 16h6M15 16h6"/>',
   lightbulb: '<path d="M9 18h6M10 21h4"/><path d="M8.5 14.5A6 6 0 1 1 15.5 14.5c-.6.6-1 1.5-1 2.5h-5c0-1-.4-1.9-1-2.5z"/>',
   map: '<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/>',
+  pin: '<path d="M12 21s-6-5.2-6-10a6 6 0 0 1 12 0c0 4.8-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>',
+  filter: '<path d="M4 5h16l-6 7v6l-4 2v-8z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   folderPlus: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/>',
   send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
@@ -141,7 +143,7 @@ function apiToast(e, fallback) {
 async function bootstrap() {
   const me = await api('/api/me');
   state.user = me.user; state.plan = me.plan; state.usage = me.usage;
-  state.threads = me.threads; state.spaces = me.spaces; state.graph = me.graph; state.graphSize = me.graphSize || 0;
+  state.threads = me.threads; state.spaces = me.spaces; state.graph = me.graph; state.graphSize = me.graphSize || 0; state.geo = me.geo || { enabled: true, provider: 'osm' };
   state.settings = Object.assign({}, DEFAULT_SETTINGS, me.user.settings || {});
   state.ready = true;
   // What the picker accepts and how many files a question may carry on this plan (fetched once, off the critical path).
@@ -1160,8 +1162,9 @@ function provenanceModal(thread) {
   const o = thread.origin || null;
   const rows = [];
   if (o) {
-    rows.push(['Origin', o.kind === 'discover' ? 'Discover idea' : 'Asked directly']);
-    if (o.title) rows.push(['Idea', o.title]);
+    rows.push(['Origin', o.kind === 'discover' ? 'Discover idea' : o.kind === 'graph' ? 'A node in your graph' : 'Asked directly']);
+    if (o.title) rows.push([o.kind === 'graph' ? 'Node' : 'Idea', o.title]);
+    if (o.nodeId) rows.push(['Node id', o.nodeId]);
     if (o.ideaId) rows.push(['Idea id', o.ideaId]);
     if (o.graphHash) rows.push(['Graph fingerprint', o.graphHash]);
     if (o.subject) rows.push(['Subject', o.subject]);
@@ -1221,6 +1224,7 @@ function paintTurn(sec, thread, t) {
   if (space) pills.push(`<span class="pill space">${esc(space.emoji)} ${esc(space.name)}</span>`);
   for (const a of (t.attachments || [])) pills.push(`<button type="button" class="pill file" data-file="${esc(a.id)}" title="Open ${esc(a.name)} · ${esc(String(a.chars || 0))} characters read">${icon(fileKind(a.name).icon, 12)}${esc(a.name.length > 34 ? a.name.slice(0, 31) + '…' : a.name)}</button>`);
   if (thread.origin && thread.origin.kind === 'discover' && thread.origin.ideaId) pills.push(`<span class="pill hashpill" title="Started from a Discover idea. Idea id ${esc(thread.origin.ideaId)} · graph ${esc(thread.origin.graphHash || '')}">${icon('compass', 12)}From Discover · ${esc(shortHash(thread.origin.ideaId))}</span>`);
+  if (thread.origin && thread.origin.kind === 'graph' && thread.origin.nodeId) pills.push(`<a class="pill hashpill" href="#/graph?node=${encodeURIComponent(thread.origin.nodeId)}" title="Started from a node in your graph: ${esc(thread.origin.title || thread.origin.nodeId)}. Open it in the brain.">${icon('brain', 12)}From your graph · ${esc(truncate(thread.origin.title || thread.origin.nodeId, 28))}</a>`);
   if (t.lineage) pills.push(`<span class="pill hashpill" title="Lineage hash ${esc(t.lineage)}">${icon('loop', 12)}${esc(shortHash(t.lineage))}</span>`);
   pills.push(`<span>${relTime(t.createdAt)}</span>`);
   $('[data-meta]', sec).innerHTML = pills.join('');
@@ -1289,9 +1293,24 @@ function paintTurn(sec, thread, t) {
     ? `<div class="sources-list">${sources.map(s => `<div class="source-card" data-src-n="${s.n}"><span class="n">${s.n}</span><span class="favi" style="background:${colorFor(s.domain || s.title)};margin-top:2px">${esc((s.domain || s.title)[0] || '?')}</span><div><div class="t">${esc(s.title)}</div><div class="u">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(/#\/vault\//.test(s.url) ? 'VDRPros Vault · opens the page in the viewer' : s.url)}</a>` : esc(s.domain || '')}</div></div>${s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open">${icon('external', 15)}</a>` : ''}</div>`).join('')}</div>`
     : `<div class="empty">${icon('book', 28)}<div>${running ? 'Sources arrive before the answer is written.' : 'No sources were used for this answer.'}</div></div>`;
 }
-function nodeChip(type, label, extra = '', id = '') {
+/**
+ * A node as a chip. With the node record itself (the Graph page lists) the chip is live: it carries the weight as a
+ * fill, marks what is new, strengthening or fading, flags places, and can be hovered (lights the node in the brain),
+ * clicked (opens the node panel) and forgotten (the ×).
+ */
+function nodeChip(type, label, extra = '', id = '', n = null) {
   const T = NODE_TYPES[type]; if (!T) return '';
-  return `<span class="nchip" data-node="${esc(id)}"><span class="dot ${T.shape}" style="background:${T.hex}"></span><span>${esc(label)}</span>${extra}${id ? `<button type="button" data-forget="${esc(id)}" aria-label="Forget ${esc(label)}" title="Forget">${icon('x', 10)}</button>` : ''}</span>`;
+  let cls = 'nchip', attrs = '';
+  if (n) {
+    const now = Date.now();
+    cls += ' live';
+    if (now - n.firstSeen < 7 * DAY_MS) cls += ' new'; else if (isEmergingNode(n, now)) cls += ' em';
+    if (isFadingNode(n, now)) cls += ' fade';
+    if (isPlaceNode(n)) cls += ' place';
+    const facts = `weight ${(n.weight * 100).toFixed(0)} · seen ${n.count}× · first ${relTime(n.firstSeen)} · last ${relTime(n.lastSeen)}${n.geoName ? ' · ' + truncate(n.geoName, 60) : ''}`;
+    attrs = ` data-type="${esc(type)}" data-w="${Number(n.weight).toFixed(3)}" data-count="${n.count}" data-first="${n.firstSeen}" data-last="${n.lastSeen}" data-label="${esc(String(label).toLowerCase())}" tabindex="0" role="button" style="--w:${clamp(n.weight, 0.05, 1).toFixed(2)};--ch:${T.hex}" title="${esc(label)} · ${esc(facts)} · click for details"`;
+  }
+  return `<span class="${cls}" data-node="${esc(id)}"${attrs}><span class="dot ${T.shape}" style="background:${T.hex}"></span>${n && isPlaceNode(n) ? icon('pin', 11, 'class="pin"') : ''}<span class="lbl">${esc(label)}</span>${extra}${id ? `<button type="button" data-forget="${esc(id)}" aria-label="Forget ${esc(label)}" title="Forget">${icon('x', 10)}</button>` : ''}</span>`;
 }
 function learnedHtml(thread, t) {
   const L = t.learned; if (!L) return '';
@@ -1401,20 +1420,25 @@ function previewHtml(it, cat, seed, rich) {
 function renderDiscover() {
   const main = $('#main');
   const cat = state.discoverCat;
-  const entry = state.discoverGen[cat];
+  // Discover can be anchored on one node from the Graph page (#/discover?anchor=<node id>): the ideas center on it.
+  const anchor = state.route && state.route.query && state.route.query.anchor ? findGraphNode(state.route.query.anchor) : null;
+  const key = anchor ? `${cat}|${anchor.id}` : cat;
+  const entry = state.discoverGen[key];
   const items = entry ? entry.items : null;
   const nodes = state.graphSize || (state.graph ? Object.keys(state.graph.nodes).length : 0);
   const personal = entry && entry.personal;
   const locked = caps().discover !== 'full';
+  const AT = anchor ? NODE_TYPES[anchor.type] || {} : {};
   main.innerHTML = `<div class="view">${topbarHtml('Discover')}<div class="scroll"><div class="col wide">
     <div class="page-h"><h1>${icon('compass', 26)}Discover</h1><div class="disc-tools">${personal ? `<span class="gen-tag">${icon('loop', 14)}Built from your graph</span>` : ''}<button type="button" class="btn sm" data-gen>${icon('sparkles', 15)}<span>${locked ? 'Generate from my graph' : items ? 'Generate again' : 'Generate from my graph'}</span></button></div></div>
     ${locked ? upgradeCard('Discover builds from your graph on the Professional plan', 'Agents, apps, tools, credentials and data products proposed from your own identity graph, each stamped with a provenance id. Below are examples of what it produces.', 'Professional') : ''}
-    <p class="page-sub">What your identity graph can become. ${nodes >= 3 ? 'These ideas are drawn from the topics, entities, goals and expertise in your graph. Open one to start building it with Ricorsa.' : 'Ask a few questions first and these will be drawn from your own graph; until then, here is what an identity graph can create.'} Every idea carries a cryptographic id tied to the exact state of your graph it came from, so anything built from it can be traced back to its origin.${entry && entry.graphHash ? ` <span class="hash" title="SHA-256 fingerprint of your graph at generation time">${icon('loop', 11)}graph ${esc(shortHash(entry.graphHash))}</span>` : ''}</p>
+    ${anchor ? `<div class="anchor-row"><span class="anchor-chip" style="--ch:${AT.hex || 'var(--accent)'}"><span class="dot ${AT.shape || 'circle'}"></span><span>Centered on <b>${esc(anchor.label)}</b></span><a class="nchip-x" href="#/discover" aria-label="Remove the anchor" title="Back to ideas from the whole graph">${icon('x', 11)}</a></span><a class="lnk" href="#/graph?node=${encodeURIComponent(anchor.id)}">${icon('brain', 13)}Open it in the brain</a></div>` : ''}
+    <p class="page-sub">What your identity graph can become. ${anchor ? (entry && entry.anchor ? `These ideas center on ${esc(anchor.label)} and combine it with the rest of your graph. Open one to start building it with Ricorsa.` : entry ? `Ideas centered on ${esc(anchor.label)} need a fuller graph (a few more conversations); until then, here is what an identity graph can create.` : `Centering ideas on ${esc(anchor.label)}.`) : nodes >= 3 ? 'These ideas are drawn from the topics, entities, goals and expertise in your graph. Open one to start building it with Ricorsa.' : 'Ask a few questions first and these will be drawn from your own graph; until then, here is what an identity graph can create.'} Every idea carries a cryptographic id tied to the exact state of your graph it came from, so anything built from it can be traced back to its origin.${entry && entry.graphHash ? ` <span class="hash" title="SHA-256 fingerprint of your graph at generation time">${icon('loop', 11)}graph ${esc(shortHash(entry.graphHash))}</span>` : ''}</p>
     ${buildsRowHtml()}
     <div class="cat-row">${DISCOVER_CATS.map(c => `<button type="button" class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-    <div class="disc-grid" data-grid>${items ? items.map((it, i) => discoverCard(it, i, cat)).join('') : `<div class="g-empty" style="grid-column:1/-1">${icon('loop', 30)}<div>Nothing generated yet for ${esc(cat)}.</div><p>Press “Generate from my graph” and Ricorsa will propose things you could build.</p></div>`}</div>
+    <div class="disc-grid" data-grid>${items ? items.map((it, i) => discoverCard(it, i, cat)).join('') : `<div class="g-empty" style="grid-column:1/-1">${icon('loop', 30)}<div>Nothing generated yet for ${esc(cat)}${anchor ? ` around ${esc(anchor.label)}` : ''}.</div><p>Press \u201cGenerate from my graph\u201d and Ricorsa will propose things you could build.</p></div>`}</div>
   </div></div></div>`;
-  $$('[data-cat]', main).forEach(b => b.addEventListener('click', () => { state.discoverCat = b.dataset.cat; if (!state.discoverGen[b.dataset.cat]) fetchDiscover(b.dataset.cat, false); renderDiscover(); }));
+  $$('[data-cat]', main).forEach(b => b.addEventListener('click', () => { state.discoverCat = b.dataset.cat; const k = anchor ? `${b.dataset.cat}|${anchor.id}` : b.dataset.cat; if (!state.discoverGen[k]) fetchDiscover(b.dataset.cat, false, anchor ? anchor.id : null); renderDiscover(); }));
   if (!state.builds) loadBuilds().then(() => { if (state.route.name === 'discover') { const row = $('[data-builds-row]', main); if (row) row.outerHTML = buildsRowHtml(); wireBuildsRow(main); } });
   wireBuildsRow(main);
   $$('[data-q]', main).forEach(b => b.addEventListener('click', () => {
@@ -1423,25 +1447,37 @@ function renderDiscover() {
     startThread(b.dataset.q, { mode: 'search', tier: state.settings.tier, focus: 'web', origin });
   }));
   $$('[data-build]', main).forEach(b => b.addEventListener('click', () => { const it = items ? items[+b.dataset.build] : null; if (it) startBuild(it, cat); }));
+  // The "builds" chips: hovering one lights nothing here, but clicking opens that node in the brain (the link carries it).
   const genBtn = $('[data-gen]', main);
-  if (locked) { genBtn.disabled = true; genBtn.title = 'Generating from your graph is part of the Professional and Enterprise plans'; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items));
-  if (!items && !state.discoverTried[cat]) { state.discoverTried[cat] = true; fetchDiscover(cat, false); }
+  if (locked) { genBtn.disabled = true; genBtn.title = 'Generating from your graph is part of the Professional and Enterprise plans'; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items, anchor ? anchor.id : null));
+  if (!items && !state.discoverTried[key]) { state.discoverTried[key] = true; fetchDiscover(cat, false, anchor ? anchor.id : null); }
+  // Arriving from a node panel: the idea it pointed at flashes once.
+  if (state.discoverFocus) { const card = main.querySelector(`.disc[data-idea-id="${String(state.discoverFocus).replace(/["\\]/g, '\\$&')}"]`); if (card) { card.classList.add('flash'); setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300); setTimeout(() => card.classList.remove('flash'), 2600); } if (items) state.discoverFocus = null; }
   wireTopbar(main);
 }
+/** One idea. Its "builds" chips name the graph nodes (or node types) it draws on and open them in the brain. */
 function discoverCard(it, i, cat) {
-  const builds = (it.builds || []).slice(0, 4).map(x => `<span class="nchip"><span class="dot circle" style="background:var(--accent)"></span><span>${esc(x)}</span></span>`).join('');
+  const builds = (it.builds || []).slice(0, 4).map(x => {
+    const n = findGraphNode(x); const t = TYPE_WORDS[String(x).toLowerCase().trim()];
+    if (n) { const T = NODE_TYPES[n.type] || {}; return `<a class="nchip link" href="#/graph?node=${encodeURIComponent(n.id)}" title="${esc(n.label)} · ${esc((T.label || '').replace(/s$/, '').replace(/ie$/, 'y').toLowerCase())} in your graph · weight ${(n.weight * 100).toFixed(0)} · open it in the brain"><span class="dot ${T.shape || 'circle'}" style="background:${T.hex || 'var(--accent)'}"></span><span>${esc(x)}</span>${icon('brain', 11, 'class="go"')}</a>`; }
+    if (t) { const T = NODE_TYPES[t]; return `<a class="nchip link" href="#/graph?type=${t}" title="Your ${esc(T.label.toLowerCase())} in the graph"><span class="dot ${T.shape}" style="background:${T.hex}"></span><span>${esc(x)}</span>${icon('brain', 11, 'class="go"')}</a>`; }
+    return `<span class="nchip"><span class="dot circle" style="background:var(--accent)"></span><span>${esc(x)}</span></span>`;
+  }).join('');
   const hash = it.id ? `<span class="hash" title="Provenance id ${esc(it.id)} · graph ${esc(it.graphHash || '')}">${icon('loop', 11)}${esc(shortHash(it.id))}</span>` : '';
   const buildTip = caps().discover === 'full' ? 'Build a working version of this, personalized with your graph' : 'Building from Discover is part of the Professional and Enterprise plans';
   const askQ = `What would "${it.title}" do for me, and what should it include? ${it.what}`;
-  return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}"><button type="button" class="disc-open" data-build="${i}" data-idx="${i}" title="${esc(buildTip)}">${previewHtml(it, cat, i + 1, i === 0)}<div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${it.why ? `<span class="why">${icon('sparkles', 12)}<span>${esc(it.why)}</span></span>` : ''}${builds ? `<span class="b" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">${builds}</span>` : ''}</div></button><div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(askQ)}" data-idx="${i}" title="Start a thread about this idea (the app itself is built with Build it)">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
+  return `<div class="disc${i === 0 ? ' feature' : ''}" data-idx="${i}" data-idea-id="${esc(it.id || '')}"><button type="button" class="disc-open" data-build="${i}" data-idx="${i}" title="${esc(buildTip)}">${previewHtml(it, cat, i + 1, i === 0)}<div class="body"><span class="cat-tag">${esc(it.kind || cat)}${hash}</span><span class="h">${esc(it.title)}</span><span class="b">${esc(it.what)}</span>${it.why ? `<span class="why">${icon('sparkles', 12)}<span>${esc(it.why)}</span></span>` : ''}</div></button>${builds ? `<div class="disc-builds" title="The parts of your graph this idea draws on">${builds}</div>` : ''}<div class="disc-actions"><button type="button" class="btn sm ghost" data-q="${esc(askQ)}" data-idx="${i}" title="Start a thread about this idea (the app itself is built with Build it)">${icon('search', 14)}<span>Ask about it</span></button><button type="button" class="btn sm primary" data-build="${i}" title="${esc(buildTip)}">${icon('zap', 14)}<span>Build it</span></button></div></div>`;
 }
-async function fetchDiscover(cat, refresh) {
+async function fetchDiscover(cat, refresh, anchorId) {
+  const key = anchorId ? `${cat}|${anchorId}` : cat;
   const btn = $('[data-gen]'); if (btn) { btn.disabled = true; btn.innerHTML = icon('sparkles', 15) + '<span class="dots">Generating</span>'; }
   try {
-    const r = await api('/api/discover', { body: { category: cat, refresh } });
-    state.discoverGen[cat] = { items: r.items, personal: !!r.personal, graphHash: r.graphHash || null };
+    const r = await api('/api/discover', { body: { category: cat, refresh, ...(anchorId ? { anchor: anchorId } : {}) } });
+    state.discoverGen[key] = { items: r.items, personal: !!r.personal, graphHash: r.graphHash || null, anchor: r.anchor || null };
   } catch (err) { apiToast(err, 'Could not generate ideas right now'); }
-  if (state.route.name === 'discover' && state.discoverCat === cat) renderDiscover();
+  const rq = state.route && state.route.query ? state.route.query.anchor : null;
+  const routeAnchor = rq ? findGraphNode(rq) : null;
+  if (state.route.name === 'discover' && state.discoverCat === cat && ((routeAnchor ? routeAnchor.id : null) === (anchorId || null))) renderDiscover();
 }
 
 // ---------- Builds ----------
@@ -1887,7 +1923,124 @@ function brainModel(g) {
   return { nodes, edges, spaces: (state.spaces || []).map(s => ({ id: s.id, name: s.name })), org: { name: domain || 'Your organization' } };
 }
 const BRAIN_STOPS = [['Today', 0], ['1 week', 7], ['1 month', 30], ['6 months', 182], ['1 year', 365], ['5 years', 1826]];
-/** Mount the living brain into the graph page and wire the toolbar, the time controls, the cortex legend and the node panel. */
+/** The learned node types and the cortex each lives in (the brain's KIND map, mirrored so the lists can follow a region). */
+const TYPE_CORTEX = { topic: 'knowledge', expertise: 'knowledge', entity: 'identity', goal: 'opportunity', style: 'communication' };
+const DAY_MS = 86400000;
+/** A Discover idea's "builds" word as a node type, when it names one (curated ideas name types; personal ideas name nodes). */
+const TYPE_WORDS = { topic: 'topic', topics: 'topic', entity: 'entity', entities: 'entity', goal: 'goal', goals: 'goal', expertise: 'expertise', style: 'style', styles: 'style' };
+/** The list controls on the Graph page. They outlive a re-render, so a filter survives a forget or a refresh. */
+state.gfilter = { q: '', sort: 'weight', show: 'all', cortex: null, t: null, view: 'brain' };
+/** Strengthening: it came back recently and more than once (the brain's own Emerging view is a little wider; the lists mark recurrence). */
+function isEmergingNode(n, t) { t = t || Date.now(); return (t - n.lastSeen) < 14 * DAY_MS && (n.count || 1) >= 2; }
+function isFadingNode(n, t) { t = t || Date.now(); return n.weight < 0.3 && (t - n.lastSeen) > 30 * DAY_MS; }
+function isPlaceNode(n) { return !!(n && (n.place || (n.geo && n.geo.type === 'Point'))); }
+/** A learned node as the brain models it, so the node panel works from a chip whether or not the brain is mounted. */
+function brainNodeFor(n) {
+  if (!n) return null;
+  const live = state.graph3d && state.graph3d.node ? state.graph3d.node(n.id) : null;
+  return live || { id: n.id, kind: n.type, label: n.label, weight: n.weight, count: n.count, firstSeen: n.firstSeen, lastSeen: n.lastSeen, level: n.level, origin: n.origin && n.origin.threadId ? n.origin.threadId : null, meta: n };
+}
+/** Every mounted view of the graph (the brain, the map), so a hover, a search or a time change reaches all of them. */
+function graphViews() { return [state.graph3d, state.graphMap].filter(v => v && v.destroy); }
+/** Light a node in every view; with nothing to light, fall back to the node pinned by "Show in the brain" (state.gPinned). */
+function lightNode(id) { const want = id || state.gPinned || null; graphViews().forEach(v => { if (v.highlight) v.highlight(want); }); }
+/** Find a node by id, or by label (Discover's "builds" chips name nodes by label). */
+function findGraphNode(ref) {
+  const g = state.graph; if (!g || !ref) return null;
+  if (g.nodes[ref]) return g.nodes[ref];
+  const key = String(ref).toLowerCase().trim();
+  return Object.values(g.nodes).find(n => n.label.toLowerCase() === key) || Object.values(g.nodes).find(n => slugify(n.label) === slugify(key)) || null;
+}
+/** Mark the chip for a node (hot: hovered in the brain; on: selected), clearing the mark elsewhere. */
+function markChip(main, id, cls) {
+  $$('.nchip.' + cls, main).forEach(c => c.classList.remove(cls));
+  if (!id) return null;
+  const c = main.querySelector(`.nchip.live[data-node="${String(id).replace(/["\\]/g, '\\$&')}"]`);
+  if (c) c.classList.add(cls);
+  return c;
+}
+/** Load the map module once (graphmap.js). */
+function ensureGraphMap() {
+  if (window.RicorsaGraphMap) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let sc = document.querySelector('script[data-graphmap]');
+    if (!sc) { sc = document.createElement('script'); sc.src = '/app/assets/graphmap.js'; sc.dataset.graphmap = '1'; document.head.appendChild(sc); }
+    sc.addEventListener('load', () => resolve(!!window.RicorsaGraphMap)); sc.addEventListener('error', () => resolve(false));
+    if (window.RicorsaGraphMap) resolve(true);
+  });
+}
+/** The question "Ask about this" starts for a node, in the person's own voice. */
+function askFor(n, gn) {
+  const L = n.label;
+  if (gn && isPlaceNode(gn)) return `What is happening in ${L} that matters for my work?`;
+  switch (n.kind) {
+    case 'topic': return `Give me a current briefing on ${L}: what has changed lately and what matters for my work.`;
+    case 'entity': return `What is the latest on ${L} that matters for what I am working on?`;
+    case 'goal': return `What are the next concrete steps toward this goal: ${L}?`;
+    case 'expertise': return `Given my level in ${L}, what should I learn or do next?`;
+    case 'intent': return `Help me with this: ${L}`;
+    default: return '';
+  }
+}
+/** Discover ideas already generated this session that draw on a node (its label appears in the idea's "builds"). */
+function ideasDrawingOn(label) {
+  const key = String(label || '').toLowerCase().trim(); const out = [];
+  for (const [k, entry] of Object.entries(state.discoverGen || {})) {
+    if (!entry || !entry.items) continue;
+    const cat = k.split('|')[0];
+    for (const it of entry.items) if ((it.builds || []).some(b => String(b).toLowerCase().trim() === key) && !out.some(o => o.it.title === it.title)) out.push({ cat, key: k, it });
+  }
+  return out.slice(0, 4);
+}
+/** Light one node in whichever view is showing and bring the stage into view. */
+async function showInBrain(id, preferMap) {
+  const main = $('#main'); const f = state.gfilter;
+  const stage = $('#g3d', main); if (!stage) return;
+  const gn = state.graph && state.graph.nodes[id]; const onMap = !!(gn && gn.geo && gn.geo.type === 'Point');
+  const want = preferMap && onMap ? 'map' : (f.view === 'map' && !onMap ? 'brain' : f.view);
+  if (want !== f.view || (want === 'map' && !state.graphMap)) await showGraphView(main, state.graph, want);
+  if (!stage.isConnected) return;
+  state.gPinned = id;
+  graphViews().forEach(v => { if (v.select) v.select(id); });
+  lightNode(id);
+  markChip(main, id, 'on');
+  stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  clearTimeout(state.gHighlightTimer);
+  state.gHighlightTimer = setTimeout(() => { if (state.gPinned === id) state.gPinned = null; lightNode(null); }, 7000);
+}
+/** Swap the stage between the living brain and the map; the time, search, labels and region focus carry over. */
+async function showGraphView(main, g, view) {
+  const f = state.gfilter; f.view = view === 'map' ? 'map' : 'brain';
+  $$('[data-g3d-view]', main).forEach(b => { const on = b.dataset.g3dView === f.view; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+  const bstage = $('#g3dStage', main), mstage = $('#gmapStage', main);
+  if (!bstage || !mstage) return;
+  if (f.view === 'map') {
+    mstage.hidden = false; bstage.hidden = true;
+    const ok = await ensureGraphMap();
+    if (!mstage.isConnected) return;
+    if (!ok) { mstage.hidden = true; bstage.hidden = false; f.view = 'brain'; $$('[data-g3d-view]', main).forEach(b => b.classList.toggle('on', b.dataset.g3dView === 'brain')); toast('The map could not be loaded', 'bad'); return; }
+    if (!state.graphMap) {
+      const tip = $('#gmTip', main);
+      const attribution = state.geo && state.geo.provider === 'custom' ? 'Place data from the configured geocoder' : 'Place data © OpenStreetMap contributors';
+      state.graphMap = window.RicorsaGraphMap.mount(mstage, brainModel(g), {
+        attribution,
+        onHover: (n, x, y) => {
+          markChip(main, n ? n.id : null, 'hot');
+          if (!tip) return;
+          if (!n) { tip.style.opacity = '0'; return; }
+          const gn = n.meta || {};
+          tip.innerHTML = `<b>${esc(n.label)}</b>${esc(truncate(gn.geoName || '', 70))}${gn.geoKind ? ' · ' + esc(gn.geoKind) : ''}<br><span style="opacity:.75">seen ${n.count}× · weight ${(n.weight * 100).toFixed(0)} · ${relTime(n.lastSeen)} · click for details</span>`;
+          tip.style.opacity = '1'; const r = mstage.getBoundingClientRect(); tip.style.left = Math.min(r.width - 280, Math.max(8, x + 14)) + 'px'; tip.style.top = Math.max(8, y - 10) + 'px';
+        },
+        onSelect: (n) => { markChip(main, n.id, 'on'); if (state.graph3d) state.graph3d.select(n.id); nodePanel(n, state.graph3d); },
+      });
+      state.graphMap.setTime(f.t || Date.now()); state.graphMap.setQuery(f.q); state.graphMap.setLabels(!!($('#g3dLabels', main) || { checked: true }).checked); state.graphMap.focus(f.cortex);
+    }
+  } else { bstage.hidden = false; mstage.hidden = true; }
+  $$('[data-brain-only]', main).forEach(el => el.classList.toggle('off', f.view === 'map'));
+  const note = $('#g3dNote', main); if (note) note.textContent = f.view === 'map' ? 'The map is the same graph seen by place: every entity the geocoder could put somewhere (a city, a county, a site, an address your work is about), in the colors of its cortex, connected where the places were learned together. Places are added after the answer that names them. Drag to pan, scroll to zoom, hover a place for details, click for more.' : main.dataset.brainNote || '';
+}
+/** Mount the living brain into the graph page and wire the toolbar, the time controls, the cortex legend, the map and the node panel. */
 async function mountGraph3D(main, g, fallback) {
   const stage = $('#g3dStage', main); if (!stage) return;
   const [ok] = await Promise.all([ensureGraph3D(), state.builds ? Promise.resolve() : loadBuilds().catch(() => {}), state.connectors ? Promise.resolve() : api('/api/connectors').then(r => { state.connectors = r.items || []; }).catch(() => {})]);
@@ -1895,14 +2048,19 @@ async function mountGraph3D(main, g, fallback) {
   const tip = $('#gTip', main);
   if (!ok) {
     const box = $('#g3d', main); if (box) box.outerHTML = `<div class="g-wrap"><svg viewBox="0 0 ${fallback.W} ${fallback.H}" role="img" aria-label="Map of what Ricorsa has learned: ${fallback.all.length} nodes">${fallback.svg}</svg><div class="g-tip" id="gTip"></div></div>`;
+    wireFallbackSvg(main, g);
     return;
   }
   if (state.graph3d && state.graph3d.destroy) { try { state.graph3d.destroy(); } catch (e) {} }
+  if (state.graphMap && state.graphMap.destroy) { try { state.graphMap.destroy(); } catch (e) {} state.graphMap = null; }
+  const f = state.gfilter; f.t = null;
   const when = $('#g3dWhen', main), scrub = $('#g3dScrub', main), play = $('#g3dPlay', main);
   const fmtWhen = (t, now) => t >= now - 60000 ? 'Today' : new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const kindLabel = (n) => n.kind === 'thread' ? 'Conversation' : n.kind === 'build' ? 'Built' : n.kind === 'connector' ? 'Connector' : n.kind === 'intent' ? 'Pattern' : (NODE_TYPES[n.kind] ? NODE_TYPES[n.kind].label.replace(/s$/, '').replace(/ie$/, 'y') : n.kind);
+  let lastApply = 0;   // the lists follow the replay at most a few times a second
   const ctl = window.RicorsaGraph3D.mount(stage, brainModel(g), {
     onHover: (n, x, y) => {
+      markChip(main, n && NODE_TYPES[n.kind] ? n.id : null, 'hot');
       if (!tip) return;
       if (!n) { tip.style.opacity = '0'; return; }
       const C = ctl.CORTEX[ctl.cortexOf(n)]; const settled = Math.round(ctl.settled(n) * 100);
@@ -1910,57 +2068,237 @@ async function mountGraph3D(main, g, fallback) {
       tip.innerHTML = `<b>${esc(n.label)}</b>${esc(kindLabel(n))}${n.level ? ' · ' + esc(n.level) : ''} · ${facts}<br><span style="opacity:.75">${esc(C ? C.label : '')}${settled < 60 ? ` · settling (${settled}%)` : ''}${ctl.emerging(n) ? ' · strengthening' : ''} · ${relTime(n.lastSeen)} · click for details</span>`;
       tip.style.opacity = '1'; const r = stage.getBoundingClientRect(); tip.style.left = Math.min(r.width - 280, Math.max(8, x + 14)) + 'px'; tip.style.top = Math.max(8, y - 10) + 'px';
     },
-    onSelect: (n) => nodePanel(n, ctl),
-    onTime: (t, playing) => { const { first, now } = ctl.range(); if (scrub) scrub.value = String(Math.round(1000 * (t - first) / Math.max(1, now - first))); if (when) when.textContent = fmtWhen(t, now); if (play) play.querySelector('span').textContent = playing ? 'Stop' : 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.toggle('on', false)); },
+    onSelect: (n) => { markChip(main, NODE_TYPES[n.kind] ? n.id : null, 'on'); nodePanel(n, ctl); },
+    onTime: (t, playing) => { const { first, now } = ctl.range(); if (scrub) scrub.value = String(Math.round(1000 * (t - first) / Math.max(1, now - first))); if (when) when.textContent = fmtWhen(t, now); if (play) play.querySelector('span').textContent = playing ? 'Stop' : 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.toggle('on', false)); f.t = t >= now - 60000 ? null : t; if (state.graphMap) state.graphMap.setTime(t); const ts = performance.now(); if (!playing || ts - lastApply > 150) { lastApply = ts; applyGraphFilters(main); } },
   });
   state.graph3d = ctl;
-  $('#g3dFind', main).addEventListener('input', e => ctl.setQuery(e.target.value));
-  $('#g3dLabels', main).addEventListener('change', e => ctl.setLabels(e.target.checked));
-  $('#g3dReset', main).addEventListener('click', () => ctl.resetView());
+  const find = $('#g3dFind', main);
+  if (find) { find.value = f.q; if (f.q) ctl.setQuery(f.q); find.addEventListener('input', () => { f.q = find.value.trim().toLowerCase(); graphViews().forEach(v => v.setQuery(f.q)); applyGraphFilters(main); }); }
+  $('#g3dLabels', main).addEventListener('change', e => graphViews().forEach(v => v.setLabels(e.target.checked)));
+  $('#g3dReset', main).addEventListener('click', () => { (f.view === 'map' && state.graphMap ? state.graphMap : ctl).resetView(); });
   const em = $('#g3dEmerging', main); if (em) em.addEventListener('click', () => { const on = ctl.setEmerging(!em.classList.contains('on')); em.classList.toggle('on', on); em.setAttribute('aria-pressed', String(on)); });
   const la = $('#g3dLattice', main); if (la) la.addEventListener('click', () => { const on = ctl.setLattice(!la.classList.contains('on')); la.classList.toggle('on', on); la.setAttribute('aria-pressed', String(on)); });
   const de = $('#g3dDensity', main); if (de) de.addEventListener('change', e => ctl.setDensity(e.target.value));
-  const setStop = (days) => { const { first, now } = ctl.range(); const t = days ? Math.max(first, now - days * 86400000) : now; ctl.setTime(t); if (when) when.textContent = days ? fmtWhen(t, now) : 'Today'; if (scrub) scrub.value = String(Math.round(1000 * (t - first) / Math.max(1, now - first))); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.toggle('on', Number(b.dataset.g3dStop) === days)); };
+  const setTime = (t, now) => { ctl.setTime(t); if (state.graphMap) state.graphMap.setTime(t); f.t = t >= now - 60000 ? null : t; applyGraphFilters(main); };
+  const setStop = (days) => { const { first, now } = ctl.range(); const t = days ? Math.max(first, now - days * 86400000) : now; setTime(t, now); if (when) when.textContent = days ? fmtWhen(t, now) : 'Today'; if (scrub) scrub.value = String(Math.round(1000 * (t - first) / Math.max(1, now - first))); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.toggle('on', Number(b.dataset.g3dStop) === days)); };
   $$('[data-g3d-stop]', main).forEach(b => b.addEventListener('click', () => setStop(Number(b.dataset.g3dStop))));
-  if (scrub) scrub.addEventListener('input', () => { const { first, now } = ctl.range(); const t = first + (now - first) * (Number(scrub.value) / 1000); ctl.setTime(t); if (when) when.textContent = fmtWhen(t, now); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.remove('on')); });
+  if (scrub) scrub.addEventListener('input', () => { const { first, now } = ctl.range(); const t = first + (now - first) * (Number(scrub.value) / 1000); setTime(t, now); if (when) when.textContent = fmtWhen(t, now); if (play) play.querySelector('span').textContent = 'Replay'; $$('[data-g3d-stop]', main).forEach(b => b.classList.remove('on')); });
   if (play) play.addEventListener('click', () => { if (ctl.playing()) ctl.stop(); else ctl.play(); });
+  $$('[data-g3d-view]', main).forEach(b => b.addEventListener('click', () => showGraphView(main, g, b.dataset.g3dView)));
   const reg = $('#g3dRegions', main);
   if (reg) {
     const counts = ctl.counts();
-    reg.innerHTML = Object.entries(ctl.CORTEX).map(([k, C]) => `<button type="button" class="g3d-region" data-g3d-region="${k}" style="--rc:${C.hex}" aria-pressed="true"><b><i></i>${esc(C.label)}</b><span>${esc(C.sub)}</span><em>${counts[k] || 0} node${(counts[k] || 0) === 1 ? '' : 's'}</em></button>`).join('');
+    reg.innerHTML = Object.entries(ctl.CORTEX).map(([k, C]) => `<button type="button" class="g3d-region" data-g3d-region="${k}" style="--rc:${C.hex}" aria-pressed="false" title="Hover to light this region; click to keep it and filter the lists below to it"><b><i></i>${esc(C.label)}</b><span>${esc(C.sub)}</span><em>${counts[k] || 0} node${(counts[k] || 0) === 1 ? '' : 's'}</em></button>`).join('');
+    const focusAll = (k) => graphViews().forEach(v => v.focus(k));
     $$('[data-g3d-region]', reg).forEach(b => {
       const key = b.dataset.g3dRegion;
-      b.addEventListener('mouseenter', () => { if (!reg.querySelector('.pinned')) ctl.focus(key); });
-      b.addEventListener('mouseleave', () => { if (!reg.querySelector('.pinned')) ctl.focus(null); });
-      b.addEventListener('click', () => { const pinned = b.classList.contains('pinned'); $$('[data-g3d-region]', reg).forEach(x => x.classList.remove('pinned')); if (!pinned) { b.classList.add('pinned'); ctl.focus(key); } else ctl.focus(null); });
+      b.addEventListener('mouseenter', () => { if (!reg.querySelector('.pinned')) { focusAll(key); softenChips(main, key); } });
+      b.addEventListener('mouseleave', () => { if (!reg.querySelector('.pinned')) { focusAll(null); softenChips(main, null); } });
+      b.addEventListener('click', () => { const pinned = b.classList.contains('pinned'); $$('[data-g3d-region]', reg).forEach(x => { x.classList.remove('pinned'); x.setAttribute('aria-pressed', 'false'); }); softenChips(main, null); if (!pinned) { b.classList.add('pinned'); b.setAttribute('aria-pressed', 'true'); focusAll(key); f.cortex = key; } else { focusAll(null); f.cortex = null; } applyGraphFilters(main); });
     });
+    if (f.cortex) { const b = reg.querySelector(`[data-g3d-region="${f.cortex}"]`); if (b) { b.classList.add('pinned'); b.setAttribute('aria-pressed', 'true'); focusAll(f.cortex); } else f.cortex = null; }
   }
+  if (f.view === 'map') await showGraphView(main, g, 'map');
+  if (!stage.isConnected) return;
+  applyGraphFilters(main);
+  // Arriving with a node in the address (from Discover, or a link): light it and bring its chip into view.
+  const want = state.route && state.route.query && state.route.query.node ? findGraphNode(state.route.query.node) : null;
+  if (want) { const c = markChip(main, want.id, 'on'); showInBrain(want.id, false); if (c) setTimeout(() => c.scrollIntoView({ behavior: 'smooth', block: 'center' }), 600); }
 }
-/** Refresh the mounted brain after the graph changed (learning while it is open): new nodes are born on screen. */
-function refreshBrain() { if (state.graph3d && state.graph && state.route && state.route.name === 'graph') { try { state.graph3d.update(brainModel(state.graph)); } catch (e) {} } }
-/** Everything about one node: what it is, where it came from, and what can be done with it. */
+/** Hovering a region: chips outside it soften (the pin hides them instead, through the filters). */
+function softenChips(main, cortex) { $$('.nchip.live', main).forEach(c => c.classList.toggle('soft', !!cortex && TYPE_CORTEX[c.dataset.type] !== cortex)); }
+/** The flat SVG fallback (when the brain module could not load): hover shows facts, click forgets. */
+function wireFallbackSvg(main, g) {
+  const wrap = $('.g-wrap', main), tip = $('#gTip', main); if (!wrap || !tip) return;
+  const show = (el, ev) => { const n = g.nodes[el.dataset.node]; if (!n) return; const T = NODE_TYPES[n.type]; tip.innerHTML = `<b>${esc(n.label)}</b>${T.label}${n.level ? ' · ' + esc(n.level) : ''} · seen ${n.count}× · weight ${(n.weight * 100).toFixed(0)}<br><span style="opacity:.75">first ${relTime(n.firstSeen)} · last ${relTime(n.lastSeen)} · click for details</span>${n.origin ? `<br><span style="opacity:.75;font-family:var(--mono);font-size:11px">origin ${esc(shortHash(n.origin.lineage || n.origin.threadId))}${n.origin.ideaId ? ' · idea ' + esc(shortHash(n.origin.ideaId)) : ''}</span>` : ''}`; const r = wrap.getBoundingClientRect(); const x = ev ? ev.clientX - r.left : r.width / 2, y = ev ? ev.clientY - r.top : r.height / 2; tip.style.left = Math.min(x + 12, r.width - 250) + 'px'; tip.style.top = (y + 14) + 'px'; tip.style.opacity = '1'; };
+  $$('.node', wrap).forEach(el => {
+    el.addEventListener('mousemove', ev => show(el, ev)); el.addEventListener('mouseleave', () => tip.style.opacity = '0');
+    el.addEventListener('focus', () => show(el)); el.addEventListener('blur', () => tip.style.opacity = '0');
+    const open = () => { const n = g.nodes[el.dataset.node]; if (n) nodePanel(brainNodeFor(n), null); };
+    el.addEventListener('click', open); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  });
+}
+/** Refresh the mounted brain, the map and the lists after the graph changed (learning while it is open): new nodes are born on screen. */
+function refreshBrain() {
+  if (!(state.graph && state.route && state.route.name === 'graph')) return;
+  const main = $('#main'); const g = state.graph;
+  const model = brainModel(g);
+  if (state.graph3d) { try { state.graph3d.update(model); } catch (e) {} }
+  if (state.graphMap) { try { state.graphMap.update(model); } catch (e) {} }
+  const all = Object.values(g.nodes).sort((a, b) => b.weight - a.weight || b.lastSeen - a.lastSeen);
+  const box = $('#gTypes', main); if (box) { box.innerHTML = graphTypeCardsHtml(all); wireGraphChips(main, g); applyGraphFilters(main); }
+  const stats = $('#gStats', main); if (stats) stats.innerHTML = graphStatsHtml(g, all);
+  const reg = $('#g3dRegions', main); if (reg && state.graph3d) { const counts = state.graph3d.counts(); $$('[data-g3d-region]', reg).forEach(b => { const em = b.querySelector('em'); const k = b.dataset.g3dRegion; if (em) em.textContent = `${counts[k] || 0} node${(counts[k] || 0) === 1 ? '' : 's'}`; }); }
+}
+function graphStatsHtml(g, all) {
+  const places = all.filter(n => n.geo && n.geo.type === 'Point').length;
+  return `<div class="g-stat"><b>${all.length}</b><span>nodes</span></div><div class="g-stat"><b>${Object.keys(g.edges).length}</b><span>connections</span></div><div class="g-stat"><b>${g.events}</b><span>learning events</span></div><div class="g-stat"><b>${g.intents.length}</b><span>intents recorded</span></div>${places ? `<div class="g-stat"><b>${places}</b><span>place${places === 1 ? '' : 's'} on the map</span></div>` : ''}`;
+}
+/** The five type cards, each a list of live chips. */
+function graphTypeCardsHtml(all) {
+  return Object.entries(NODE_TYPES).map(([t, T]) => {
+    const list = all.filter(n => n.type === t);
+    const sw = `<span class="sw dot ${T.shape}" style="display:inline-block;width:10px;height:10px;border-radius:${T.shape === 'circle' || T.shape === 'ring' ? '50%' : '2px'};background:${T.shape === 'ring' ? 'transparent' : T.hex};${T.shape === 'ring' ? `border:2px solid ${T.hex};box-sizing:border-box;` : ''}${T.shape === 'diamond' ? 'transform:rotate(45deg) scale(.85);' : ''}${T.shape === 'hex' ? 'clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);border-radius:0;' : ''}"></span>`;
+    const chips = list.map(n => nodeChip(t, n.label, `<span class="cnt" title="Seen ${n.count} time${n.count === 1 ? '' : 's'} · weight ${(n.weight * 100).toFixed(0)}">×${n.count}</span>${n.level ? `<span class="lvl">${esc(n.level)}</span>` : ''}`, n.id, n)).join('');
+    return `<div class="g-type${t === 'topic' ? ' wide' : ''}" data-type-card="${t}"><h3>${sw}${T.label}<span class="gen-tag" data-type-count="${t}">${list.length}</span></h3><p>${T.desc}</p><div class="chips">${chips || '<span class="none">Nothing yet</span>'}<span class="none" data-none-match hidden>Nothing here matches</span></div></div>`;
+  }).join('');
+}
+/** The list toolbar: what to sort by, what to show, and the count; the search box in the brain's bar filters the lists too. */
+function graphListBarHtml(all) {
+  const places = all.filter(isPlaceNode).length;
+  return `<div class="g-list-bar" id="gListBar">
+    <span class="g-list-count" id="gListCount">${all.length} node${all.length === 1 ? '' : 's'}</span>
+    <label class="g3d-check">Sort <select id="gSort" aria-label="Sort the lists"><option value="weight">Strongest first</option><option value="recent">Most recent</option><option value="seen">Most seen</option><option value="newest">Newest</option><option value="alpha">A to Z</option></select></label>
+    <label class="g3d-check">Show <select id="gShow" aria-label="Which nodes to show"><option value="all">Everything</option><option value="strong">Strong (weight 55 and up)</option><option value="em">Strengthening</option><option value="new">New this week</option><option value="fade">Fading</option>${places ? '<option value="place">Places</option>' : ''}</select></label>
+    <button type="button" class="btn sm ghost" id="gListClear" hidden>${icon('x', 12)}<span>Clear</span></button>
+    <span class="spacer"></span>
+    <span class="g-list-hint">${icon('brain', 13)}<span>Hover a chip to find it in the brain; click it for details, what it connects to and what Discover would build from it.</span></span>
+  </div>`;
+}
+/** Apply the list controls: the search, the pinned region, the "show" choice, the time scrubber and the sort, and update every count. */
+function applyGraphFilters(main) {
+  main = main || $('#main'); const f = state.gfilter; const g = state.graph; if (!g) return;
+  const t = f.t || Date.now();
+  const chips = $$('.g-type .nchip.live', main);
+  const keyOf = { weight: c => -Number(c.dataset.w), recent: c => -Number(c.dataset.last), seen: c => -Number(c.dataset.count), newest: c => -Number(c.dataset.first), alpha: c => c.dataset.label };
+  const key = keyOf[f.sort] || keyOf.weight;
+  let shown = 0;
+  for (const c of chips) {
+    const n = g.nodes[c.dataset.node]; if (!n) { c.hidden = true; continue; }
+    let ok = n.firstSeen <= t;
+    if (ok && f.q) ok = c.dataset.label.includes(f.q);
+    if (ok && f.cortex) ok = TYPE_CORTEX[n.type] === f.cortex;
+    if (ok) switch (f.show) { case 'strong': ok = n.weight >= 0.55; break; case 'em': ok = isEmergingNode(n, t); break; case 'new': ok = t - n.firstSeen < 7 * DAY_MS; break; case 'fade': ok = isFadingNode(n, t); break; case 'place': ok = isPlaceNode(n); break; default: break; }
+    c.hidden = !ok; if (ok) shown++;
+  }
+  for (const card of $$('.g-type', main)) {
+    const box = $('.chips', card); const list = $$('.nchip.live', box);
+    const sorted = list.slice().sort((a, b) => { const ka = key(a), kb = key(b); return ka < kb ? -1 : ka > kb ? 1 : 0; });
+    if (sorted.some((c, i) => c !== list[i])) sorted.forEach(c => box.appendChild(c));
+    const visible = list.filter(c => !c.hidden).length;
+    const none = $('[data-none-match]', box); if (none) { none.hidden = !(list.length && !visible); box.appendChild(none); }
+    const cnt = $('[data-type-count]', card); if (cnt) cnt.textContent = visible === list.length ? String(list.length) : `${visible} of ${list.length}`;
+  }
+  const count = $('#gListCount', main); if (count) count.textContent = shown === chips.length ? `${chips.length} node${chips.length === 1 ? '' : 's'}` : `${shown} of ${chips.length} nodes`;
+  const active = !!(f.q || f.cortex || f.show !== 'all' || f.t);
+  const clear = $('#gListClear', main); if (clear) clear.hidden = !active;
+  const sort = $('#gSort', main); if (sort && sort.value !== f.sort) sort.value = f.sort;
+  const show = $('#gShow', main); if (show && show.value !== f.show) show.value = f.show;
+}
+function clearGraphFilters(main) {
+  const f = state.gfilter; f.q = ''; f.show = 'all'; f.cortex = null;
+  const find = $('#g3dFind', main); if (find) find.value = '';
+  graphViews().forEach(v => { v.setQuery(''); v.focus(null); });
+  $$('[data-g3d-region]', main).forEach(b => { b.classList.remove('pinned'); b.setAttribute('aria-pressed', 'false'); });
+  softenChips(main, null);
+  if (f.t) { const b = main.querySelector('[data-g3d-stop="0"]'); if (b) b.click(); else f.t = null; }
+  applyGraphFilters(main);
+}
+/** Wire the list toolbar (once per render) and the chips (after every rebuild). */
+function wireGraphLists(main, g) {
+  const f = state.gfilter;
+  const sort = $('#gSort', main), show = $('#gShow', main), clear = $('#gListClear', main);
+  if (sort) { sort.value = f.sort; sort.addEventListener('change', () => { f.sort = sort.value; applyGraphFilters(main); }); }
+  if (show) { show.value = f.show; if (show.value !== f.show) { f.show = 'all'; show.value = 'all'; } show.addEventListener('change', () => { f.show = show.value; applyGraphFilters(main); }); }
+  if (clear) clear.addEventListener('click', () => clearGraphFilters(main));
+  wireGraphChips(main, g);
+}
+function wireGraphChips(main, g) {
+  const box = $('#gTypes', main); if (!box) return;
+  const light = lightNode;
+  $$('.nchip.live', box).forEach(c => {
+    const id = c.dataset.node;
+    c.addEventListener('mouseenter', () => light(id));
+    c.addEventListener('mouseleave', () => light(null));
+    c.addEventListener('focus', () => light(id));
+    c.addEventListener('blur', () => light(null));
+    c.addEventListener('click', async (e) => {
+      const fb = e.target.closest('[data-forget]');
+      if (fb) {
+        e.stopPropagation(); const n = g.nodes[fb.dataset.forget];
+        try { await forgetNode(fb.dataset.forget); } catch (err) { apiToast(err); return; }
+        light(null); refreshBrain(); toast(n ? `Forgot \u201c${truncate(n.label, 30)}\u201d` : 'Forgotten');
+        return;
+      }
+      const n = state.graph && state.graph.nodes[id]; if (!n) return;
+      markChip(main, n.id, 'on'); graphViews().forEach(v => v.select && v.select(n.id));
+      nodePanel(brainNodeFor(n), state.graph3d);
+    });
+    c.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && !e.target.closest('button')) { e.preventDefault(); c.click(); } });
+  });
+}
+/** Everything about one node: what it is, where it came from, what it connects to, and what can be done with it. */
 function nodePanel(n, ctl) {
-  const C = ctl && ctl.CORTEX[ctl.cortexOf(n)]; const settled = ctl ? Math.round(ctl.settled(n) * 100) : 100;
+  ctl = ctl || (state.graph3d && state.graph3d.destroy ? state.graph3d : null);
+  const C = ctl ? ctl.CORTEX[ctl.cortexOf(n)] : null; const settled = ctl ? Math.round(ctl.settled(n) * 100) : 100;
   const when = (v) => v ? `${new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${relTime(v)})` : '';
   const g = state.graph;
   const kindLabel = n.kind === 'thread' ? 'Conversation' : n.kind === 'build' ? 'Built in the studio' : n.kind === 'connector' ? 'Connected channel' : n.kind === 'intent' ? 'Pattern Ricorsa inferred' : (NODE_TYPES[n.kind] ? NODE_TYPES[n.kind].label.replace(/s$/, '').replace(/ie$/, 'y') : n.kind);
-  const learned = g && NODE_TYPES[n.kind];
-  const linked = learned && g ? Object.values(g.edges).filter(e => e.a === n.id || e.b === n.id).map(e => g.nodes[e.a === n.id ? e.b : e.a]).filter(Boolean).sort((a, b) => b.weight - a.weight).slice(0, 8) : [];
-  const taught = learned && g ? Object.values(g.nodes).filter(x => x.origin && n.kind === 'thread' && 'thread:' + x.origin.threadId === n.id) : (n.kind === 'thread' && g ? Object.values(g.nodes).filter(x => x.origin && 'thread:' + x.origin.threadId === n.id).sort((a, b) => b.weight - a.weight).slice(0, 10) : []);
+  const learned = !!(g && NODE_TYPES[n.kind]);
+  const gn = learned ? g.nodes[n.id] || null : null;
+  const linked = learned ? Object.values(g.edges).filter(e => e.a === n.id || e.b === n.id).map(e => ({ node: g.nodes[e.a === n.id ? e.b : e.a], w: e.weight })).filter(x => x.node).sort((a, b) => b.w - a.w).slice(0, 10) : [];
+  const taught = n.kind === 'thread' && g ? Object.values(g.nodes).filter(x => x.origin && 'thread:' + x.origin.threadId === n.id).sort((a, b) => b.weight - a.weight).slice(0, 10) : [];
   const open = n.kind === 'thread' ? `#/thread/${esc(n.meta.id)}` : n.kind === 'build' ? `#/build/${esc(n.meta.id)}` : n.kind === 'connector' ? '#/connectors' : n.origin ? `#/thread/${esc(n.origin)}` : (n.meta && n.meta.threadId ? `#/thread/${esc(n.meta.threadId)}` : '');
-  openModal(`<h2><i style="display:inline-block;width:12px;height:12px;margin-right:8px;border-radius:${n.kind === 'entity' || n.kind === 'connector' ? '3px' : '50%'};background:${C ? C.hex : '#888'};vertical-align:-1px"></i>${esc(n.label)}</h2>
-    <p class="sub">${esc(kindLabel)}${n.level ? ` · ${esc(n.level)}` : ''}${C ? ` · ${esc(C.label)}` : ''}${settled < 60 ? ` · still settling (${settled}%)` : ''}${ctl && ctl.emerging(n) ? ' · strengthening now' : ''}</p>
+  const ideas = learned ? ideasDrawingOn(n.label) : [];
+  const place = isPlaceNode(gn);
+  const geoLine = place ? (gn.geo ? `On the map as ${esc(truncate(gn.geoName || n.label, 80))}${gn.geoKind ? ` (${esc(gn.geoKind)})` : ''}.` : gn.geoFailedAt ? 'A place Ricorsa could not put on the map.' : 'A place; Ricorsa puts it on the map after the next answer.') : '';
+  const org = gn && gn.origin ? gn.origin : null;
+  const askQ = askFor(n, gn);
+  const chip = (x) => `<button type="button" class="chip" data-np-node="${esc(x.id)}" title="${esc(x.label)} · weight ${(x.weight * 100).toFixed(0)}"><i style="background:${(NODE_TYPES[x.type] || {}).hex || '#888'}"></i>${esc(truncate(x.label, 30))}</button>`;
+  openModal(`<h2><i style="display:inline-block;width:12px;height:12px;margin-right:8px;border-radius:${n.kind === 'entity' || n.kind === 'connector' ? '3px' : '50%'};background:${C ? C.hex : ((NODE_TYPES[n.kind] || {}).hex || '#888')};vertical-align:-1px"></i>${esc(n.label)}</h2>
+    <p class="sub">${esc(kindLabel)}${n.level ? ` · ${esc(n.level)}` : ''}${C ? ` · ${esc(C.label)}` : ''}${settled < 60 ? ` · still settling (${settled}%)` : ''}${ctl && ctl.emerging(n) ? ' · strengthening now' : ''}${place ? ' · place' : ''}</p>
     <div class="node-facts">
       ${learned ? `<div><small>Weight</small><b>${(n.weight * 100).toFixed(0)}</b></div><div><small>Seen</small><b>${n.count}×</b></div>` : n.kind === 'thread' ? `<div><small>Turns</small><b>${n.count}</b></div><div><small>Space</small><b>${esc((state.spaces.find(s => s.id === n.spaceId) || {}).name || 'None')}</b></div>` : ''}
       <div><small>First</small><b>${esc(when(n.firstSeen))}</b></div>
       <div><small>Last</small><b>${esc(when(n.lastSeen))}</b></div>
     </div>
-    ${linked.length ? `<div class="node-links"><small>Connected to</small><div class="chips">${linked.map(l => `<span class="chip" style="cursor:default">${esc(truncate(l.label, 30))}</span>`).join('')}</div></div>` : ''}
-    ${taught.length ? `<div class="node-links"><small>Taught Ricorsa</small><div class="chips">${taught.map(l => `<span class="chip" style="cursor:default">${esc(truncate(l.label, 30))}</span>`).join('')}</div></div>` : ''}
-    ${learned && n.origin ? `<p class="sub" style="margin-top:10px">Learned from a conversation${n.meta && n.meta.origin && n.meta.origin.ideaId ? ' started from a Discover idea' : ''}.</p>` : ''}
-    <div class="modal-actions">${learned ? `<button type="button" class="btn danger left" id="npForget">Forget</button>` : ''}${n.kind === 'thread' && taught.length && ctl ? `<button type="button" class="btn left" id="npTrace">${icon('sparkles', 14)}Trace what it taught</button>` : ''}${open ? `<a class="btn" href="${open}" data-close>${n.kind === 'thread' ? 'Open the conversation' : n.kind === 'build' ? 'Open in the studio' : n.kind === 'connector' ? 'Open Connectors' : 'Open the conversation'}</a>` : ''}<button type="button" class="btn primary" data-close>Done</button></div>`, {
-    onMount: () => { const f = $('#npForget'); if (f) f.addEventListener('click', async () => { closeModal(); try { await forgetNode(n.id); } catch (e) { apiToast(e); return; } renderGraph(); toast(`Forgot “${truncate(n.label, 30)}”`); }); const tr = $('#npTrace'); if (tr) tr.addEventListener('click', () => { closeModal(); ctl.traceThread(n.meta.id, { label: 'What “' + truncate(n.label, 60) + '” taught Ricorsa' }); }); }
+    ${geoLine ? `<p class="sub node-geo">${icon('pin', 13)}<span>${geoLine}</span></p>` : ''}
+    ${linked.length ? `<div class="node-links"><small>Connected to</small><div class="chips">${linked.map(x => chip(x.node)).join('')}</div></div>` : ''}
+    ${taught.length ? `<div class="node-links"><small>Taught Ricorsa</small><div class="chips">${taught.map(chip).join('')}</div></div>` : ''}
+    ${ideas.length ? `<div class="node-links"><small>Discover ideas that draw on it</small><div class="np-ideas">${ideas.map(x => `<button type="button" class="np-idea" data-np-idea="${esc(x.key)}" data-np-idea-id="${esc(x.it.id || '')}"><span class="k">${esc(x.it.kind || x.cat)}</span><span>${esc(truncate(x.it.title, 64))}</span></button>`).join('')}</div></div>` : ''}
+    ${learned && org ? `<p class="sub" style="margin-top:10px">Learned from a conversation${org.ideaId ? ' started from a Discover idea' : ''}${org.lineage ? ` · lineage <span class="hash">${esc(shortHash(org.lineage))}</span>` : ''}.</p>` : ''}
+    <div class="modal-actions wrap">${learned ? `<button type="button" class="btn danger left" id="npForget">Forget</button>` : ''}${n.kind === 'thread' && taught.length && ctl ? `<button type="button" class="btn left" id="npTrace">${icon('sparkles', 14)}Trace what it taught</button>` : ''}${learned && $('#g3d') ? `<button type="button" class="btn" id="npShow">${icon('brain', 14)}<span>Show in the brain</span></button>` : ''}${place && gn.geo && $('#g3d') ? `<button type="button" class="btn" id="npMap">${icon('map', 14)}<span>On the map</span></button>` : ''}${learned ? `<button type="button" class="btn" id="npDiscover" title="Ideas centered on this node, combined with the rest of your graph">${icon('compass', 14)}<span>Discover from this</span></button>` : ''}${askQ ? `<button type="button" class="btn" id="npAsk" title="${esc(askQ)}">${icon('search', 14)}<span>Ask about this</span></button>` : ''}${open ? `<a class="btn" href="${open}" data-close>${n.kind === 'thread' ? 'Open the conversation' : n.kind === 'build' ? 'Open in the studio' : n.kind === 'connector' ? 'Open Connectors' : 'Open the conversation'}</a>` : ''}<button type="button" class="btn primary" data-close>Done</button></div>`, {
+    onMount: (ov) => {
+      const f = $('#npForget', ov); if (f) f.addEventListener('click', async () => { closeModal(); try { await forgetNode(n.id); } catch (e) { apiToast(e); return; } if (state.route.name === 'graph') refreshBrain(); toast(`Forgot \u201c${truncate(n.label, 30)}\u201d`); });
+      const tr = $('#npTrace', ov); if (tr) tr.addEventListener('click', () => { closeModal(); ctl.traceThread(n.meta.id, { label: 'What \u201c' + truncate(n.label, 60) + '\u201d taught Ricorsa' }); });
+      const sh = $('#npShow', ov); if (sh) sh.addEventListener('click', () => { closeModal(); showInBrain(n.id, false); });
+      const mp = $('#npMap', ov); if (mp) mp.addEventListener('click', () => { closeModal(); showInBrain(n.id, true); });
+      const di = $('#npDiscover', ov); if (di) di.addEventListener('click', () => { closeModal(); go('#/discover?anchor=' + encodeURIComponent(n.id)); });
+      const ak = $('#npAsk', ov); if (ak) ak.addEventListener('click', () => { closeModal(); startThread(askQ, { mode: 'search', tier: state.settings.tier, focus: 'web', origin: { kind: 'graph', nodeId: n.id, title: truncate(n.label, 120), at: Date.now() } }); });
+      $$('[data-np-node]', ov).forEach(b => b.addEventListener('click', () => { const x = g.nodes[b.dataset.npNode]; if (!x) return; graphViews().forEach(v => { if (v.select) v.select(x.id); }); lightNode(x.id); markChip($('#main'), x.id, 'on'); nodePanel(brainNodeFor(x), ctl); }));
+      $$('[data-np-idea]', ov).forEach(b => b.addEventListener('click', () => { closeModal(); const [cat, anchor] = b.dataset.npIdea.split('|'); state.discoverCat = cat; state.discoverFocus = b.dataset.npIdeaId || null; go(anchor ? '#/discover?anchor=' + encodeURIComponent(anchor) : '#/discover'); }));
+    }
   });
+}
+/** The graph's provenance for a compliance reader: fingerprint, subject, counts and the latest lineage entries, and the export. */
+async function graphProvenanceModal() {
+  openModal(`<h2>${icon('loop', 20)}Provenance</h2><p class="sub">Reading your graph's fingerprint…</p><div class="skel"><i></i><i></i><i></i></div><div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`);
+  let s;
+  try { s = await api('/api/graph/export?summary=1'); } catch (e) { apiToast(e, 'Could not read the provenance'); closeModal(); return; }
+  if (!$('#overlay')) return;
+  const fmt = (v) => v ? `${new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} ${new Date(v).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : '';
+  const rows = [['Graph fingerprint', s.fingerprint], ['Subject id', s.subject], ['Nodes', `${s.nodes} (${s.withOrigin} with a recorded origin, ${s.fromIdeas} traced to a Discover idea, ${s.anchored} on the map)`], ['Connections', String(s.edges)], ['Intents', String(s.intents)], ['Learning events', String(s.events)], ['Updated', fmt(s.updatedAt)]];
+  if (s.full) rows.push(['Threads in the chain', `${s.threads} thread${s.threads === 1 ? '' : 's'}, ${s.turns} turn${s.turns === 1 ? '' : 's'}`]);
+  const latest = (s.latest || []).map(x => `<div class="prov-row"><span class="n">${x.fromIdea ? icon('compass', 12) : icon('search', 12)}</span><div><div class="t">${esc(truncate(x.thread, 70))} <span class="muted">· ${relTime(x.at)}${x.added ? ` · added ${x.added} node${x.added === 1 ? '' : 's'}` : ''}</span></div><div class="u">${esc(x.lineage || 'pending')}</div></div></div>`).join('');
+  openModal(`<h2>${icon('loop', 20)}Provenance</h2>
+    <p class="sub">Your graph's SHA-256 fingerprint changes whenever the graph does, so a copy can be checked against the state it came from. The subject id is a one-way hash of your account, never the account itself. Every node records the conversation and turn that taught it; every turn chains onto the last from the thread's origin, a Discover idea or the thread itself.</p>
+    <div class="prov">${rows.map(([k, v]) => `<div class="prov-row"><span class="k">${esc(k)}</span><span class="u">${esc(v)}</span></div>`).join('')}</div>
+    ${s.full ? `<div class="sec-h" style="font-size:14px;margin-top:14px">Latest lineage</div><div class="prov">${latest || '<div class="sub">No turns yet.</div>'}</div>` : `<p class="sub" style="margin-top:12px">The full lineage chain (every thread's origin, every turn's hash and the nodes each turn added) is part of the full identity graph on Essentials and above; the export below carries what your plan includes.</p>`}
+    <div class="modal-actions"><button type="button" class="btn" id="provExport">${icon('download', 14)}<span>Export with provenance</span></button><button type="button" class="btn" id="provCopy">${icon('copy', 14)}<span>Copy fingerprint</span></button><button type="button" class="btn primary" data-close>Done</button></div>`, {
+    onMount: (ov) => {
+      $('#provExport', ov).addEventListener('click', () => exportGraph());
+      $('#provCopy', ov).addEventListener('click', async () => { const ok = await copyText(s.fingerprint); toast(ok ? 'Fingerprint copied' : 'Could not copy', ok ? 'ok' : 'bad'); });
+    }
+  });
+}
+/** Download the graph with its provenance from the server (the file name carries the fingerprint). */
+async function exportGraph() {
+  try {
+    const r = await fetch('/api/graph/export', { credentials: 'same-origin' });
+    if (!r.ok) throw Object.assign(new Error('Could not export the graph'), { status: r.status });
+    const name = (/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'ricorsa-graph.json';
+    downloadFile(name, await r.text(), 'application/json'); toast('Saved ' + name);
+  } catch (e) { apiToast(e, 'Could not export the graph'); }
 }
 function renderGraph() {
   const main = $('#main'); const g = state.graph || { nodes: {}, edges: {}, intents: [], events: 0, paused: false, votes: { up: 0, down: 0 } };
@@ -1978,30 +2316,32 @@ function renderGraph() {
       return `<g class="node" tabindex="0" data-node="${esc(n.id)}" role="img" aria-label="${esc(n.label)}, ${T.label}, weight ${(n.weight * 100).toFixed(0)}"><circle class="halo" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${(r + 4).toFixed(1)}"/>${shapeSvg(n.type, p.x, p.y, r, T.hex)}<text class="lbl${n.weight < 0.3 ? ' dim' : ''}" x="${(p.x + r + 5).toFixed(1)}" y="${(p.y + 4).toFixed(1)}">${esc(label)}</text></g>`;
     }).join('');
   }
-  const counts = {}; for (const t of Object.keys(NODE_TYPES)) counts[t] = all.filter(n => n.type === t).length;
-  const typeCards = Object.entries(NODE_TYPES).map(([t, T]) => {
-    const list = all.filter(n => n.type === t);
-    return `<div class="g-type${t === 'topic' ? ' wide' : ''}"><h3><span class="sw dot ${T.shape}" style="display:inline-block;width:10px;height:10px;border-radius:${T.shape === 'circle' || T.shape === 'ring' ? '50%' : '2px'};background:${T.shape === 'ring' ? 'transparent' : T.hex};${T.shape === 'ring' ? `border:2px solid ${T.hex};box-sizing:border-box;` : ''}${T.shape === 'diamond' ? 'transform:rotate(45deg) scale(.85);' : ''}${T.shape === 'hex' ? 'clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);border-radius:0;' : ''}"></span>${T.label}<span class="gen-tag">${list.length}</span></h3><p>${T.desc}</p><div class="chips">${list.length ? list.map(n => nodeChip(t, n.label, `<span class="cnt" title="Seen ${n.count} time${n.count === 1 ? '' : 's'} · weight ${(n.weight * 100).toFixed(0)}">×${n.count}</span>${n.level ? `<span class="lvl">${esc(n.level)}</span>` : ''}`, n.id)).join('') : '<span class="none">Nothing yet</span>'}</div></div>`;
-  }).join('');
   const preview = caps().graph !== 'full';
+  const places = all.filter(isPlaceNode).length;
+  const brainNote = preview
+    ? 'This is the preview of your living brain: the strongest of what Ricorsa has learned, your conversations, and what you have been trying to do. Six cortices are the layers of your intelligence, not brain anatomy; the body is your organization, the governed boundary. Essentials shows every node, every pathway and where each one came from. Drag to orbit, scroll to zoom, hover a node for details.'
+    : 'Six cortices are the layers of your intelligence, not brain anatomy. The body is your organization, the governed boundary; the blue lattice is IGL, which checks every pathway Discover walks. What Ricorsa learns is born beside the conversation that taught it and settles into its cortex as it recurs. Hover a chip below to find it here; click a node for what it connects to and what Discover would build from it; click a conversation and trace what it taught. Drag to orbit, scroll to zoom.';
+  main.dataset.brainNote = brainNote;
   main.innerHTML = `<div class="view">${topbarHtml('Your graph')}<div class="scroll"><div class="col wide">
-    <div class="page-h"><h1>${icon('loop', 26)}Your graph</h1><div class="g-controls"><label class="switch${g.paused ? '' : ' on'}" id="learnSwitch"><i></i><span>${g.paused ? 'Learning paused' : 'Learning on'}</span></label><button type="button" class="btn sm" id="gExport">${icon('download', 14)}<span>Export</span></button><button type="button" class="btn sm danger" id="gReset">Reset</button></div></div>
+    <div class="page-h"><h1>${icon('loop', 26)}Your graph</h1><div class="g-controls"><label class="switch${g.paused ? '' : ' on'}" id="learnSwitch"><i></i><span>${g.paused ? 'Learning paused' : 'Learning on'}</span></label><button type="button" class="btn sm" id="gProvenance" title="Fingerprint, subject id and lineage">${icon('key', 14)}<span>Provenance</span></button><button type="button" class="btn sm" id="gExport" title="Download the graph with its provenance">${icon('download', 14)}<span>Export</span></button><button type="button" class="btn sm danger" id="gReset">Reset</button></div></div>
     <p class="page-sub">Your living intelligence: everything Ricorsa has learned from ${g.events} conversation${g.events === 1 ? '' : 's'}, the conversations themselves, what you built and what you connected, inside your governed boundary. It belongs to your account and is folded into every question you ask. Weights strengthen with repetition and fade when unused; forget anything with the \u00d7 on a chip.</p>
-    ${g.paused ? `<div class="paused-banner">${icon('pause', 16)}<span>Learning is paused. Answers still use what’s here, but new conversations won’t change it.</span></div>` : ''}
-    <div class="g-stats"><div class="g-stat"><b>${all.length}</b><span>nodes</span></div><div class="g-stat"><b>${Object.keys(g.edges).length}</b><span>connections</span></div><div class="g-stat"><b>${g.events}</b><span>learning events</span></div><div class="g-stat"><b>${g.intents.length}</b><span>intents recorded</span></div></div>
-    ${preview ? upgradeCard('This is the preview of your graph', `Ricorsa is learning you on every plan. Essentials shows the whole graph: the living map, how nodes connect, what you have been trying to do lately, and where each node came from.${all.length ? ` You have ${state.graphSize || all.length} nodes so far.` : ''}`, 'Essentials') : ''}
-    ${g.intents.length ? `<div class="intents"><h3>Lately you’ve been trying to</h3><ol>${g.intents.slice(0, 5).map(i => `<li>${esc(i.text.replace(/^You(’|')re\s+/i, '').replace(/^You\s+(want|need|are)\s+/i, ''))}<span class="when">${relTime(i.at)}</span></li>`).join('')}</ol></div>` : ''}
-    ${drawn.length && !preview ? `<div class="g3d" id="g3d">
+    ${g.paused ? `<div class="paused-banner">${icon('pause', 16)}<span>Learning is paused. Answers still use what\u2019s here, but new conversations won\u2019t change it.</span></div>` : ''}
+    <div class="g-stats" id="gStats">${graphStatsHtml(g, all)}</div>
+    ${preview ? upgradeCard('This is the preview of your graph', `Ricorsa is learning you on every plan. Essentials shows the whole graph: every node and pathway, what you have been trying to do lately, where each node came from, and the lineage behind it.${all.length ? ` You have ${state.graphSize || all.length} nodes so far${(state.graphSize || 0) > all.length ? `; the ${all.length} strongest are shown here` : ''}.` : ''}`, 'Essentials') : ''}
+    ${g.intents.length ? `<div class="intents"><h3>Lately you\u2019ve been trying to</h3><ol>${g.intents.slice(0, 5).map(i => `<li>${esc(i.text.replace(/^You(\u2019|')re\s+/i, '').replace(/^You\s+(want|need|are)\s+/i, ''))}<span class="when">${relTime(i.at)}</span></li>`).join('')}</ol></div>` : ''}
+    ${drawn.length ? `<div class="g3d" id="g3d">
       <div class="g3d-bar">
+        <div class="g3d-view" role="group" aria-label="View"><button type="button" data-g3d-view="brain" class="on" aria-pressed="true">${icon('brain', 13)}<span>Brain</span></button><button type="button" data-g3d-view="map" aria-pressed="false" title="${places ? `${places} place${places === 1 ? '' : 's'} in your graph` : 'Places Ricorsa learns are put on the map'}">${icon('map', 13)}<span>Map${places ? ` <em>${places}</em>` : ''}</span></button></div>
         <input type="search" id="g3dFind" placeholder="Find anything in your brain" aria-label="Find a node" autocomplete="off">
-        <button type="button" class="g3d-toggle" id="g3dEmerging" aria-pressed="false" title="Light what is strengthening right now">${icon('sparkles', 13)}<span>Emerging</span></button>
-        <button type="button" class="g3d-toggle on" id="g3dLattice" aria-pressed="true" title="The IGL governance lattice: every pathway Discover walks is checked against it">${icon('key', 13)}<span>Governance</span></button>
+        <button type="button" class="g3d-toggle" id="g3dEmerging" aria-pressed="false" data-brain-only title="Light what is strengthening right now">${icon('sparkles', 13)}<span>Emerging</span></button>
+        <button type="button" class="g3d-toggle on" id="g3dLattice" aria-pressed="true" data-brain-only title="The IGL governance lattice: every pathway Discover walks is checked against it">${icon('key', 13)}<span>Governance</span></button>
         <span class="spacer"></span>
-        <label class="g3d-check">Density <select id="g3dDensity" aria-label="Intelligence density"><option value="min">Minimal</option><option value="std" selected>Standard</option><option value="max">Maximum</option></select></label>
+        <label class="g3d-check" data-brain-only>Density <select id="g3dDensity" aria-label="Intelligence density"><option value="min">Minimal</option><option value="std" selected>Standard</option><option value="max">Maximum</option></select></label>
         <label class="g3d-check"><input type="checkbox" id="g3dLabels" checked> Labels</label>
-        <button type="button" class="btn sm" id="g3dReset" title="Back to the starting angle">${icon('refresh', 13)}<span>Reset view</span></button>
+        <button type="button" class="btn sm" id="g3dReset" title="Back to the starting view">${icon('refresh', 13)}<span>Reset view</span></button>
       </div>
       <div class="g3d-stage" id="g3dStage"><div class="g-tip" id="gTip"></div></div>
+      <div class="g3d-stage" id="gmapStage" hidden><div class="g-tip" id="gmTip"></div></div>
       <div class="g3d-time">
         <button type="button" class="btn sm" id="g3dPlay" title="Watch your brain form from the first thing learned to now">${icon('clock', 13)}<span>Replay</span></button>
         <div class="g3d-stops">${BRAIN_STOPS.map(([l, d]) => `<button type="button" data-g3d-stop="${d}" class="${d === 0 ? 'on' : ''}">${l}</button>`).join('')}</div>
@@ -2009,28 +2349,24 @@ function renderGraph() {
         <span class="g3d-when" id="g3dWhen">Today</span>
       </div>
       <div class="g3d-regions" id="g3dRegions"></div>
-      <div class="g3d-note">Six cortices are the layers of your intelligence, not brain anatomy. The body is your organization, the governed boundary; the blue lattice is IGL, which checks every pathway Discover walks. What Ricorsa learns is born beside the conversation that taught it and settles into its cortex as it recurs. Click a conversation and trace what it taught. Drag to orbit, scroll to zoom.</div>
+      <div class="g3d-note" id="g3dNote">${brainNote}</div>
     </div>`
-      : drawn.length ? '' : `<div class="g-empty">${icon('loop', 30)}<div>Nothing learned yet.</div><p>Ask a few questions and come back, each answer adds what it revealed about what you’re working on.</p><p><a href="#/">Ask something</a></p></div>`}
-    <div class="g-types">${typeCards}</div>
+      : `<div class="g-empty">${icon('loop', 30)}<div>Nothing learned yet.</div><p>Ask a few questions and come back, each answer adds what it revealed about what you\u2019re working on.</p><p><a href="#/">Ask something</a></p></div>`}
+    ${all.length ? graphListBarHtml(all) : ''}
+    <div class="g-types" id="gTypes">${graphTypeCardsHtml(all)}</div>
   </div></div></div>`;
   // interactions
   const stage = $('#g3dStage', main);
   if (stage) mountGraph3D(main, g, { W, H, svg, all });
-  const wrap = $('.g-wrap', main), tip = $('#gTip', main);
-  if (wrap && !stage) {
-    const show = (el, ev) => { const n = g.nodes[el.dataset.node]; if (!n) return; const T = NODE_TYPES[n.type]; tip.innerHTML = `<b>${esc(n.label)}</b>${T.label}${n.level ? ' · ' + esc(n.level) : ''} · seen ${n.count}× · weight ${(n.weight * 100).toFixed(0)}<br><span style="opacity:.75">first ${relTime(n.firstSeen)} · last ${relTime(n.lastSeen)} · click to forget</span>${n.origin ? `<br><span style="opacity:.75;font-family:var(--mono);font-size:11px">origin ${esc(shortHash(n.origin.lineage || n.origin.threadId))}${n.origin.ideaId ? ' · idea ' + esc(shortHash(n.origin.ideaId)) : ''}</span>` : ''}`; const r = wrap.getBoundingClientRect(); const x = ev ? ev.clientX - r.left : r.width / 2, y = ev ? ev.clientY - r.top : r.height / 2; tip.style.left = Math.min(x + 12, r.width - 250) + 'px'; tip.style.top = (y + 14) + 'px'; tip.style.opacity = '1'; };
-    $$('.node', wrap).forEach(el => {
-      el.addEventListener('mousemove', ev => show(el, ev)); el.addEventListener('mouseleave', () => tip.style.opacity = '0');
-      el.addEventListener('focus', () => show(el)); el.addEventListener('blur', () => tip.style.opacity = '0');
-      const forget = () => { const n = g.nodes[el.dataset.node]; if (!n) return; openModal(`<h2>Forget \u201c${esc(n.label)}\u201d?</h2><p class="sub">It leaves your graph now; it can come back if it shows up in later conversations.</p><div class="modal-actions"><button type="button" class="btn" data-close>Keep</button><button type="button" class="btn danger" id="fgOk">Forget</button></div>`, { onMount: () => $('#fgOk').addEventListener('click', async () => { closeModal(); try { await forgetNode(n.id); } catch (e) { apiToast(e); return; } renderGraph(); toast('Forgotten'); }) }); };
-      el.addEventListener('click', forget); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); forget(); } });
-    });
-  }
-  $$('[data-forget]', main).forEach(b => b.addEventListener('click', async () => { const n = g.nodes[b.dataset.forget]; try { await forgetNode(b.dataset.forget); } catch (e) { apiToast(e); return; } renderGraph(); toast(n ? `Forgot \u201c${truncate(n.label, 30)}\u201d` : 'Forgotten'); }));
+  wireGraphLists(main, g);
+  applyGraphFilters(main);
   $('#learnSwitch', main).addEventListener('click', async () => { try { await setGraphPaused(!g.paused); } catch (e) { apiToast(e); return; } renderGraph(); toast(state.graph.paused ? 'Learning paused' : 'Learning on'); });
-  $('#gExport', main).addEventListener('click', () => { downloadFile('ricorsa-graph.json', JSON.stringify(g, null, 2), 'application/json'); toast('Saved ricorsa-graph.json'); });
+  $('#gProvenance', main).addEventListener('click', () => graphProvenanceModal());
+  $('#gExport', main).addEventListener('click', () => exportGraph());
   $('#gReset', main).addEventListener('click', () => openModal(`<h2>Reset your graph?</h2><p class="sub">Everything Ricorsa has learned about you is erased. Your threads stay.</p><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="rsOk">Reset</button></div>`, { onMount: () => $('#rsOk').addEventListener('click', async () => { closeModal(); try { await resetGraph(); } catch (e) { apiToast(e); return; } renderGraph(); toast('Graph reset'); }) }));
+  // Arriving with a type in the address (from a Discover idea's chips): bring that list into view.
+  const wantType = state.route && state.route.query && state.route.query.type ? TYPE_WORDS[String(state.route.query.type).toLowerCase().trim()] || '' : '';
+  if (wantType && NODE_TYPES[wantType]) { const card = main.querySelector(`[data-type-card="${wantType}"]`); if (card) { card.classList.add('flash'); setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300); setTimeout(() => card.classList.remove('flash'), 2600); } }
   wireTopbar(main);
 }
 

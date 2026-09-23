@@ -594,7 +594,7 @@ export function parseJsonLoosely<T>(text: string): T | null {
 
 async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; mcp?: McpServerSpec[] | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; onTool?: (call: ToolCall) => void; onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
   if (opts.system?.[0]?.text.startsWith("You are Ricorsa's builder")) return mockBuild(opts, model);
-  const q = opts.messages[opts.messages.length - 1]?.content.split('Question:').pop()?.trim().slice(0, 80) || 'your question';
+  const q = opts.messages[opts.messages.length - 1]?.content.split('Question:').pop()?.trim().split('\n')[0].trim().slice(0, 80) || 'your question';
   const sources: Source[] = opts.search ? mockSources(q) : [];
   if (opts.search) { opts.onStatus?.(`Searching: ${q.slice(0, 60)}`); await new Promise(r => setTimeout(r, 300)); opts.onSources?.(sources); }
   // With a Vault connected, the stub searches it for real (the local Vault), so the numbering and the viewer can be exercised.
@@ -609,6 +609,9 @@ async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; searc
     const nums = [...new Set([...text.matchAll(/\[(\d+)\]/g)].map(m => m[1]))].slice(0, 3);
     vaultPara = r.isError ? `\n\nThe Vault could not be searched (${text.slice(0, 120)}).` : nums.length ? `\n\n## From your Vault\nThe connected Vault has pages that match${nums.map(n => `[${n}]`).join('')}; in production the model reads them and answers from what they say, citing each page it relies on${nums[0] ? `[${nums[0]}]` : ''}.` : `\n\nNothing in the connected Vault matched "${q}".`;
   }
+  // A place named in the question ("... in Pearland, Texas") is learned as a place, so the map view can be exercised locally.
+  const placeMatch = q.match(/\b(?:in|at|near|around) ((?:[A-Z][\w'.-]+)(?: [A-Z][\w'.-]+)*(?:, [A-Z][a-z]+)?)/);
+  const places = placeMatch ? [placeMatch[1].replace(/[?.!,]+$/, '')] : [];
   const full = `<answer>
 This is a mock answer for "${q}", streamed by the local development stub so the app can be exercised without API keys${sources.length ? '[1][2]' : ''}.${vaultPara}
 
@@ -637,7 +640,7 @@ Can Research mode run more than one search?
 Where do exported files go?
 </related>
 <learned>
-{"intent":"You are checking that the Ricorsa pipeline works end to end before wiring real keys","topics":["${q.replace(/"/g, '')}","developer testing"],"entities":["Ricorsa"],"goals":["ship the SaaS build"],"expertise":[{"area":"web development","level":"intermediate"}],"style":["wants a table"]}
+{"intent":"You are checking that the Ricorsa pipeline works end to end before wiring real keys","topics":["${q.replace(/"/g, '')}","developer testing"],"entities":["Ricorsa"],"goals":["ship the SaaS build"],"expertise":[{"area":"web development","level":"intermediate"}],"style":["wants a table"],"places":${JSON.stringify(places)}}
 </learned>`;
   for (let i = 0; i < full.length; i += 24) {
     if (opts.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });

@@ -69,7 +69,8 @@ export type Turn = {
 export type AttachmentMeta = { id: string; name: string; type: string; size: number; chars: number; stored?: boolean };
 
 /** Where a thread came from. Discover-born threads carry the idea's hash id and the graph fingerprint it was drawn from. */
-export type ThreadOrigin = { kind: 'discover' | 'ask'; ideaId?: string; graphHash?: string; category?: string; title?: string; at: number; subject?: string };
+/** Where a thread began: a Discover idea, a node on the Graph page (Ask about this), or a question typed directly. */
+export type ThreadOrigin = { kind: 'discover' | 'ask' | 'graph'; ideaId?: string; graphHash?: string; category?: string; title?: string; nodeId?: string; at: number; subject?: string };
 
 export const threads = sqliteTable('threads', {
   id: text('id').primaryKey(),
@@ -98,7 +99,12 @@ export const spaces = sqliteTable('spaces', {
 export type GeoAnchor = { type: 'Point'; coordinates: [number, number] } | { type: 'LineString'; coordinates: [number, number][] } | { type: 'Polygon'; coordinates: [number, number][][] };
 /** Where a node first entered the graph: the turn that produced it and, when that thread was born in Discover, the idea it traces to. */
 export type NodeOrigin = { threadId: string; turnId: string; ideaId?: string; lineage?: string };
-export type GraphNode = { id: string; type: string; label: string; weight: number; count: number; firstSeen: number; lastSeen: number; level?: string; geo?: GeoAnchor; origin?: NodeOrigin };
+/**
+ * A node. `place` marks an entity the model named as a place (a city, county, region, address or site); the geocoder
+ * then fills `geo` (a point), `geoName` (the place as the geocoder knows it), `geoKind` (city, county, state, road...)
+ * and `geoBox` (its bounding box, [[west, south], [east, north]]), or `geoFailedAt` when it could not be found.
+ */
+export type GraphNode = { id: string; type: string; label: string; weight: number; count: number; firstSeen: number; lastSeen: number; level?: string; geo?: GeoAnchor; origin?: NodeOrigin; place?: boolean; geoName?: string; geoKind?: string; geoBox?: [[number, number], [number, number]]; geoFailedAt?: number };
 export type GraphEdge = { a: string; b: string; weight: number; lastSeen: number };
 export type GraphIntent = { text: string; at: number; threadId: string; turnId: string };
 export type GraphData = {

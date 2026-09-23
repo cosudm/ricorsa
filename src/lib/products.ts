@@ -62,13 +62,14 @@ export const PRODUCTS: Product[] = [
   },
   {
     slug: 'graph', name: 'The Identity Graph',
-    blurb: 'What Ricorsa learns from your questions, kept as a graph you can read: topics, entities, goals, expertise. Export it as JSON, forget any node, or reset it.',
-    lede: 'Ricorsa keeps what it learns about your work in a graph you can open and read. It is folded into every question so your intent is read better each time.',
+    blurb: 'What Ricorsa learns from your questions, kept as a living brain you can read: topics, entities, goals, expertise, the places on a map. Export it with its provenance, forget any node, or reset it.',
+    lede: 'Ricorsa keeps what it learns about your work in a graph you can open, read and watch: a living brain of six cortices, a map of the places you work with, and the lists behind them. It is folded into every question so your intent is read better each time.',
     points: [
-      { title: 'Readable', text: 'Every node is listed with where it came from: the thread and the turn that added it.' },
-      { title: 'Weighted', text: 'A topic that keeps coming up gains weight. One that stops mattering fades. Learning can be paused.' },
-      { title: 'Yours', text: 'Export the graph as JSON. Forget any node. Reset it. It belongs to your account and follows you across devices.' },
-      { title: 'Feeds Discover', text: 'Discover reads the graph to propose apps, agents and datasets.' },
+      { title: 'Readable', text: 'Every node is listed with where it came from: the thread and the turn that added it. Hover a node and the brain lights it; click it and see what it connects to.' },
+      { title: 'Weighted', text: 'A topic that keeps coming up gains weight. One that stops mattering fades. Learning can be paused. Scrub back in time and watch the graph as it was.' },
+      { title: 'On the map', text: 'Cities, counties, sites and addresses named in your work are placed on a map next to the brain, so your geography is part of your graph.' },
+      { title: 'Yours, with provenance', text: 'Export the graph with its SHA-256 fingerprint and the lineage of every node. Forget any node. Reset it. It belongs to your account and follows you across devices.' },
+      { title: 'Feeds Discover', text: 'Discover reads the graph to propose apps, agents and datasets; open any node and ask Discover what could be built from it.' },
     ],
     shot: 'graph', shotAlt: 'The Graph page: node counts, recent intents, and a map of connected topics, entities and goals',
     open: { label: 'Open the graph', href: '/app#/graph' }, related: ['build', 'search', 'spaces'],
@@ -114,8 +115,8 @@ export const PRODUCTS: Product[] = [
   },
   {
     slug: 'enterprise', name: 'Ricorsa Enterprise',
-    blurb: 'The identity graph for an organization, anchored to geography. Deployed on your data, your geography and your governance.',
-    lede: 'Ricorsa Enterprise runs the identity graph for an organization. Every node is anchored to a point, a line or a polygon. Relationships are mapped as they change. Deployed on your data, under your governance.',
+    blurb: 'The identity graph for your organization: the same living brain and map, with seats, shared boundaries and deployment on your data and under your governance, set up with us.',
+    lede: 'Ricorsa Enterprise brings the identity graph to an organization. The places, sites and organizations your people work with are anchored on the map as they are learned; every node carries its provenance. Seats, shared boundaries and deployment on your own data and geography are set up with us, on the SMEPro Identity Graph.',
     points: [
       { title: 'Utilities and infrastructure', text: 'Substations as points, grids as lines, tied to maintenance logs, weather risk and contractor identities.' },
       { title: 'Supply chain and fleet', text: 'Corporate identities and freight manifests on moving lanes and geofenced hubs.' },
