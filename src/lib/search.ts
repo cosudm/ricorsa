@@ -105,5 +105,6 @@ export function htmlToText(html: string): string {
 export function sourcesBlock(sources: Source[]): string {
   if (!sources.length) return '';
   const lines = sources.map(s => `[${s.n}] ${s.title} (${s.domain}) ${s.url}\n${s.text ? s.text.slice(0, 7000) : (s.snippet || '')}`);
-  return `Web sources retrieved just now for this question. Cite them with their number in square brackets, like [2], right after the claim they support. Only cite numbers from this list.\n\n${lines.join('\n\n')}`;
+  const own = sources.some(s => s.domain === 'Your threads' || s.domain === 'Your files');
+  return `${own && !sources.some(s => s.domain !== 'Your threads' && s.domain !== 'Your files') ? 'Sources for this question' : 'Web sources retrieved just now for this question'}. Cite them with their number in square brackets, like [2], right after the claim they support. Only cite numbers from this list.${own ? ' Sources marked (Your threads) or (Your files) are passages from this person\'s own earlier answers and attached files in Ricorsa: build on them, refer to them as "your earlier answer" or "your file", and cite them the same way; if a passage contradicts a newer web source, say which is newer.' : ''}\n\n${lines.join('\n\n')}`;
 }

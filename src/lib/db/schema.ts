@@ -267,6 +267,29 @@ export const attachments = sqliteTable('attachments', {
   createdAt: tsNow('created_at'),
 }, (t) => [index('attachments_user_idx').on(t.userId, t.createdAt), index('attachments_thread_idx').on(t.threadId)]);
 
+/**
+ * Institutional memory: passages from the person's own earlier answers and attached files, kept so a later answer
+ * can recall and cite them (src/lib/memory.ts). Lexical recall runs on this table alone; when a Vectorize index and
+ * Workers AI are bound (VECTORS and AI in wrangler.jsonc) the same rows are also embedded and recalled by meaning.
+ * Rows belong to one account and go when the thread or the file goes.
+ */
+export type MemoryKind = 'answer' | 'file';
+export const memories = sqliteTable('memories', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  kind: text('kind').$type<MemoryKind>().notNull(),
+  threadId: text('thread_id'),
+  turnId: text('turn_id'),
+  fileId: text('file_id'),
+  title: text('title').notNull().default(''),
+  text: text('text').notNull(),
+  /** The passage's keywords, normalized and space-padded, for the lexical search. */
+  terms: text('terms').notNull().default(''),
+  ordinal: integer('ordinal').notNull().default(0),
+  embedded: integer('embedded', { mode: 'boolean' }).notNull().default(false),
+  createdAt: tsNow('created_at'),
+}, (t) => [index('memories_user_idx').on(t.userId, t.createdAt), index('memories_thread_idx').on(t.threadId), index('memories_file_idx').on(t.fileId)]);
+
 export const builds = sqliteTable('builds', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

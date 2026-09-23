@@ -790,6 +790,12 @@
   .anchor-chip .nchip-x:hover { background: var(--bad-soft); color: var(--bad); }
   .anchor-row .lnk { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; }
   .disc-builds { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 10px; margin-top: -4px; }
+  /* Recalled memory: a source that is the person's own earlier answer or file, opened in the app. */
+  .src.own { border-style: dashed; }
+  .src.own .favi { background: var(--accent) !important; }
+  .cite.own { background: var(--accent-soft); color: var(--accent); }
+  .turn.flash { animation: turn-flash 2.4s ease-out; border-radius: 12px; }
+  @keyframes turn-flash { 0% { box-shadow: 0 0 0 2px var(--accent), 0 0 0 10px var(--accent-soft); } 100% { box-shadow: 0 0 0 2px transparent, 0 0 0 10px transparent; } }
   @media (max-width: 640px) { .g3d-bar input[type="search"] { flex: 1 1 100%; order: -1; } .g-list-bar .g-list-hint { flex-basis: 100%; } .anchor-row { margin-top: 0; } }
 
   [hidden] { display: none !important; }

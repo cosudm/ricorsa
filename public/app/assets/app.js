@@ -384,6 +384,13 @@ document.addEventListener('click', (e) => {
   const parts = vaultLinkParts(a.getAttribute('href')); if (!parts) return;
   e.preventDefault(); openVaultDoc(parts.connId, parts.docId, parts.page);
 });
+/** A source that is one of the person's own earlier answers or files (recalled memory) opens the thread here, at that turn. */
+function isOwnSource(url) { return /^(?:\/app)?#\/thread\//.test(String(url || '')); }
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href*="#/thread/"]'); if (!a || !isOwnSource(a.getAttribute('href'))) return;
+  const hash = '#' + a.getAttribute('href').split('#')[1];
+  e.preventDefault(); go(hash);
+});
 
 // ---------- Popover ----------
 let popCleanup = null;
@@ -561,7 +568,8 @@ function makeCite(n, sources) {
   const title = s ? `${s.title}${s.domain ? ', ' + s.domain : ''}` : `Reference ${n}`;
   if (s && s.url) {
     const a = document.createElement('a');
-    a.className = 'cite'; a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.title = title; a.textContent = n; a.dataset.n = n;
+    a.className = 'cite'; a.href = s.url; a.title = title; a.textContent = n; a.dataset.n = n;
+    if (isOwnSource(s.url)) a.classList.add('own'); else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
     return a;
   }
   const sp = document.createElement('span');
@@ -1139,7 +1147,13 @@ function renderThread(id) {
   $('[data-more]', main).addEventListener('click', e => threadMenu(e.currentTarget, thread));
   wireTopbar(main);
   const sc = $('#threadScroll', main);
-  if (thread.turns.length > 1) { const lastSec = $(`[data-turn="${last.id}"]`, main); if (lastSec) sc.scrollTop = lastSec.offsetTop - 12; }
+  const wantTurn = state.route && state.route.query ? state.route.query.turn : '';
+  const target = wantTurn ? $(`[data-turn="${String(wantTurn).replace(/["\\]/g, '\\$&')}"]`, main) : null;
+  if (target) {
+    sc.scrollTop = target.offsetTop - 12; target.classList.add('flash'); setTimeout(() => target.classList.remove('flash'), 2600);
+    const fileId = state.route.query.file; const t = thread.turns.find(x => x.id === wantTurn);
+    if (fileId && t && (t.attachments || []).some(a => a.id === fileId)) setTimeout(() => openFileViewer((t.attachments || []).find(a => a.id === fileId), t.attachments || []), 400);
+  } else if (thread.turns.length > 1) { const lastSec = $(`[data-turn="${last.id}"]`, main); if (lastSec) sc.scrollTop = lastSec.offsetTop - 12; }
 }
 function threadMenu(anchor, thread) {
   const spaces = state.spaces;
@@ -1235,7 +1249,10 @@ function paintTurn(sec, thread, t) {
   $('[data-src-n]', sec).textContent = sources.length;
   const row = $('[data-src-row]', sec);
   if (sources.length) {
-    const shown = sources.slice(0, 3), rest = sources.slice(3);
+    // The row shows three cards: the person's own earlier answers and files first (they are the continuity), then the web.
+    const ownFirst = sources.filter(x => isOwnSource(x.url)).slice(0, 1).concat(sources.filter(x => !isOwnSource(x.url)));
+    const ordered = ownFirst.concat(sources.filter(x => !ownFirst.includes(x)));
+    const shown = ordered.slice(0, 3).sort((x, y) => x.n - y.n), rest = ordered.slice(3).sort((x, y) => x.n - y.n);
     row.hidden = false;
     row.innerHTML = shown.map(s => srcCard(s)).join('') + (rest.length ? `<button type="button" class="src more" data-open-sources><span class="favs">${rest.slice(0, 4).map(s => `<span class="favi" style="background:${colorFor(s.domain || s.title)}">${esc((s.domain || s.title)[0] || '?')}</span>`).join('')}</span><span class="t">View ${rest.length} more</span></button>` : '');
   } else { row.hidden = true; row.innerHTML = ''; }
@@ -1290,7 +1307,7 @@ function paintTurn(sec, thread, t) {
 
   const spane = $('[data-pane="sources"]', sec);
   spane.innerHTML = sources.length
-    ? `<div class="sources-list">${sources.map(s => `<div class="source-card" data-src-n="${s.n}"><span class="n">${s.n}</span><span class="favi" style="background:${colorFor(s.domain || s.title)};margin-top:2px">${esc((s.domain || s.title)[0] || '?')}</span><div><div class="t">${esc(s.title)}</div><div class="u">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(/#\/vault\//.test(s.url) ? 'VDRPros Vault · opens the page in the viewer' : s.url)}</a>` : esc(s.domain || '')}</div></div>${s.url ? `<a class="icon-btn" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open">${icon('external', 15)}</a>` : ''}</div>`).join('')}</div>`
+    ? `<div class="sources-list">${sources.map(s => `<div class="source-card" data-src-n="${s.n}"><span class="n">${s.n}</span><span class="favi" style="background:${colorFor(s.domain || s.title)};margin-top:2px">${esc((s.domain || s.title)[0] || '?')}</span><div><div class="t">${esc(s.title)}</div><div class="u">${s.url ? `<a href="${esc(s.url)}"${isOwnSource(s.url) ? '' : ' target="_blank" rel="noopener noreferrer"'}>${esc(/#\/vault\//.test(s.url) ? 'VDRPros Vault · opens the page in the viewer' : isOwnSource(s.url) ? (s.domain === 'Your files' ? 'A file you attached earlier · opens that conversation' : 'Your earlier conversation · opens at that answer') : s.url)}</a>` : esc(s.domain || '')}</div></div>${s.url ? `<a class="icon-btn" href="${esc(s.url)}"${isOwnSource(s.url) ? '' : ' target="_blank" rel="noopener noreferrer"'} aria-label="Open">${icon(isOwnSource(s.url) ? 'arrowRight' : 'external', 15)}</a>` : ''}</div>`).join('')}</div>`
     : `<div class="empty">${icon('book', 28)}<div>${running ? 'Sources arrive before the answer is written.' : 'No sources were used for this answer.'}</div></div>`;
 }
 /**
@@ -1330,7 +1347,7 @@ function learnedHtml(thread, t) {
 }
 function srcCard(s) {
   const inner = `<span class="t">${esc(s.title)}</span><span class="m"><span class="favi" style="background:${colorFor(s.domain || s.title)}">${esc((s.domain || s.title)[0] || '?')}</span><span class="dom">${esc(s.domain || 'reference')}</span><span class="idx">${s.n}</span></span>`;
-  return s.url ? `<a class="src" href="${esc(s.url)}" target="_blank" rel="noopener noreferrer" title="${esc(s.title)}">${inner}</a>` : `<button type="button" class="src" data-open-sources>${inner}</button>`;
+  return s.url ? `<a class="src${isOwnSource(s.url) ? ' own' : ''}" href="${esc(s.url)}"${isOwnSource(s.url) ? '' : ' target="_blank" rel="noopener noreferrer"'} title="${esc(s.title)}">${inner}</a>` : `<button type="button" class="src" data-open-sources>${inner}</button>`;
 }
 function wireTurn(sec, thread, t) {
   const showTab = (name) => {

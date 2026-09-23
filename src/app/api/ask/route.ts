@@ -20,6 +20,7 @@ import { isVaultConnector, numberVaultHits, numberVaultPages } from '@/lib/vault
 import { CONSOLE_GUIDE, consoleContext } from '@/lib/console';
 import { SITE_PRESET, numberSiteHits, numberSitePage } from '@/lib/sites';
 import { geocodePending } from '@/lib/geo';
+import { recall, remember, numberRecalled, backfillOnce, memoryEnabled } from '@/lib/memory';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -128,6 +129,20 @@ export async function POST(req: Request) {
           } catch (e) { console.warn('[search] retrieval failed', String((e as Error)?.message || e)); }
         }
 
+        // 1b. Institutional memory: passages from the person's own earlier answers and files that bear on this question,
+        //     numbered after the web sources so the answer can cite them and the reader can open them.
+        if (memoryEnabled() && !body.rewrite) {
+          try {
+            const recalled = await recall(user.id, turn.q, { limit: turn.mode === 'research' ? 4 : 3, excludeThreadId: th.id });
+            if (recalled.length) {
+              sources = [...sources, ...numberRecalled(recalled, sources.length)];
+              turn.sources = sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url }));
+              send('sources', turn.sources);
+              console.log('[memory] recalled', JSON.stringify({ n: recalled.length, kinds: recalled.map(r => r.kind), scores: recalled.map(r => Math.round(r.score * 100) / 100) }));
+            }
+          } catch (e) { console.warn('[memory] recall failed', String((e as Error)?.message || e)); }
+        }
+
         // 2. Context: profile + space + connectors
         const graph = await loadGraph(user.id);
         const profile = graphPromptBlock(graph);
@@ -192,6 +207,14 @@ export async function POST(req: Request) {
         send('done', { turn, graphEvents: graph.events });
         // 5. After the answer is on screen: put the places this turn named on the map (the geocoder is slow and polite).
         if (touched && touched.some(n => n.place && !n.geo)) { try { if (await geocodePending(graph)) await saveGraph(user.id, graph); } catch (e) { console.warn('[geo] failed', e); } }
+        // 6. Remember: this answer and the files that came with the question become passages a later answer can recall.
+        if (memoryEnabled()) {
+          try {
+            await remember(user.id, { kind: 'answer', threadId: th.id, turnId: turn.id, title: turn.q, text: turn.answer, at: turn.createdAt });
+            for (const r of attRows) if (currentIds.has(r.id) && r.text.length >= 80) await remember(user.id, { kind: 'file', threadId: th.id, turnId: turn.id, fileId: r.id, title: r.name, text: r.text, at: turn.createdAt });
+            await backfillOnce(user.id);
+          } catch (e) { console.warn('[memory] remember failed', String((e as Error)?.message || e)); }
+        }
       } catch (e) {
         const err = e as { name?: string };
         if (err?.name === 'AbortError' || ctl.signal.aborted) {

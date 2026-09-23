@@ -5,6 +5,7 @@ import { handle, json, readJson, fail, truncate } from '@/lib/http';
 import { getThreadOwned, toClient } from '@/lib/threads';
 import { db, schema } from '@/lib/db';
 import { deleteThreadAttachments } from '@/lib/files';
+import { forgetThread } from '@/lib/memory';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -30,7 +31,8 @@ export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const user = await currentUser(); const { id } = await ctx.params;
   const t = await getThreadOwned(user.id, id);
   await db().delete(schema.threads).where(eq(schema.threads.id, t.id));
-  // Any file attached to this thread goes with it: its text and the stored copy.
+  // Any file attached to this thread goes with it: its text and the stored copy. So does what was remembered from it.
   await deleteThreadAttachments(t.id);
+  try { await forgetThread(user.id, t.id); } catch (e) { console.warn('[memory] forget thread failed', String((e as Error)?.message || e)); }
   return json({ ok: true });
 });
