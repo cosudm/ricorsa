@@ -7,6 +7,7 @@ import { parse } from '@/lib/validate';
 import { logActivity } from '@/lib/activity';
 import { accountDetail } from '@/lib/ricorsa';
 import { effectiveStatus } from '@/lib/invoices';
+import { normalizePlanKey } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -49,6 +50,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const set: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(b)) if (v !== undefined) set[k] = v;
   if (typeof set.currency === 'string') set.currency = (set.currency as string).toUpperCase();
+  if (typeof set.plan === 'string' && set.plan !== 'custom') set.plan = normalizePlanKey(set.plan as string);
   if (!Object.keys(set).length) return json({ customer: before });
   await touchCustomer(id, set);
   const changed = Object.keys(set).filter(k => JSON.stringify((before as Record<string, unknown>)[k]) !== JSON.stringify(set[k]));
@@ -61,7 +63,7 @@ export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   const { id } = await ctx.params;
   const before = await getCustomer(id);
   if (!before) return fail(404, 'No such customer', 'not_found');
-  await db().delete(schema.customers).where(eq(schema.customers.id, id)); // contacts, licences, trials, communications, invoices cascade
+  await db().delete(schema.customers).where(eq(schema.customers.id, id)); // contacts, licenses, trials, communications, invoices cascade
   await logActivity(me, 'customer.delete', 'customer', id, `Deleted ${before.name}`, { customerId: id });
   return json({ ok: true });
 });

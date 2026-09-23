@@ -146,7 +146,7 @@ Have the Privacy and Terms pages (`src/app/privacy`, `src/app/terms`) reviewed; 
 
 ## Manager Console
 
-The staff console (customers, sign-ups, licenses, trials, communication, invoicing and billing) is a separate app in `console/`, deployed as its own Worker at https://manage.ricorsa.com with its own database and Auth0 application. It reads this product's database for live account data and writes only plan grants (statuses `TRIAL` and `LICENSED`, which `src/lib/plans.ts` treats as granting until `planRenewsAt` passes). See `console/README.md`.
+The staff console (customers, sign-ups, licenses, trials, communication, invoicing and billing) is a separate app in `console/`, deployed as its own Worker at https://manage.ricorsa.com with its own database and Auth0 application. It reads this product's database for live account data (accounts, subscriptions with their billing cycle, usage with cost) and writes two things: plan grants (statuses `TRIAL` and `LICENSED`, which `src/lib/plans.ts` treats as granting until `planRenewsAt` passes) and `users.allowance`, monthly ceilings raised above the plan, which `limitsFor` in `src/lib/usage.ts` applies. Its dashboard reads the paying base as cohorts by plan and cycle (MRR, trailing cost, gross margin, churn, LTV) and drafts true-up invoices for annual accounts that used more than their plan's allowance. See `console/README.md`.
 
 ## VDRPros Vault
 

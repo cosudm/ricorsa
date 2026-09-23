@@ -44,7 +44,9 @@ export const customers = sqliteTable('customers', {
   website: text('website'),
   address: json<Address>('address'),
   status: text('status').$type<CustomerStatus>().notNull().default('lead'),
-  plan: text('plan').notNull().default('free'),          // free | pro | team | custom
+  plan: text('plan').notNull().default('free'),          // free | essentials | professional | enterprise | custom
+  /** How the customer pays: monthly or annual. Kept in step with the linked Ricorsa account's subscription; set by hand otherwise. */
+  billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
   mrrCents: integer('mrr_cents').notNull().default(0),
   currency: text('currency').notNull().default('USD'),
   source: text('source'),
@@ -72,13 +74,15 @@ export const contacts = sqliteTable('contacts', {
 
 export type LicenseStatus = 'active' | 'suspended' | 'expired' | 'revoked';
 
-/** A licence grants a plan to a customer for a period. Applying it sets the plan on the linked Ricorsa account. */
+/** A license grants a plan to a customer for a period. Applying it sets the plan on the linked Ricorsa account. */
 export const licenses = sqliteTable('licenses', {
   id: text('id').primaryKey(),
   customerId: text('customer_id').notNull().references(() => customers.id, { onDelete: 'cascade' }),
   key: text('key').notNull(),
   product: text('product').notNull().default('ricorsa'),
-  plan: text('plan').notNull().default('pro'),
+  plan: text('plan').notNull().default('pro'),           // essentials | professional | enterprise (pro | team on older rows)
+  /** How the license is billed: annual for a yearly term, monthly otherwise; set when it is issued. */
+  billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
   seats: integer('seats').notNull().default(1),
   status: text('status').$type<LicenseStatus>().notNull().default('active'),
   startsAt: tsNow('starts_at'),

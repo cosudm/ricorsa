@@ -13,7 +13,7 @@ import { trialView } from '@/lib/views';
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
 
-/** PATCH /api/trials/:id — extend by `days`, convert (issues an open-ended licence on the trial's plan), cancel, or mark expired. */
+/** PATCH /api/trials/:id — extend by `days`, convert (issues an open-ended license on the trial's plan), cancel, or mark expired. */
 export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const me = await currentStaff('manager');
   const { id } = await ctx.params;
@@ -33,7 +33,7 @@ export const PATCH = handle(async (req: Request, ctx: Ctx) => {
     const lid = uid(); const plan = b.plan || row.plan;
     await d.insert(schema.licenses).values({ id: lid, customerId: row.customerId, key: newLicenseKey(), plan, seats: 1, status: 'active', autoRenew: true, notes: `Converted from trial ${id}`, createdBy: me.id });
     license = (await d.select().from(schema.licenses).where(eq(schema.licenses.id, lid)))[0];
-    await logActivity(me, 'license.create', 'license', lid, `Issued a ${plan} licence to ${await customerName(row.customerId)} (trial converted)`, { customerId: row.customerId });
+    await logActivity(me, 'license.create', 'license', lid, `Issued a ${plan} license to ${await customerName(row.customerId)} (trial converted)`, { customerId: row.customerId });
   }
   await d.update(schema.trials).set(set).where(eq(schema.trials.id, id));
   await logActivity(me, 'trial.' + (b.action || 'update'), 'trial', id, `${what}: the ${row.plan} trial of ${await customerName(row.customerId)}`, { customerId: row.customerId });

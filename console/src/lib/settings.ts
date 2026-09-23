@@ -4,13 +4,16 @@ import { db, schema } from './db';
 export type CompanyProfile = { name: string; legalName?: string; email?: string; phone?: string; website?: string; taxId?: string; address?: { line1?: string; line2?: string; city?: string; region?: string; postal?: string; country?: string } };
 export type InvoiceSettings = { prefix: string; nextNumber: number; dueDays: number; taxRate: number; currency: string; terms: string; footer: string };
 export type EmailSettings = { from: string; replyTo?: string; signature: string };
-export type TrialSettings = { days: number; plan: 'pro' | 'team' };
+export type TrialSettings = { days: number; plan: 'essentials' | 'professional' | 'enterprise' };
+/** Unit prices, in cents, for a true-up invoice: what an annual account pays for each unit used beyond its monthly allowance. */
+export type TrueupSettings = { buildCents: number; ideaSetCents: number; questionCents: number; researchCents: number; dueDays: number };
 
 export const DEFAULTS = {
   company: { name: 'SMEPro Technologies', email: 'support@smeprotech.com', website: 'https://ricorsa.com' } as CompanyProfile,
   invoice: { prefix: 'RIC-', nextNumber: 1001, dueDays: 14, taxRate: 0, currency: 'USD', terms: 'Payment is due within 14 days of the invoice date.', footer: 'Thank you for choosing Ricorsa.' } as InvoiceSettings,
   email: { from: process.env.RESEND_FROM || 'Ricorsa <support@smeprotech.com>', signature: 'The Ricorsa team\nhttps://ricorsa.com' } as EmailSettings,
-  trial: { days: 14, plan: 'pro' } as TrialSettings,
+  trial: { days: 14, plan: 'essentials' } as TrialSettings,
+  trueup: { buildCents: 500, ideaSetCents: 100, questionCents: 2, researchCents: 50, dueDays: 14 } as TrueupSettings,
   /** Filled in by the console itself: the PayPal webhook it registered for invoice events. */
   paypal: { webhookId: '' } as { webhookId: string },
 };

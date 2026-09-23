@@ -68,7 +68,7 @@ export async function sendPaypalInvoice(id: string): Promise<void> {
 }
 export async function getPaypalInvoice(id: string): Promise<PaypalInvoice> { return api<PaypalInvoice>(`/v2/invoicing/invoices/${encodeURIComponent(id)}`, { method: 'GET' }); }
 export async function cancelPaypalInvoice(id: string, note = 'Cancelled'): Promise<void> {
-  await api(`/v2/invoicing/invoices/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: JSON.stringify({ subject: 'Invoice cancelled', note, send_to_recipient: true, send_to_invoicer: false }) });
+  await api(`/v2/invoicing/invoices/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: JSON.stringify({ subject: 'Invoice canceled', note, send_to_recipient: true, send_to_invoicer: false }) });
 }
 export async function deletePaypalDraft(id: string): Promise<void> {
   await api(`/v2/invoicing/invoices/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -90,7 +90,7 @@ export function statusFromPaypal(s: string | undefined): 'draft' | 'sent' | 'pai
   }
 }
 
-/** Register (once) the webhook that tells the console when an invoice is paid or cancelled. */
+/** Register (once) the webhook that tells the console when an invoice is paid or canceled. */
 export async function ensureInvoiceWebhook(url: string): Promise<string> {
   const existing = await api<{ webhooks?: Array<{ id: string; url: string }> }>('/v1/notifications/webhooks', { method: 'GET' });
   const hit = (existing.webhooks || []).find(w => w.url === url);

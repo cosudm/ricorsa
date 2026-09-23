@@ -6,7 +6,7 @@ import { syncFromPaypal } from '@/lib/invoice-ops';
 
 export const dynamic = 'force-dynamic';
 
-/** PayPal calls this when an invoice is paid, cancelled or refunded. Each event is verified with PayPal and applied once. */
+/** PayPal calls this when an invoice is paid, canceled or refunded. Each event is verified with PayPal and applied once. */
 export async function POST(req: Request) {
   const raw = await req.text();
   let event: { id?: string; event_type?: string; resource?: { invoice?: { id?: string }; id?: string } } = {};

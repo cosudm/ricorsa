@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { HttpError } from './http';
+import { normalizePlanKey } from './plans';
 
 /** Parse a request body against a schema; a mismatch is a 400 that names the first problem. */
 export function parse<T>(schema: z.ZodType<T>, body: unknown): T {
@@ -21,6 +22,10 @@ export const zOptMs = z.union([zMs, z.null()]).optional();
 export const zCents = z.number().int().min(0).max(1e11);
 export const zAddress = z.object({ line1: zText(200).optional(), line2: zText(200).optional(), city: zText(120).optional(), region: zText(120).optional(), postal: zText(40).optional(), country: zText(60).optional() }).partial();
 export const zTags = z.array(zText(40)).max(30);
-export const zPlan = z.enum(['free', 'pro', 'team', 'custom']);
+/** A plan key: today's, the previous names (normalized by the handlers), or `custom` for customers priced by hand. */
+export const zPlan = z.enum(['free', 'essentials', 'professional', 'enterprise', 'pro', 'team', 'custom']);
+/** A paid plan a license, trial or grant can carry; the previous names are accepted and normalized. */
+export const zPaidPlan = z.enum(['essentials', 'professional', 'enterprise', 'pro', 'team']).transform(v => normalizePlanKey(v));
+export const zBillingCycle = z.enum(['monthly', 'annual']);
 export const zCustomerStatus = z.enum(['lead', 'trial', 'active', 'past_due', 'churned']);
 export const zInvoiceItem = z.object({ description: zText(400).min(1), qty: z.number().min(0).max(1e6), unitCents: z.number().int().min(-1e9).max(1e9), taxRate: z.number().min(0).max(100).optional() });

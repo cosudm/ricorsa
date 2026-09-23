@@ -4,6 +4,7 @@ import { handle, json, readJson } from '@/lib/http';
 import { parse, zAddress, zText, zOptText } from '@/lib/validate';
 import { getSettings, setSetting } from '@/lib/settings';
 import { logActivity } from '@/lib/activity';
+import { normalizePlanKey } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,8 @@ const Patch = z.object({
   company: z.object({ name: zText(200).min(1), legalName: zOptText(200), email: zOptText(200), phone: zOptText(60), website: zOptText(200), taxId: zOptText(80), address: zAddress.optional() }).partial().optional(),
   invoice: z.object({ prefix: zText(12), nextNumber: z.number().int().min(1).max(1e9), dueDays: z.number().int().min(0).max(365), taxRate: z.number().min(0).max(100), currency: zText(3), terms: zText(5000), footer: zText(500) }).partial().optional(),
   email: z.object({ from: zText(200), replyTo: zOptText(200), signature: zText(2000) }).partial().optional(),
-  trial: z.object({ days: z.number().int().min(1).max(365), plan: z.enum(['pro', 'team']) }).partial().optional(),
+  trial: z.object({ days: z.number().int().min(1).max(365), plan: z.enum(['essentials', 'professional', 'enterprise', 'pro', 'team']).transform(v => normalizePlanKey(v) as 'essentials' | 'professional' | 'enterprise') }).partial().optional(),
+  trueup: z.object({ buildCents: z.number().int().min(0).max(1e7), ideaSetCents: z.number().int().min(0).max(1e7), questionCents: z.number().int().min(0).max(1e7), researchCents: z.number().int().min(0).max(1e7), dueDays: z.number().int().min(0).max(365) }).partial().optional(),
 });
 
 export const GET = handle(async () => { await currentStaff(); return json({ settings: await getSettings() }); });
@@ -19,7 +21,7 @@ export const GET = handle(async () => { await currentStaff(); return json({ sett
 export const PATCH = handle(async (req: Request) => {
   const me = await currentStaff('owner');
   const b = parse(Patch, await readJson(req));
-  for (const key of ['company', 'invoice', 'email', 'trial'] as const) {
+  for (const key of ['company', 'invoice', 'email', 'trial', 'trueup'] as const) {
     const v = b[key]; if (!v) continue;
     const clean = Object.fromEntries(Object.entries(v).filter(([, x]) => x !== undefined).map(([k, x]) => [k, x === null ? '' : x]));
     if (key === 'invoice' && typeof clean.currency === 'string') clean.currency = clean.currency.toUpperCase();

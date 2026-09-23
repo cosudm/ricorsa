@@ -2,7 +2,7 @@ import { and, desc, eq, gte, inArray, sql, count, sum } from 'drizzle-orm';
 import { currentStaff } from '@/lib/session';
 import { handle, json } from '@/lib/http';
 import { db, schema } from '@/lib/db';
-import { accountStats, signupSeries } from '@/lib/ricorsa';
+import { accountStats, signupSeries, cohortStats, trueupCandidates } from '@/lib/ricorsa';
 import { effectiveStatus } from '@/lib/invoices';
 import { activityView } from '@/lib/views';
 
@@ -36,8 +36,8 @@ export const GET = handle(async () => {
   const paidRows = await d.select({ month: sql<string>`strftime('%Y-%m', ${schema.payments.receivedAt} / 1000, 'unixepoch')`, cents: sum(schema.payments.amountCents) }).from(schema.payments).where(gte(schema.payments.receivedAt, since)).groupBy(sql`strftime('%Y-%m', ${schema.payments.receivedAt} / 1000, 'unixepoch')`);
   const revenue: Array<{ month: string; cents: number }> = [];
   for (let i = 11; i >= 0; i--) { const dt = new Date(); dt.setMonth(dt.getMonth() - i); const key = dt.toISOString().slice(0, 7); revenue.push({ month: key, cents: Number(paidRows.find(r => r.month === key)?.cents || 0) }); }
-  let ricorsa = null, signups: Array<{ day: string; n: number }> = [];
-  try { [ricorsa, signups] = await Promise.all([accountStats(), signupSeries(42)]); } catch (e) { console.warn('[dashboard] product database unavailable', String((e as Error)?.message || e)); }
+  let ricorsa = null, signups: Array<{ day: string; n: number }> = [], billing = null, trueups: Awaited<ReturnType<typeof trueupCandidates>> = [];
+  try { [ricorsa, signups, billing, trueups] = await Promise.all([accountStats(), signupSeries(42), cohortStats(), trueupCandidates()]); } catch (e) { console.warn('[dashboard] product database unavailable', String((e as Error)?.message || e)); }
   return json({
     customers: { byStatus: Object.fromEntries(byStatus.map(b => [b.status, b.n])), total: byStatus.reduce((a, b) => a + b.n, 0), mrrCents: Number(mrr[0]?.total || 0) },
     trials: { active: trialsActive[0]?.n || 0, endingThisWeek: trialsEnding[0]?.n || 0 },
@@ -45,6 +45,8 @@ export const GET = handle(async () => {
     invoices: { outstandingCents, overdueCents, overdueCount, draftCount, paidThisMonthCents: Number(paidMonth[0]?.total || 0) },
     communications: { thisWeek: commsWeek[0]?.n || 0 },
     ricorsa, signups, revenue,
+    /** The paying base by plan and billing cycle: MRR, trailing cost, gross margin, churn and LTV, all in monthly units. */
+    billing, trueups: trueups.filter(t => !t.invoiced),
     recent: recent.map(activityView),
   });
 });

@@ -96,6 +96,24 @@ main#main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .pill.sent, .pill.pro, .pill.accent, .pill.converted { background: var(--accent-soft); color: var(--accent); }
 .pill.team, .pill.owner { background: var(--rust-soft); color: var(--rust); }
 .pill.free { background: var(--surface); color: var(--ink-3); }
+.pill.essentials { background: var(--accent-soft); color: var(--accent); }
+.pill.professional { background: var(--rust-soft); color: var(--rust); }
+.pill.enterprise { background: #1B2228; color: #fff; }
+.pill.monthly { background: var(--surface-2); color: var(--ink-2); }
+.pill.annual { background: var(--good-soft); color: var(--good); }
+.money.bad, b.bad { color: var(--bad); }
+/* cohorts: the paying base by plan and cycle */
+table.cohorts { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+table.cohorts th { text-align: left; font-size: 11.5px; font-weight: 600; color: var(--ink-3); letter-spacing: .04em; text-transform: uppercase; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.cohorts td { padding: 8px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+table.cohorts th.num, table.cohorts td.num { text-align: right; }
+table.cohorts tr.total td { font-weight: 600; border-bottom: 0; }
+table.cohorts .assumed { color: var(--ink-3); font-size: 11.5px; }
+.cohort-wrap { overflow-x: auto; }
+.trueup { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.trueup:last-child { border-bottom: 0; }
+.trueup .grow { flex: 1; min-width: 0; }
+.trueup .over { font-size: 12.5px; color: var(--ink-2); }
 .tag { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; font-weight: 500; white-space: nowrap; }
 .tag button { color: inherit; opacity: .6; display: grid; place-items: center; } .tag button:hover { opacity: 1; }
 .money { font-variant-numeric: tabular-nums; }

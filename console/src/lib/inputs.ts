@@ -1,20 +1,21 @@
 import { z } from 'zod';
-import { zId, zOptEmail, zOptText, zText, zOptMs, zMs, zInvoiceItem, zAddress } from './validate';
+import { normalizePlanKey } from './plans';
+import { zId, zOptEmail, zOptText, zText, zOptMs, zMs, zInvoiceItem, zAddress, zPaidPlan, zBillingCycle } from './validate';
 
 export const ContactInput = z.object({ customerId: zId, name: zText(200).min(1), email: zOptEmail, phone: zOptText(60), title: zOptText(120), primary: z.boolean().optional(), notes: zText(5000).optional() });
 
 export const LicenseInput = z.object({
-  customerId: zId, plan: z.enum(['pro', 'team']), seats: z.number().int().min(1).max(10000).optional(), startsAt: zOptMs, endsAt: zOptMs, autoRenew: z.boolean().optional(), notes: zText(5000).optional(),
+  customerId: zId, plan: zPaidPlan, billingCycle: zBillingCycle.optional(), seats: z.number().int().min(1).max(10000).optional(), startsAt: zOptMs, endsAt: zOptMs, autoRenew: z.boolean().optional(), notes: zText(5000).optional(),
   /** Also set the plan on the linked Ricorsa account (default true). */
   apply: z.boolean().optional(),
 });
 export const LicensePatch = z.object({
-  plan: z.enum(['pro', 'team']).optional(), seats: z.number().int().min(1).max(10000).optional(), startsAt: zMs.optional(), endsAt: zOptMs, autoRenew: z.boolean().optional(), notes: zText(5000).optional(),
+  plan: zPaidPlan.optional(), billingCycle: zBillingCycle.optional(), seats: z.number().int().min(1).max(10000).optional(), startsAt: zMs.optional(), endsAt: zOptMs, autoRenew: z.boolean().optional(), notes: zText(5000).optional(),
   action: z.enum(['suspend', 'revoke', 'reactivate', 'renew']).optional(), months: z.number().int().min(1).max(60).optional(), apply: z.boolean().optional(),
 });
 
-export const TrialInput = z.object({ customerId: zId, plan: z.enum(['pro', 'team']).optional(), days: z.number().int().min(1).max(365).optional(), endsAt: zMs.optional(), notes: zText(5000).optional(), apply: z.boolean().optional() });
-export const TrialPatch = z.object({ action: z.enum(['extend', 'convert', 'cancel', 'expire']).optional(), days: z.number().int().min(1).max(365).optional(), plan: z.enum(['pro', 'team']).optional(), notes: zText(5000).optional(), apply: z.boolean().optional() });
+export const TrialInput = z.object({ customerId: zId, plan: zPaidPlan.optional(), days: z.number().int().min(1).max(365).optional(), endsAt: zMs.optional(), notes: zText(5000).optional(), apply: z.boolean().optional() });
+export const TrialPatch = z.object({ action: z.enum(['extend', 'convert', 'cancel', 'expire']).optional(), days: z.number().int().min(1).max(365).optional(), plan: zPaidPlan.optional(), notes: zText(5000).optional(), apply: z.boolean().optional() });
 
 export const CommInput = z.object({
   customerId: zId, contactId: zOptText(60), kind: z.enum(['email', 'call', 'meeting', 'note', 'sms']).optional(), direction: z.enum(['in', 'out']).optional(),
@@ -34,4 +35,11 @@ export const PaymentInput = z.object({ amountCents: z.number().int().min(1).max(
 export const StaffInvite = z.object({ email: z.string().trim().toLowerCase().email().max(200), name: zOptText(200), role: z.enum(['owner', 'manager', 'viewer']).optional(), sendEmail: z.boolean().optional() });
 export const StaffPatch = z.object({ role: z.enum(['owner', 'manager', 'viewer']).optional(), status: z.enum(['active', 'disabled', 'invited']).optional(), name: zOptText(200) });
 
-export const PlanGrant = z.object({ plan: z.enum(['free', 'pro', 'team']), kind: z.enum(['license', 'trial', 'clear']).optional(), until: zOptMs });
+export const PlanGrant = z.object({ plan: z.enum(['free', 'essentials', 'professional', 'enterprise', 'pro', 'team']).transform(v => normalizePlanKey(v)), kind: z.enum(['license', 'trial', 'clear']).optional(), until: zOptMs });
+
+/** Allowances the console sets on a Ricorsa account above its plan; null clears them all. */
+const zAllow = z.number().int().min(0).max(1e6).optional();
+export const AllowanceInput = z.object({ buildsPerMonth: zAllow, ideaSetsPerMonth: zAllow, questionsPerMonth: zAllow, questionsPerDay: zAllow, researchPerMonth: zAllow, note: zText(500).optional(), clear: z.boolean().optional() });
+
+/** Draft a true-up invoice for an account's overage in a month (`period` as YYYY-MM; the current month by default). */
+export const TrueupInput = z.object({ userId: zText(200).min(1), period: z.string().regex(/^\d{4}-\d{2}$/).optional() });

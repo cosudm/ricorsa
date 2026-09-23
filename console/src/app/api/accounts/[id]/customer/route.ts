@@ -5,6 +5,7 @@ import { db, schema } from '@/lib/db';
 import { accountDetail } from '@/lib/ricorsa';
 import { getCustomer } from '@/lib/customers';
 import { logActivity } from '@/lib/activity';
+import { normalizePlanKey, mrrCentsFor } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
@@ -21,7 +22,8 @@ export const POST = handle(async (_req: Request, ctx: Ctx) => {
   if (existing) return json({ customer: await getCustomer(existing.id), created: false });
   const cid = uid();
   const paying = acc.plan !== 'free' && ['ACTIVE', 'APPROVAL_PENDING'].includes(acc.subscriptionStatus || '');
-  await d.insert(schema.customers).values({ id: cid, kind: 'person', name: acc.name || acc.email || 'Ricorsa user', email: acc.email, status: paying ? 'active' : acc.subscriptionStatus === 'TRIAL' ? 'trial' : 'lead', plan: acc.plan, mrrCents: paying ? (acc.plan === 'team' ? 4900 : 2000) : 0, source: 'ricorsa', ownerId: me.id, ricorsaUserId: userId });
+  const plan = normalizePlanKey(acc.plan);
+  await d.insert(schema.customers).values({ id: cid, kind: 'person', name: acc.name || acc.email || 'Ricorsa user', email: acc.email, status: paying ? 'active' : acc.subscriptionStatus === 'TRIAL' ? 'trial' : 'lead', plan, billingCycle: paying ? (acc.billingCycle || 'monthly') : null, mrrCents: paying ? mrrCentsFor(plan, acc.billingCycle || 'monthly') : 0, source: 'ricorsa', ownerId: me.id, ricorsaUserId: userId });
   await logActivity(me, 'customer.create', 'customer', cid, `Added ${acc.email || userId} from the Ricorsa sign-ups`, { customerId: cid });
   return json({ customer: await getCustomer(cid), created: true }, { status: 201 });
 });

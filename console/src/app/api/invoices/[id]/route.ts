@@ -27,7 +27,7 @@ export const GET = handle(async (_req: Request, ctx: Ctx) => {
   return json({ invoice: invoiceView(hit.row, hit.customer), payments: payments.map(paymentView) });
 });
 
-/** PATCH /api/invoices/:id — edit a draft, or void any invoice (a sent PayPal invoice is cancelled there too). */
+/** PATCH /api/invoices/:id — edit a draft, or void any invoice (a sent PayPal invoice is canceled there too). */
 export const PATCH = handle(async (req: Request, ctx: Ctx) => {
   const me = await currentStaff('manager');
   const { id } = await ctx.params;

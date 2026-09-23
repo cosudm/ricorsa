@@ -1,6 +1,6 @@
 'use strict';
 /* =====================================================================
-   SMEPro Ricorsa Manager Console. A single-page app over /api/*: customers, Ricorsa sign-ups, licences,
+   SMEPro Ricorsa Manager Console. A single-page app over /api/*: customers, Ricorsa sign-ups, licenses,
    trials, communication, invoices and billing, staff and settings. Records live in the console's database;
    the layout of every grid (columns, widths, sort, filters, page size) is remembered per person, and
    saved views can be shared with the team.
@@ -49,11 +49,17 @@ function parseCsv(text) {
   if (field !== '' || row.length) { row.push(field); rows.push(row); }
   return rows.filter(r => r.some(f => f.trim() !== ''));
 }
-const PLAN_LABEL = { free: 'Free', pro: 'Pro', team: 'Team', custom: 'Custom' };
+// Plans as the product names them today; `pro` and `team` are the names from before September 2026 and read as their successors.
+const PLAN_KEY = k => ({ pro: 'essentials', team: 'professional' })[k] || k;
+const PLAN_LABEL = { free: 'Free', essentials: 'Essentials', professional: 'Professional', enterprise: 'Enterprise', pro: 'Essentials', team: 'Professional', custom: 'Custom' };
+const PLAN_PRICE = { essentials: { monthly: 4500, annual: 45000 }, professional: { monthly: 7900, annual: 79000 }, enterprise: { monthly: 12900, annual: 129000 } };
+const CYCLE_LABEL = { monthly: 'Monthly', annual: 'Annual' };
 const STATUS_LABEL = { lead: 'Lead', trial: 'Trial', active: 'Active', past_due: 'Past due', churned: 'Churned' };
 const pill = (v, cls) => `<span class="pill ${esc(cls || v)}"><span class="dot"></span>${esc(v)}</span>`;
 const statusPill = s => pill(STATUS_LABEL[s] || s, s);
-const planPill = p => `<span class="pill ${esc(p)}">${esc(PLAN_LABEL[p] || p)}</span>`;
+const planPill = p => `<span class="pill ${esc(PLAN_KEY(p))}">${esc(PLAN_LABEL[p] || p)}</span>`;
+const cyclePill = c => c ? `<span class="pill ${esc(c)}">${esc(CYCLE_LABEL[c] || c)}</span>` : '<span class="muted small">–</span>';
+const pct = v => v == null ? '–' : `${Math.round(v * 1000) / 10}%`;
 
 // ---------- Icons ----------
 const ICONS = {
@@ -101,6 +107,7 @@ const ICONS = {
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
   play: '<path d="M7 5l12 7-12 7z"/>',
   pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  sliders: '<path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
   card: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h4"/>',
   tag: '<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.3"/>',
   dollar: '<path d="M12 3v18M17 7.5c0-1.9-2.2-3.5-5-3.5S7 5.6 7 7.5s2.2 3 5 3.5 5 1.6 5 3.5-2.2 3.5-5 3.5-5-1.6-5-3.5"/>',
@@ -390,7 +397,7 @@ const NAV = [
   { h: 'dashboard', label: 'Dashboard', icon: 'home' },
   { h: 'customers', label: 'Customers', icon: 'users' },
   { h: 'signups', label: 'Ricorsa sign-ups', icon: 'userPlus' },
-  { h: 'licenses', label: 'Licences', icon: 'key' },
+  { h: 'licenses', label: 'Licenses', icon: 'key' },
   { h: 'trials', label: 'Trials', icon: 'clock' },
   { h: 'communications', label: 'Communication', icon: 'mail' },
   { h: 'invoices', label: 'Invoices and billing', icon: 'invoice' },
@@ -468,7 +475,7 @@ function columnChart(series, { height = 160, format = v => String(v), labelEvery
 // ---------- Dashboard ----------
 async function renderDashboard() {
   const d = await load('dashboard', '/api/dashboard', true);
-  const c = d.customers, inv = d.invoices, r = d.ricorsa;
+  const c = d.customers, inv = d.invoices, r = d.ricorsa, b = d.billing, tu = d.trueups || [];
   const kpi = (label, value, delta, cls = '') => `<div class="kpi"><div class="label">${esc(label)}</div><div class="value">${value}</div>${delta ? `<div class="delta ${cls}">${delta}</div>` : ''}</div>`;
   const body = contentEl(`
     <div class="quick">${can('manager') ? `<button type="button" class="btn sm primary" data-q="customer">${icon('plus', 14)}Add customer</button><button type="button" class="btn sm" data-q="invoice">${icon('invoice', 14)}New invoice</button><button type="button" class="btn sm" data-q="trial">${icon('clock', 14)}Start a trial</button>` : ''}${can('owner') ? `<button type="button" class="btn sm" data-q="staff">${icon('userPlus', 14)}Invite staff</button>` : ''}<a class="btn sm" href="#/signups">${icon('userPlus', 14)}Ricorsa sign-ups</a></div>
@@ -479,23 +486,41 @@ async function renderDashboard() {
       ${kpi('Outstanding invoices', money(inv.outstandingCents), inv.overdueCount ? `${inv.overdueCount} overdue · ${money(inv.overdueCents)}` : `${inv.draftCount} draft${inv.draftCount === 1 ? '' : 's'}`, inv.overdueCount ? 'bad' : '')}
       ${kpi('Received this month', money(inv.paidThisMonthCents), 'Payments recorded since the 1st')}
       ${r ? kpi('Ricorsa accounts', r.total.toLocaleString('en-US'), `${r.week} new this week · ${r.paying} paying`, r.week ? 'good' : '') : kpi('Ricorsa accounts', '–', 'Product database not reachable')}
+      ${b ? kpi('Recurring revenue (Ricorsa)', money(b.totals.mrrCents), `${b.totals.monthly.accounts} monthly · ${b.totals.annual.accounts} annual (${money(b.totals.annual.mrrCents)} a month of it)`) : ''}
+      ${b ? kpi('Gross margin, 30 days', money(b.totals.grossMarginCents), `${money(b.totals.cost30Cents)} of model cost against ${money(b.totals.mrrCents)}`, b.totals.grossMarginCents < 0 ? 'bad' : 'good') : ''}
     </div>
     <div class="cards">
       <div class="card"><h3>Ricorsa sign-ups</h3><div class="sub">New accounts per day, last six weeks</div><div data-chart="signups"></div></div>
       <div class="card"><h3>Revenue received</h3><div class="sub">Payments recorded per month, last twelve months</div><div data-chart="revenue"></div></div>
+      ${b ? `<div class="card" style="grid-column:1 / -1"><h3>Billing cohorts</h3><div class="sub">The paying base by plan and cycle, in monthly units: revenue at list price (annual spread over twelve months), model cost over the trailing ${b.window.costDays} days, what is left of the revenue after it, subscriptions that ended in the trailing ${b.window.churnDays} days as a monthly churn rate, and the lifetime value that follows (ARPU × margin ÷ churn).</div>${cohortTable(b)}</div>` : ''}
+      ${tu.length ? `<div class="card"><h3>True-ups to draft</h3><div class="sub">Annual accounts whose usage this month went past the plan's allowance. A draft invoice bills the excess at the unit prices in Settings; sending is a separate step on the invoice.</div>${tu.map(t => `<div class="trueup"><div class="grow"><b>${esc(t.email || t.userId)}</b> ${planPill(t.plan)} ${cyclePill('annual')}<div class="over">${t.overage.map(o => `${o.over.toLocaleString('en-US')} ${esc(o.label)} over ${o.allowance.toLocaleString('en-US')}`).join(' · ')}</div></div>${can('manager') ? `<button type="button" class="btn sm" data-trueup="${esc(t.userId)}" data-period="${esc(t.period)}">${icon('invoice', 14)}Draft invoice</button>` : ''}</div>`).join('')}</div>` : ''}
       <div class="card"><h3>Recent activity</h3><div class="sub">What the team has done lately</div><div class="feed">${d.recent.length ? d.recent.map(a => `<div class="item"><span class="when" title="${esc(fmtDateTime(a.at))}">${esc(relTime(a.at))}</span><span>${esc(a.summary)}<span class="who"> · ${esc((a.actorEmail || 'system').split('@')[0])}</span></span></div>`).join('') : '<div class="empty">Nothing yet. Add a customer to get going.</div>'}</div></div>
-      <div class="card"><h3>Licences</h3><div class="sub">${d.licenses.active} active${d.licenses.endingThisMonth ? `, ${d.licenses.endingThisMonth} ending within 30 days` : ''}</div><div class="kv"><dt>Emails and calls</dt><dd>${d.communications.thisWeek} this week</dd><dt>Past due</dt><dd>${c.byStatus.past_due || 0} customer${(c.byStatus.past_due || 0) === 1 ? '' : 's'}</dd><dt>Churned</dt><dd>${c.byStatus.churned || 0}</dd>${r ? `<dt>Plans on Ricorsa</dt><dd>${Object.entries(r.byPlan).map(([k, v]) => `${PLAN_LABEL[k] || k} ${v}`).join(' · ')}</dd>` : ''}</div></div>
+      <div class="card"><h3>Licenses</h3><div class="sub">${d.licenses.active} active${d.licenses.endingThisMonth ? `, ${d.licenses.endingThisMonth} ending within 30 days` : ''}</div><div class="kv"><dt>Emails and calls</dt><dd>${d.communications.thisWeek} this week</dd><dt>Past due</dt><dd>${c.byStatus.past_due || 0} customer${(c.byStatus.past_due || 0) === 1 ? '' : 's'}</dd><dt>Churned</dt><dd>${c.byStatus.churned || 0}</dd>${r ? `<dt>Plans on Ricorsa</dt><dd>${Object.entries(r.byPlan).map(([k, v]) => `${PLAN_LABEL[k] || k} ${v}`).join(' · ')}</dd>` : ''}</div></div>
     </div>`);
   page('Dashboard', new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }), body);
   if (d.signups && d.signups.length) $('[data-chart="signups"]', body).appendChild(columnChart(d.signups.map(s => ({ label: new Date(s.day + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), full: new Date(s.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }), v: s.n })), { format: v => `${v} sign-up${v === 1 ? '' : 's'}` }));
   else $('[data-chart="signups"]', body).innerHTML = '<div class="empty small">Sign-ups appear here once the product database is reachable.</div>';
   $('[data-chart="revenue"]', body).appendChild(columnChart(d.revenue.map(m => ({ label: new Date(m.month + '-15').toLocaleDateString('en-US', { month: 'short' }), full: new Date(m.month + '-15').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }), v: m.cents / 100 })), { format: v => money(Math.round(v * 100)), labelEvery: 1 }));
   $$('[data-q]', body).forEach(b => b.addEventListener('click', () => { const k = b.dataset.q; if (k === 'customer') customerModal(); else if (k === 'invoice') go('#/invoices/new'); else if (k === 'trial') trialModal(); else if (k === 'staff') inviteModal(); }));
+  $$('[data-trueup]', body).forEach(btn => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try { const r = await api('/api/trueups', { body: { userId: btn.dataset.trueup, period: btn.dataset.period } }); invalidate('dashboard', 'invoices', 'customers'); toast(`Drafted ${r.number} for ${money(r.totalCents)}`); go('#/invoices/' + r.invoiceId); } catch (e) { btn.disabled = false; apiToast(e); }
+  }));
+}
+/** The cohort table: one row per plan and cycle with accounts, MRR, cost, margin, churn and LTV; totals at the foot. */
+function cohortTable(b) {
+  if (!b.cohorts.length) return '<div class="empty small">No paying accounts yet. Cohorts appear as subscriptions start.</div>';
+  const row = c => `<tr><td>${planPill(c.plan)}</td><td>${cyclePill(c.cycle)}</td><td class="num">${c.accounts}</td><td class="num">${money(c.mrrCents)}</td><td class="num">${money(c.arpuCents)}</td><td class="num">${money(c.cost30Cents)}</td><td class="num"><span class="money ${c.grossMarginCents < 0 ? 'bad' : ''}">${money(c.grossMarginCents)}</span></td><td class="num">${pct(c.grossMarginPct)}</td><td class="num">${c.churnMonthly == null ? '–' : pct(c.churnMonthly)}${c.churnAssumed && c.accounts ? ' <span class="assumed" title="No subscription in this cohort has ended in the window yet, so the rate is an assumption until one does">assumed</span>' : ''}</td><td class="num">${c.ltvCents == null ? '–' : money(c.ltvCents)}</td></tr>`;
+  const t = b.totals;
+  return `<div class="cohort-wrap"><table class="cohorts"><thead><tr><th>Plan</th><th>Cycle</th><th class="num">Accounts</th><th class="num">MRR</th><th class="num">ARPU</th><th class="num">Cost ${b.window.costDays}d</th><th class="num">Gross margin</th><th class="num">Margin</th><th class="num">Churn / mo</th><th class="num">LTV</th></tr></thead><tbody>${b.cohorts.map(row).join('')}<tr class="total"><td colspan="2">All paying</td><td class="num">${t.accounts}</td><td class="num">${money(t.mrrCents)}</td><td class="num">${t.accounts ? money(Math.round(t.mrrCents / t.accounts)) : '–'}</td><td class="num">${money(t.cost30Cents)}</td><td class="num"><span class="money ${t.grossMarginCents < 0 ? 'bad' : ''}">${money(t.grossMarginCents)}</span></td><td class="num">${t.mrrCents ? pct(t.grossMarginCents / t.mrrCents) : '–'}</td><td></td><td></td></tr></tbody></table></div>`;
 }
 
 // ---------- Customers ----------
 const STATUS_OPTS = Object.entries(STATUS_LABEL).map(([value, label]) => ({ value, label }));
-const PLAN_OPTS = Object.entries(PLAN_LABEL).map(([value, label]) => ({ value, label }));
+const PLAN_OPTS = ['free', 'essentials', 'professional', 'enterprise', 'custom'].map(value => ({ value, label: PLAN_LABEL[value] }));
+const PAID_PLAN_OPTS = ['essentials', 'professional', 'enterprise'].map(value => ({ value, label: PLAN_LABEL[value] }));
+const CYCLE_OPTS = [{ value: 'monthly', label: 'Monthly' }, { value: 'annual', label: 'Annual' }];
+const CYCLE_OPTS_BLANK = [{ value: '', label: 'Not set' }].concat(CYCLE_OPTS);
 const ownerOpts = () => [{ value: '', label: 'Unassigned' }].concat(state.staff.map(s => ({ value: s.id, label: s.name || s.email })));
 const CUSTOMER_FIELDS = [
   { key: 'name', label: 'Name', required: true, placeholder: 'Person or account name' }, { key: 'company', label: 'Company' },
@@ -543,12 +568,13 @@ async function renderCustomers() {
     { key: 'name', label: 'Name', primary: true, width: 220, editable: true, render: r => `<span class="lnk">${esc(r.name)}</span>${r.company && r.company !== r.name ? `<span class="cell-sub">${esc(r.company)}</span>` : ''}`, text: r => r.name + (r.company ? ' ' + r.company : '') },
     { key: 'email', label: 'Email', type: 'email', width: 220, editable: true },
     { key: 'status', label: 'Status', type: 'select', options: STATUS_OPTS, editable: true, width: 110, render: r => statusPill(r.status) },
-    { key: 'plan', label: 'Plan', type: 'select', options: PLAN_OPTS, editable: true, width: 90, render: r => planPill(r.plan) },
-    { key: 'mrrCents', label: 'Monthly', type: 'money', editable: true, width: 100, title: 'Monthly recurring value' },
+    { key: 'plan', label: 'Plan', type: 'select', options: PLAN_OPTS, editable: true, width: 110, render: r => planPill(r.plan), text: r => PLAN_LABEL[r.plan] || r.plan },
+    { key: 'billingCycle', label: 'Billing', type: 'select', options: CYCLE_OPTS_BLANK, editable: true, width: 100, render: r => cyclePill(r.billingCycle), text: r => CYCLE_LABEL[r.billingCycle] || '', title: 'Monthly or annual; follows the linked Ricorsa subscription when there is one' },
+    { key: 'mrrCents', label: 'Monthly value', type: 'money', editable: true, width: 110, title: 'Monthly recurring value (an annual plan spread over twelve months)' },
     { key: 'ownerId', label: 'Owner', type: 'select', options: ownerOpts(), editable: true, width: 140, text: r => staffName(r.ownerId) },
     { key: 'account', label: 'Ricorsa account', width: 170, sortable: true, text: r => r.account ? `${PLAN_LABEL[r.account.plan] || r.account.plan}${r.account.subscriptionStatus ? ' · ' + r.account.subscriptionStatus.toLowerCase() : ''}` : (r.ricorsaUserId ? 'linked' : 'not linked'), sortValue: r => r.account ? r.account.lastSeenAt : -1, render: r => r.account ? `${planPill(r.account.plan)} <span class="muted small">${esc(r.account.subscriptionStatus ? r.account.subscriptionStatus.toLowerCase() : 'no subscription')} · seen ${esc(relTime(r.account.lastSeenAt))}</span>` : `<span class="muted small">${r.ricorsaUserId ? 'linked' : 'not linked'}</span>` },
     { key: 'trial', label: 'Trial', width: 130, text: r => r.trial ? `${PLAN_LABEL[r.trial.plan]} ends ${fmtDate(r.trial.endsAt)}` : '', sortValue: r => r.trial ? r.trial.endsAt : -1, render: r => r.trial ? `${planPill(r.trial.plan)} <span class="small muted">ends ${esc(inDays(r.trial.endsAt))}</span>` : '' },
-    { key: 'license', label: 'Licence', width: 130, text: r => r.license ? `${PLAN_LABEL[r.license.plan]}${r.license.endsAt ? ' until ' + fmtDate(r.license.endsAt) : ' (open)'}` : '', sortValue: r => r.license ? (r.license.endsAt || 9e15) : -1, render: r => r.license ? `${planPill(r.license.plan)} <span class="small muted">${r.license.endsAt ? 'until ' + esc(fmtDate(r.license.endsAt)) : 'open-ended'}</span>` : '' },
+    { key: 'license', label: 'License', width: 130, text: r => r.license ? `${PLAN_LABEL[r.license.plan]}${r.license.endsAt ? ' until ' + fmtDate(r.license.endsAt) : ' (open)'}` : '', sortValue: r => r.license ? (r.license.endsAt || 9e15) : -1, render: r => r.license ? `${planPill(r.license.plan)} <span class="small muted">${r.license.endsAt ? 'until ' + esc(fmtDate(r.license.endsAt)) : 'open-ended'}</span>` : '' },
     { key: 'openCents', label: 'Balance due', type: 'money', width: 110, render: r => r.openCents ? `<span class="money ${r.openCents ? 'bad' : ''}">${money(r.openCents, r.currency)}</span>` : '<span class="muted">–</span>' },
     { key: 'tags', label: 'Tags', type: 'tags', editable: true, width: 180 },
     { key: 'source', label: 'Source', editable: true, width: 110, hidden: true },
@@ -563,25 +589,26 @@ async function renderCustomers() {
   grid = createGrid({
     key: 'customers', columns, rows: data.customers, rowId: r => r.id, selectable: can('manager'), noun: 'customers', csvName: 'customers', defaultSort: { key: 'updatedAt', dir: 'desc' },
     searchPlaceholder: 'Search customers', searchExtra: r => (r.notes || '') + ' ' + (r.tags || []).join(' '),
-    filters: [{ key: 'status', options: STATUS_OPTS, test: (r, v) => r.status === v }],
+    filters: [{ key: 'status', options: STATUS_OPTS, test: (r, v) => r.status === v }, { key: 'cycle', options: CYCLE_OPTS, test: (r, v) => r.billingCycle === v }],
     addLabel: can('manager') ? 'Add customer' : null, onAdd: () => customerModal(null, c => { grid.add(c); go('#/customers/' + c.id); }),
     toolbarHtml: can('manager') ? `<button type="button" class="btn sm" data-import>${icon('upload', 14)}<span>Import</span></button>` : '',
     emptyTitle: 'No customers yet', emptyText: 'Add one, import a CSV, or add people from the Ricorsa sign-ups.',
     onRowClick: r => go('#/customers/' + r.id),
-    onEdit: async (r, k, v) => { const body = {}; body[k] = k === 'ownerId' && v === '' ? null : v; const res = await api('/api/customers/' + r.id, { method: 'PATCH', body }); invalidate('customers', 'dashboard'); return res.customer; },
+    onEdit: async (r, k, v) => { const body = {}; body[k] = (k === 'ownerId' || k === 'billingCycle') && v === '' ? null : v; const res = await api('/api/customers/' + r.id, { method: 'PATCH', body }); invalidate('customers', 'dashboard'); return res.customer; },
     actions: r => [{ key: 'open', label: 'Open', icon: 'external' }, { key: 'edit', label: 'Edit details', icon: 'edit' }, { key: 'invoice', label: 'New invoice', icon: 'invoice' }, { key: 'trial', label: 'Start a trial', icon: 'clock' }, { key: 'email', label: 'Send an email', icon: 'mail' }, '-', { key: 'delete', label: 'Delete', icon: 'trash', danger: true, disabled: !can('owner') }],
     onAction: async (r, k) => {
       if (k === 'open') go('#/customers/' + r.id); else if (k === 'edit') customerModal(r, c => grid.update(c.id, c));
       else if (k === 'invoice') go('#/invoices/new?customer=' + r.id); else if (k === 'trial') trialModal(r, () => { invalidate('customers'); renderCustomers(); });
       else if (k === 'email') commModal(r, { kind: 'email' }, () => { invalidate('customers'); });
-      else if (k === 'delete') { if (await confirmModal(`Delete ${r.name}?`, 'Contacts, licences, trials, invoices and the communication history of this customer are deleted with it. This cannot be undone.', { okLabel: 'Delete', danger: true })) { try { await api('/api/customers/' + r.id, { method: 'DELETE' }); grid.remove([r.id]); invalidate('customers', 'dashboard'); toast('Deleted'); } catch (e) { apiToast(e); } } }
+      else if (k === 'delete') { if (await confirmModal(`Delete ${r.name}?`, 'Contacts, licenses, trials, invoices and the communication history of this customer are deleted with it. This cannot be undone.', { okLabel: 'Delete', danger: true })) { try { await api('/api/customers/' + r.id, { method: 'DELETE' }); grid.remove([r.id]); invalidate('customers', 'dashboard'); toast('Deleted'); } catch (e) { apiToast(e); } } }
     },
-    bulk: [{ key: 'status', label: 'Set status', icon: 'tag' }, { key: 'owner', label: 'Assign owner', icon: 'users' }, { key: 'plan', label: 'Set plan', icon: 'sparkles' }, { key: 'tags', label: 'Add tags', icon: 'tag' }, { key: 'export', label: 'Export selected', icon: 'download' }, { key: 'delete', label: 'Delete', icon: 'trash', danger: true }],
+    bulk: [{ key: 'status', label: 'Set status', icon: 'tag' }, { key: 'owner', label: 'Assign owner', icon: 'users' }, { key: 'plan', label: 'Set plan', icon: 'sparkles' }, { key: 'cycle', label: 'Set billing cycle', icon: 'card' }, { key: 'tags', label: 'Add tags', icon: 'tag' }, { key: 'export', label: 'Export selected', icon: 'download' }, { key: 'delete', label: 'Delete', icon: 'trash', danger: true }],
     onBulk: async (k, ids, rows) => {
       const apply = async (set) => { try { const r = await api('/api/customers/bulk', { method: 'PATCH', body: { ids, set } }); r.customers.forEach(c => grid.update(c.id, c)); invalidate('customers', 'dashboard'); grid.clearSelection(); toast(`Updated ${ids.length}`); } catch (e) { apiToast(e); } };
       if (k === 'status') pickModal('Set status', STATUS_OPTS, v => apply({ status: v }));
       else if (k === 'owner') pickModal('Assign owner', ownerOpts(), v => apply({ ownerId: v || null }));
       else if (k === 'plan') pickModal('Set plan', PLAN_OPTS, v => apply({ plan: v }));
+      else if (k === 'cycle') pickModal('Set billing cycle', CYCLE_OPTS_BLANK, v => apply({ billingCycle: v || null }));
       else if (k === 'tags') textModal('Add tags', 'Comma separated', v => apply({ addTags: v.split(',').map(s => s.trim()).filter(Boolean) }));
       else if (k === 'export') download(`customers-selected-${isoDay(Date.now())}.csv`, csvOf(rows, columns.map(c => ({ label: c.label, text: r => c.text ? c.text(r) : (c.type === 'money' ? money(r[c.key]) : c.type === 'date' ? fmtDate(r[c.key]) : c.type === 'tags' ? (r[c.key] || []).join('; ') : String(r[c.key] ?? '')) }))));
       else if (k === 'delete') { if (!can('owner')) { toast('Only an owner can delete customers', 'bad'); return; } if (await confirmModal(`Delete ${ids.length} customer${ids.length === 1 ? '' : 's'}?`, 'Everything attached to them is deleted too. This cannot be undone.', { okLabel: 'Delete', danger: true })) { try { await api('/api/customers/bulk', { method: 'DELETE', body: { ids } }); grid.remove(ids); invalidate('customers', 'dashboard'); toast('Deleted'); } catch (e) { apiToast(e); } } }
@@ -598,7 +625,7 @@ function textModal(title, placeholder, onOk, initial = '') {
   openModal(`<h2>${esc(title)}</h2><div class="field"><input type="text" id="tx" placeholder="${esc(placeholder)}" value="${esc(initial)}"></div><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="txOk">Apply</button></div>`, { onMount: ov => { const ok = () => { const v = $('#tx').value.trim(); if (!v) return; closeModal(); onOk(v); }; $('#txOk').addEventListener('click', ok); $('#tx').addEventListener('keydown', e => { if (e.key === 'Enter') ok(); }); } });
 }
 
-// ---------- Shared modals: contacts, trials, licences, communication, plan grants ----------
+// ---------- Shared modals: contacts, trials, licenses, communication, plan grants ----------
 async function customerPicker(preset) {
   if (preset) return { value: preset.id, label: preset.name };
   const data = await load('customers', '/api/customers');
@@ -613,18 +640,18 @@ function contactModal(customerId, existing, onDone) {
 }
 async function trialModal(customer, onDone) {
   const pick = await customerPicker(customer); const t = state.settings.trial;
-  const fields = [customer ? null : { key: 'customerId', label: 'Customer', type: 'select', options: pick.options, span: true }, { key: 'plan', label: 'Plan', type: 'select', options: [{ value: 'pro', label: 'Pro' }, { value: 'team', label: 'Team' }] }, { key: 'days', label: 'Length (days)', type: 'number', min: 1, max: 365 }, { key: 'apply', label: 'Apply to the linked Ricorsa account now', type: 'check', span: true, hint: 'The account gets the plan until the trial ends, then returns to Free unless converted.' }, { key: 'notes', label: 'Notes', type: 'textarea', span: true }].filter(Boolean);
-  openModal(`<h2>${icon('clock', 20)}Start a trial</h2><p class="sub">${customer ? esc(customer.name) : 'Pick the customer'}: a ${PLAN_LABEL[t.plan]} trial of ${t.days} days by default.</p>${formHtml(fields, { plan: t.plan, days: t.days, apply: true })}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="trOk">Start trial</button></div>`, { onMount: ov => $('#trOk').addEventListener('click', async () => {
+  const fields = [customer ? null : { key: 'customerId', label: 'Customer', type: 'select', options: pick.options, span: true }, { key: 'plan', label: 'Plan', type: 'select', options: PAID_PLAN_OPTS }, { key: 'days', label: 'Length (days)', type: 'number', min: 1, max: 365 }, { key: 'apply', label: 'Apply to the linked Ricorsa account now', type: 'check', span: true, hint: 'The account gets the plan until the trial ends, then returns to Free unless converted.' }, { key: 'notes', label: 'Notes', type: 'textarea', span: true }].filter(Boolean);
+  openModal(`<h2>${icon('clock', 20)}Start a trial</h2><p class="sub">${customer ? esc(customer.name) : 'Pick the customer'}: a ${PLAN_LABEL[t.plan] || t.plan} trial of ${t.days} days by default.</p>${formHtml(fields, { plan: t.plan, days: t.days, apply: true })}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="trOk">Start trial</button></div>`, { onMount: ov => $('#trOk').addEventListener('click', async () => {
     const f = readForm(ov, fields); const body = { customerId: customer ? customer.id : f.customerId, plan: f.plan, days: f.days || t.days, notes: f.notes, apply: f.apply };
     try { const r = await api('/api/trials', { body }); closeModal(); invalidate('customers', 'trials', 'dashboard'); toast(r.sync && r.sync.applied ? `Trial started and applied: ${r.sync.applied}` : r.sync && r.sync.note ? `Trial started. ${r.sync.note}` : 'Trial started'); if (onDone) onDone(r.trial); } catch (e) { apiToast(e); }
   }) });
 }
 async function licenseModal(customer, onDone) {
   const pick = await customerPicker(customer);
-  const fields = [customer ? null : { key: 'customerId', label: 'Customer', type: 'select', options: pick.options, span: true }, { key: 'plan', label: 'Plan', type: 'select', options: [{ value: 'pro', label: 'Pro' }, { value: 'team', label: 'Team' }] }, { key: 'seats', label: 'Seats', type: 'number', min: 1 }, { key: 'startsAt', label: 'Starts', type: 'date' }, { key: 'endsAt', label: 'Ends (blank for open-ended)', type: 'date' }, { key: 'autoRenew', label: 'Auto-renew', type: 'check' }, { key: 'apply', label: 'Apply to the linked Ricorsa account now', type: 'check' }, { key: 'notes', label: 'Notes', type: 'textarea', span: true }].filter(Boolean);
-  openModal(`<h2>${icon('key', 20)}Issue a licence</h2><p class="sub">${customer ? esc(customer.name) + ': ' : ''}a licence key is generated and the plan is granted for the period.</p>${formHtml(fields, { plan: 'pro', seats: 1, startsAt: Date.now(), apply: true, autoRenew: false })}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="liOk">Issue licence</button></div>`, { onMount: ov => $('#liOk').addEventListener('click', async () => {
-    const f = readForm(ov, fields); const body = { customerId: customer ? customer.id : f.customerId, plan: f.plan, seats: f.seats || 1, startsAt: f.startsAt, endsAt: f.endsAt, autoRenew: f.autoRenew, notes: f.notes, apply: f.apply };
-    try { const r = await api('/api/licenses', { body }); closeModal(); invalidate('customers', 'licenses', 'dashboard'); toast(r.sync && r.sync.applied ? `Licence issued and applied: ${r.sync.applied}` : 'Licence issued'); if (onDone) onDone(r.license); } catch (e) { apiToast(e); }
+  const fields = [customer ? null : { key: 'customerId', label: 'Customer', type: 'select', options: pick.options, span: true }, { key: 'plan', label: 'Plan', type: 'select', options: PAID_PLAN_OPTS }, { key: 'billingCycle', label: 'Billing', type: 'select', options: [{ value: '', label: 'From the term (a year or more is annual)' }].concat(CYCLE_OPTS) }, { key: 'seats', label: 'Seats', type: 'number', min: 1 }, { key: 'startsAt', label: 'Starts', type: 'date' }, { key: 'endsAt', label: 'Ends (blank for open-ended)', type: 'date' }, { key: 'autoRenew', label: 'Auto-renew', type: 'check' }, { key: 'apply', label: 'Apply to the linked Ricorsa account now', type: 'check' }, { key: 'notes', label: 'Notes', type: 'textarea', span: true }].filter(Boolean);
+  openModal(`<h2>${icon('key', 20)}Issue a license</h2><p class="sub">${customer ? esc(customer.name) + ': ' : ''}a license key is generated and the plan is granted for the period.</p>${formHtml(fields, { plan: 'essentials', billingCycle: '', seats: 1, startsAt: Date.now(), apply: true, autoRenew: false })}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="liOk">Issue license</button></div>`, { onMount: ov => $('#liOk').addEventListener('click', async () => {
+    const f = readForm(ov, fields); const body = { customerId: customer ? customer.id : f.customerId, plan: f.plan, billingCycle: f.billingCycle || undefined, seats: f.seats || 1, startsAt: f.startsAt, endsAt: f.endsAt, autoRenew: f.autoRenew, notes: f.notes, apply: f.apply };
+    try { const r = await api('/api/licenses', { body }); closeModal(); invalidate('customers', 'licenses', 'dashboard'); toast(r.sync && r.sync.applied ? `License issued and applied: ${r.sync.applied}` : 'License issued'); if (onDone) onDone(r.license); } catch (e) { apiToast(e); }
   }) });
 }
 async function commModal(customer, preset = {}, onDone, contacts = []) {
@@ -650,11 +677,37 @@ async function commModal(customer, preset = {}, onDone, contacts = []) {
   } });
 }
 function grantModal(account, onDone) {
-  const fields = [{ key: 'plan', label: 'Plan', type: 'select', options: [{ value: 'free', label: 'Free (remove any grant)' }, { value: 'pro', label: 'Pro' }, { value: 'team', label: 'Team' }] }, { key: 'kind', label: 'As', type: 'select', options: [{ value: 'license', label: 'Licence' }, { value: 'trial', label: 'Trial' }] }, { key: 'until', label: 'Until (blank for open-ended)', type: 'date', span: true }];
-  openModal(`<h2>${icon('sparkles', 20)}Set the plan on this Ricorsa account</h2><p class="sub">${esc(account.email || account.id)} is on ${PLAN_LABEL[account.plan] || account.plan}${account.subscriptionStatus ? ' (' + esc(account.subscriptionStatus.toLowerCase()) + ')' : ''}. A plan set here applies immediately in the product. Accounts paying through PayPal keep their subscription.</p>${formHtml(fields, { plan: account.plan === 'free' ? 'pro' : account.plan, kind: account.subscriptionStatus === 'TRIAL' ? 'trial' : 'license', until: account.planRenewsAt || '' })}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="grOk">Apply</button></div>`, { onMount: ov => $('#grOk').addEventListener('click', async () => {
+  const fields = [{ key: 'plan', label: 'Plan', type: 'select', options: [{ value: 'free', label: 'Free (remove any grant)' }].concat(PAID_PLAN_OPTS) }, { key: 'kind', label: 'As', type: 'select', options: [{ value: 'license', label: 'License' }, { value: 'trial', label: 'Trial' }] }, { key: 'until', label: 'Until (blank for open-ended)', type: 'date', span: true }];
+  openModal(`<h2>${icon('sparkles', 20)}Set the plan on this Ricorsa account</h2><p class="sub">${esc(account.email || account.id)} is on ${PLAN_LABEL[account.plan] || account.plan}${account.subscriptionStatus ? ' (' + esc(account.subscriptionStatus.toLowerCase()) + ')' : ''}. A plan set here applies immediately in the product. Accounts paying through PayPal keep their subscription.</p>${formHtml(fields, { plan: account.plan === 'free' ? 'essentials' : PLAN_KEY(account.plan), kind: account.subscriptionStatus === 'TRIAL' ? 'trial' : 'license', until: account.planRenewsAt || '' })}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="grOk">Apply</button></div>`, { onMount: ov => $('#grOk').addEventListener('click', async () => {
     const f = readForm(ov, fields);
     try { const r = await api('/api/accounts/' + encodeURIComponent(account.id) + '/plan', { body: { plan: f.plan, kind: f.kind, until: f.until } }); closeModal(); invalidate('accounts', 'customers', 'dashboard'); toast('Plan applied'); if (onDone) onDone(r.account); } catch (e) { apiToast(e); }
   }) });
+}
+
+/** The account's monthly ceilings in words: the plan's, or the raised numbers with who raised them. */
+function allowanceText(a) {
+  if (!a.limits) return '<span class="muted">–</span>';
+  const e = a.limits.effective, p = a.limits.plan, al = a.allowance || {};
+  const parts = [['buildsPerMonth', 'app versions'], ['ideaSetsPerMonth', 'idea sets'], ['questionsPerMonth', 'questions'], ['researchPerMonth', 'Research reports'], ['questionsPerDay', 'questions a day']].filter(([k]) => e[k] > 0 || p[k] > 0).map(([k, l]) => `${e[k].toLocaleString('en-US')} ${l}${e[k] !== p[k] ? ` <span class="muted small">(plan ${p[k].toLocaleString('en-US')})</span>` : ''}`);
+  const raised = Object.keys(al).some(k => !['note', 'setBy', 'setAt'].includes(k));
+  return parts.join(' · ') + (raised ? `<div class="sub">Raised${al.setBy ? ' by ' + esc(al.setBy.split('@')[0]) : ''}${al.setAt ? ' ' + esc(relTime(al.setAt)) : ''}${al.note ? ': ' + esc(al.note) : ''}. Usage past the plan's allowance is what a true-up invoice bills an annual account for.</div>` : '');
+}
+/** Raise or clear an account's monthly allowances above its plan; the product enforces them at once. */
+function allowanceModal(account, onDone) {
+  const e = account.limits ? account.limits.effective : {}, p = account.limits ? account.limits.plan : {};
+  const fields = [
+    { key: 'buildsPerMonth', label: `App versions a month (plan: ${p.buildsPerMonth ?? 0})`, type: 'number', min: 0 },
+    { key: 'ideaSetsPerMonth', label: `Discover idea sets a month (plan: ${p.ideaSetsPerMonth ?? 0})`, type: 'number', min: 0 },
+    { key: 'questionsPerMonth', label: `Questions a month (plan: ${p.questionsPerMonth ?? 0})`, type: 'number', min: 0 },
+    { key: 'researchPerMonth', label: `Research reports a month (plan: ${p.researchPerMonth ?? 0})`, type: 'number', min: 0 },
+    { key: 'questionsPerDay', label: `Questions a day (plan: ${p.questionsPerDay ?? 0})`, type: 'number', min: 0 },
+    { key: 'note', label: 'Why (shown to staff only)', span: true },
+  ];
+  openModal(`<h2>${icon('sliders', 20)}Allowances for ${esc(account.email || account.id)}</h2><p class="sub">Numbers above the ${esc(PLAN_LABEL[account.plan] || account.plan)} plan's own apply in the product immediately. Leave a field at the plan's number to keep it. For an annual account, usage beyond the plan's allowance is billed with a true-up invoice from the dashboard.</p>${formHtml(fields, { buildsPerMonth: e.buildsPerMonth, ideaSetsPerMonth: e.ideaSetsPerMonth, questionsPerMonth: e.questionsPerMonth, researchPerMonth: e.researchPerMonth, questionsPerDay: e.questionsPerDay, note: (account.allowance || {}).note || '' })}<div class="modal-actions"><button type="button" class="btn left" id="alClear">Back to the plan's numbers</button><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="alOk">Apply</button></div>`, { onMount: ov => {
+    const send = async body => { try { const r = await api('/api/accounts/' + encodeURIComponent(account.id) + '/allowance', { body }); closeModal(); invalidate('accounts', 'customers', 'dashboard'); toast('Allowances applied'); if (onDone) onDone(r.account); } catch (e) { apiToast(e); } };
+    $('#alOk').addEventListener('click', () => { const f = readForm(ov, fields); const body = { note: f.note || '' }; for (const k of ['buildsPerMonth', 'ideaSetsPerMonth', 'questionsPerMonth', 'researchPerMonth', 'questionsPerDay']) if (typeof f[k] === 'number') body[k] = f[k]; send(body); });
+    $('#alClear').addEventListener('click', () => send({ clear: true }));
+  } });
 }
 
 // ---------- Customer record ----------
@@ -662,11 +715,11 @@ async function renderCustomer(id, query = {}) {
   const d = await api('/api/customers/' + encodeURIComponent(id));
   const c = d.customer; const tab = query.tab || 'overview';
   const counts = { contacts: d.contacts.length, licenses: d.licenses.length, trials: d.trials.length, invoices: d.invoices.length, communications: d.communications.length, activity: d.activity.length };
-  const tabs = [['overview', 'Overview'], ['account', 'Ricorsa account'], ['contacts', 'Contacts'], ['licenses', 'Licences'], ['trials', 'Trials'], ['invoices', 'Invoices'], ['communications', 'Communication'], ['activity', 'Activity']];
+  const tabs = [['overview', 'Overview'], ['account', 'Ricorsa account'], ['contacts', 'Contacts'], ['licenses', 'Licenses'], ['trials', 'Trials'], ['invoices', 'Invoices'], ['communications', 'Communication'], ['activity', 'Activity']];
   const body = document.createElement('div'); body.className = 'content flush';
   body.innerHTML = `<div class="content" style="padding:0;overflow:auto">
     <div class="rec-head"><div class="title"><h1>${esc(c.name)} ${statusPill(c.status)} ${planPill(c.plan)}</h1><div class="meta">${c.company && c.company !== c.name ? `<span>${esc(c.company)}</span>` : ''}${c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : ''}${c.phone ? `<span>${esc(c.phone)}</span>` : ''}<span>Owner: ${esc(staffName(c.ownerId) || 'unassigned')}</span><span>Added ${esc(fmtDate(c.createdAt))}</span>${c.mrrCents ? `<span>${money(c.mrrCents, c.currency)} a month</span>` : ''}</div></div>
-      <div class="actions">${can('manager') ? `<button type="button" class="btn sm" data-a="email">${icon('mail', 14)}Email</button><button type="button" class="btn sm" data-a="log">${icon('note', 14)}Log</button><button type="button" class="btn sm" data-a="invoice">${icon('invoice', 14)}Invoice</button><button type="button" class="btn sm" data-a="trial">${icon('clock', 14)}Trial</button><button type="button" class="btn sm" data-a="license">${icon('key', 14)}Licence</button><button type="button" class="btn sm" data-a="edit">${icon('edit', 14)}Edit</button>` : ''}<button type="button" class="icon-btn" data-a="more" aria-label="More">${icon('more', 18)}</button></div></div>
+      <div class="actions">${can('manager') ? `<button type="button" class="btn sm" data-a="email">${icon('mail', 14)}Email</button><button type="button" class="btn sm" data-a="log">${icon('note', 14)}Log</button><button type="button" class="btn sm" data-a="invoice">${icon('invoice', 14)}Invoice</button><button type="button" class="btn sm" data-a="trial">${icon('clock', 14)}Trial</button><button type="button" class="btn sm" data-a="license">${icon('key', 14)}License</button><button type="button" class="btn sm" data-a="edit">${icon('edit', 14)}Edit</button>` : ''}<button type="button" class="icon-btn" data-a="more" aria-label="More">${icon('more', 18)}</button></div></div>
     <div class="tabs">${tabs.map(([k, l]) => `<button type="button" data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}${counts[k] ? `<span class="n">${counts[k]}</span>` : ''}</button>`).join('')}</div>
     <div class="panel" data-panel></div></div>`;
   page(c.name, '', body, { crumbs: `<a href="#/customers">Customers</a>${icon('chevronRight', 14)}<span>${esc(c.name)}</span>` });
@@ -696,6 +749,7 @@ async function renderCustomer(id, query = {}) {
       ${[['Name', 'name', c.name], ['Company', 'company', c.company], ['Email', 'email', c.email], ['Phone', 'phone', c.phone], ['Website', 'website', c.website], ['Source', 'source', c.source], ['Kind', 'kind', c.kind]].map(([l, k, v]) => `<dt>${l}</dt><dd ${edit ? `class="editable" data-k="${k}"` : ''}>${v ? esc(v) : '<span class="muted">–</span>'}</dd>`).join('')}
       <dt>Status</dt><dd>${edit ? `<select data-sel="status" class="input" style="height:30px;width:auto">${STATUS_OPTS.map(o => `<option value="${o.value}"${o.value === c.status ? ' selected' : ''}>${o.label}</option>`).join('')}</select>` : statusPill(c.status)}</dd>
       <dt>Plan</dt><dd>${edit ? `<select data-sel="plan" class="input" style="height:30px;width:auto">${PLAN_OPTS.map(o => `<option value="${o.value}"${o.value === c.plan ? ' selected' : ''}>${o.label}</option>`).join('')}</select>` : planPill(c.plan)}</dd>
+      <dt>Billing</dt><dd>${edit ? `<select data-sel="billingCycle" class="input" style="height:30px;width:auto">${CYCLE_OPTS_BLANK.map(o => `<option value="${o.value}"${o.value === (c.billingCycle || '') ? ' selected' : ''}>${o.label}</option>`).join('')}</select>${c.account && c.account.billingCycle ? ` <span class="muted small">follows the Ricorsa subscription (${esc(c.account.billingCycle)})</span>` : ''}` : cyclePill(c.billingCycle)}</dd>
       <dt>Owner</dt><dd>${edit ? `<select data-sel="ownerId" class="input" style="height:30px;width:auto">${ownerOpts().map(o => `<option value="${o.value}"${o.value === (c.ownerId || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>` : esc(staffName(c.ownerId) || '–')}</dd>
       <dt>Monthly value</dt><dd ${edit ? 'class="editable" data-k="mrrCents" data-money="1"' : ''}>${money(c.mrrCents, c.currency)}</dd>
       <dt>Address</dt><dd ${edit ? 'class="editable" data-k="address"' : ''}>${[addr.line1, addr.line2, [addr.city, addr.region, addr.postal].filter(Boolean).join(', '), addr.country].filter(Boolean).map(esc).join('<br>') || '<span class="muted">–</span>'}</dd>
@@ -703,7 +757,7 @@ async function renderCustomer(id, query = {}) {
       <dt>Ricorsa account</dt><dd>${c.ricorsaUserId ? `<a href="#/customers/${esc(c.id)}?tab=account">${esc(d.account ? d.account.email || c.ricorsaUserId : c.ricorsaUserId)}</a>` : '<span class="muted">not linked</span>'}</dd>
       <dt>Last contact</dt><dd>${c.lastContactAt ? esc(fmtDateTime(c.lastContactAt)) : '<span class="muted">never</span>'}</dd></dl></div>
       <div><div class="card"><h3>Notes</h3><div class="sub">Saved as you leave the box.</div><textarea class="input" style="height:180px;padding:9px 11px;resize:vertical" data-notes ${edit ? '' : 'readonly'}>${esc(c.notes || '')}</textarea></div>
-      <div class="card" style="margin-top:16px"><h3>At a glance</h3><dl class="kv" style="margin-top:8px"><dt>Contacts</dt><dd>${d.contacts.length}</dd><dt>Active licence</dt><dd>${c.license ? `${PLAN_LABEL[c.license.plan]}${c.license.endsAt ? ' until ' + esc(fmtDate(c.license.endsAt)) : ' (open-ended)'}` : '<span class="muted">none</span>'}</dd><dt>Trial</dt><dd>${c.trial ? `${PLAN_LABEL[c.trial.plan]}, ends ${esc(fmtDate(c.trial.endsAt))} (${esc(inDays(c.trial.endsAt))})` : '<span class="muted">none</span>'}</dd><dt>Balance due</dt><dd>${c.openCents ? `<b>${money(c.openCents, c.currency)}</b>` : '<span class="muted">nothing outstanding</span>'}</dd><dt>Invoices</dt><dd>${d.invoices.length}</dd></dl></div></div></div>`;
+      <div class="card" style="margin-top:16px"><h3>At a glance</h3><dl class="kv" style="margin-top:8px"><dt>Contacts</dt><dd>${d.contacts.length}</dd><dt>Active license</dt><dd>${c.license ? `${PLAN_LABEL[c.license.plan] || c.license.plan}${c.license.billingCycle ? ', ' + c.license.billingCycle : ''}${c.license.endsAt ? ' until ' + esc(fmtDate(c.license.endsAt)) : ' (open-ended)'}` : '<span class="muted">none</span>'}</dd><dt>Trial</dt><dd>${c.trial ? `${PLAN_LABEL[c.trial.plan]}, ends ${esc(fmtDate(c.trial.endsAt))} (${esc(inDays(c.trial.endsAt))})` : '<span class="muted">none</span>'}</dd><dt>Balance due</dt><dd>${c.openCents ? `<b>${money(c.openCents, c.currency)}</b>` : '<span class="muted">nothing outstanding</span>'}</dd><dt>Invoices</dt><dd>${d.invoices.length}</dd></dl></div></div></div>`;
     if (edit) {
       $$('dd.editable', panel).forEach(dd => dd.addEventListener('dblclick', () => {
         const k = dd.dataset.k;
@@ -725,21 +779,25 @@ async function renderCustomer(id, query = {}) {
   }
   if (tab === 'account') {
     const a = d.account;
-    if (!c.ricorsaUserId) panel.innerHTML = `<div class="card"><h3>No Ricorsa account linked</h3><div class="sub">Link the account this customer uses on ricorsa.com to see their plan, usage and subscription here, and to grant plans, trials and licences.</div>${can('manager') ? `<div class="field" style="max-width:420px"><label>Account email on ricorsa.com</label><div style="display:flex;gap:8px"><input type="email" id="lkEmail" value="${esc(c.email || '')}" placeholder="name@company.com"><button type="button" class="btn primary" id="lkOk">${icon('link', 14)}Link</button></div><span class="hint">Or find them under Ricorsa sign-ups and choose "Add as customer".</span></div>` : ''}</div>`;
+    if (!c.ricorsaUserId) panel.innerHTML = `<div class="card"><h3>No Ricorsa account linked</h3><div class="sub">Link the account this customer uses on ricorsa.com to see their plan, usage and subscription here, and to grant plans, trials and licenses.</div>${can('manager') ? `<div class="field" style="max-width:420px"><label>Account email on ricorsa.com</label><div style="display:flex;gap:8px"><input type="email" id="lkEmail" value="${esc(c.email || '')}" placeholder="name@company.com"><button type="button" class="btn primary" id="lkOk">${icon('link', 14)}Link</button></div><span class="hint">Or find them under Ricorsa sign-ups and choose "Add as customer".</span></div>` : ''}</div>`;
     else if (!a) panel.innerHTML = `<div class="notice">${icon('alert', 16)}<div>The account ${esc(c.ricorsaUserId)} could not be read from the product right now.</div></div>`;
     else {
       const paying = ['ACTIVE', 'APPROVAL_PENDING'].includes(a.subscriptionStatus || '');
       panel.innerHTML = `<div class="two-col"><div class="card"><h3>${esc(a.email || a.id)}</h3><div class="sub">Live from ricorsa.com</div><dl class="kv">
         <dt>Plan</dt><dd>${planPill(a.plan)} ${a.subscriptionStatus ? `<span class="pill ${paying ? 'good' : a.subscriptionStatus === 'TRIAL' ? 'trial' : a.subscriptionStatus === 'LICENSED' ? 'accent' : 'warn'}">${esc(a.subscriptionStatus.toLowerCase())}</span>` : '<span class="muted small">no subscription</span>'}</dd>
         <dt>${a.subscriptionStatus === 'TRIAL' ? 'Trial ends' : a.subscriptionStatus === 'LICENSED' ? 'Licensed until' : 'Renews'}</dt><dd>${a.planRenewsAt ? esc(fmtDate(a.planRenewsAt)) + ` <span class="muted small">(${esc(inDays(a.planRenewsAt))})</span>` : '<span class="muted">–</span>'}</dd>
+        <dt>Billing</dt><dd>${a.billingCycle ? `${cyclePill(a.billingCycle)} <span class="muted small">${money(a.money.mrrCents)} a month${a.billingCycle === 'annual' ? ` (${money(PLAN_PRICE[a.plan] ? PLAN_PRICE[a.plan].annual : a.money.mrrCents * 12)} a year)` : ''}</span>` : '<span class="muted">not paying</span>'}</dd>
+        <dt>Margin, 30 days</dt><dd>${a.money.marginCents == null ? '<span class="muted">–</span>' : `<b class="${a.money.marginCents < 0 ? 'bad' : ''}">${money(a.money.marginCents)}</b> <span class="muted small">after ${money(Math.round(a.money.cost30Micros / 10000))} of model cost</span>`}</dd>
         <dt>PayPal</dt><dd>${a.paypalSubscriptionId ? `<span class="mono">${esc(a.paypalSubscriptionId)}</span>` : '<span class="muted">none</span>'}</dd>
         <dt>Signed up</dt><dd>${esc(fmtDate(a.createdAt))}</dd><dt>Last seen</dt><dd>${esc(fmtDateTime(a.lastSeenAt))} <span class="muted small">(${esc(relTime(a.lastSeenAt))})</span></dd>
         <dt>Today</dt><dd>${a.usage.today.questions} questions · ${a.usage.today.research} research</dd>
-        <dt>This month</dt><dd>${a.usage.month.questions} questions · ${a.usage.month.research} research · ${a.usage.month.searches} searches · about ${money(Math.round(a.usage.month.costMicros / 10000))} in model cost</dd>
+        <dt>This month</dt><dd>${a.usage.month.questions} questions · ${a.usage.month.research} research · ${a.usage.month.builds || 0} app versions · ${a.usage.month.ideas || 0} idea sets · about ${money(Math.round(a.usage.month.costMicros / 10000))} in model cost</dd>
+        <dt>Allowances</dt><dd>${allowanceText(a)}</dd>
         <dt>Library</dt><dd>${a.counts.threads} threads · ${a.counts.builds} builds · ${a.counts.spaces} spaces</dd></dl>
-        ${can('manager') ? `<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button type="button" class="btn sm primary" id="acGrant">${icon('sparkles', 14)}Set plan, trial or licence</button><button type="button" class="btn sm" id="acUnlink">${icon('unlink', 14)}Unlink</button></div>` : ''}</div>
-        <div class="card"><h3>Subscriptions</h3><div class="sub">From PayPal, as the product recorded them</div>${a.subscriptions.length ? `<div class="list">${a.subscriptions.map(s => `<div class="li"><div class="grow"><b>${esc(PLAN_LABEL[s.plan] || s.plan)}</b> <span class="pill ${['ACTIVE', 'APPROVAL_PENDING'].includes(s.status) ? 'good' : 'warn'}">${esc(s.status.toLowerCase())}</span><div class="sub">${esc(s.id)} · started ${esc(fmtDate(s.startedAt))}${s.nextBillingAt ? ' · next ' + esc(fmtDate(s.nextBillingAt)) : ''}${s.cancelledAt ? ' · cancelled ' + esc(fmtDate(s.cancelledAt)) : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">No PayPal subscriptions.</div>'}</div></div>`;
+        ${can('manager') ? `<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button type="button" class="btn sm primary" id="acGrant">${icon('sparkles', 14)}Set plan, trial or license</button><button type="button" class="btn sm" id="acAllow">${icon('sliders', 14)}Raise allowances</button><button type="button" class="btn sm" id="acUnlink">${icon('unlink', 14)}Unlink</button></div>` : ''}</div>
+        <div class="card"><h3>Subscriptions</h3><div class="sub">From PayPal, as the product recorded them</div>${a.subscriptions.length ? `<div class="list">${a.subscriptions.map(s => `<div class="li"><div class="grow"><b>${esc(PLAN_LABEL[s.plan] || s.plan)}</b> ${cyclePill(s.billingCycle)} <span class="pill ${['ACTIVE', 'APPROVAL_PENDING'].includes(s.status) ? 'good' : 'warn'}">${esc(s.status.toLowerCase())}</span><div class="sub">${esc(s.id)} · started ${esc(fmtDate(s.startedAt))}${s.nextBillingAt ? ' · next ' + esc(fmtDate(s.nextBillingAt)) : ''}${s.cancelledAt ? ' · canceled ' + esc(fmtDate(s.cancelledAt)) : ''}</div></div></div>`).join('')}</div>` : '<div class="empty small">No PayPal subscriptions.</div>'}</div></div>`;
       $('#acGrant')?.addEventListener('click', () => grantModal(a, () => reload('account')));
+      $('#acAllow')?.addEventListener('click', () => allowanceModal(a, () => reload('account')));
       $('#acUnlink')?.addEventListener('click', async () => { if (await confirmModal('Unlink this account?', 'The customer record stays; it just stops showing this Ricorsa account.', { okLabel: 'Unlink' })) { try { await api('/api/customers/' + c.id + '/link', { method: 'DELETE' }); invalidate('customers'); reload('account'); } catch (e) { apiToast(e); } } });
     }
     $('#lkOk')?.addEventListener('click', async () => { const email = $('#lkEmail').value.trim(); if (!email) return; try { await api('/api/customers/' + c.id + '/link', { body: { email } }); invalidate('customers', 'accounts'); toast('Linked'); reload('account'); } catch (e) { apiToast(e); } });
@@ -751,7 +809,7 @@ async function renderCustomer(id, query = {}) {
     $$('[data-ctmail]', panel).forEach(b => b.addEventListener('click', () => { const ct = d.contacts.find(x => x.id === b.dataset.ctmail); commModal(c, { kind: 'email', toEmail: ct.email || '', contactId: ct.id }, () => reload('communications'), d.contacts); }));
   }
   if (tab === 'licenses') {
-    panel.innerHTML = `${can('manager') ? `<div style="margin-bottom:12px"><button type="button" class="btn sm primary" id="liAdd">${icon('key', 14)}Issue a licence</button></div>` : ''}${d.licenses.length ? `<div class="list">${d.licenses.map(l => `<div class="li"><div class="grow"><b class="mono">${esc(l.key)}</b> ${planPill(l.plan)} ${pill(l.status, l.status)}<div class="sub">${l.seats} seat${l.seats === 1 ? '' : 's'} · from ${esc(fmtDate(l.startsAt))}${l.endsAt ? ` until ${esc(fmtDate(l.endsAt))} (${esc(inDays(l.endsAt))})` : ' · open-ended'}${l.autoRenew ? ' · auto-renews' : ''}${l.notes ? ' · ' + esc(l.notes) : ''}</div></div>${can('manager') ? `<button type="button" class="icon-btn sm" data-li="${esc(l.id)}" aria-label="Actions">${icon('more', 16)}</button>` : ''}</div>`).join('')}</div>` : '<div class="empty"><b>No licences</b>A licence grants a plan on the linked Ricorsa account for a period.</div>'}`;
+    panel.innerHTML = `${can('manager') ? `<div style="margin-bottom:12px"><button type="button" class="btn sm primary" id="liAdd">${icon('key', 14)}Issue a license</button></div>` : ''}${d.licenses.length ? `<div class="list">${d.licenses.map(l => `<div class="li"><div class="grow"><b class="mono">${esc(l.key)}</b> ${planPill(l.plan)} ${l.billingCycle ? cyclePill(l.billingCycle) : ''} ${pill(l.status, l.status)}<div class="sub">${l.seats} seat${l.seats === 1 ? '' : 's'} · from ${esc(fmtDate(l.startsAt))}${l.endsAt ? ` until ${esc(fmtDate(l.endsAt))} (${esc(inDays(l.endsAt))})` : ' · open-ended'}${l.autoRenew ? ' · auto-renews' : ''}${l.notes ? ' · ' + esc(l.notes) : ''}</div></div>${can('manager') ? `<button type="button" class="icon-btn sm" data-li="${esc(l.id)}" aria-label="Actions">${icon('more', 16)}</button>` : ''}</div>`).join('')}</div>` : '<div class="empty"><b>No licenses</b>A license grants a plan on the linked Ricorsa account for a period.</div>'}`;
     $('#liAdd')?.addEventListener('click', () => licenseModal(c, () => reload('licenses')));
     $$('[data-li]', panel).forEach(b => b.addEventListener('click', () => licenseActions(b, d.licenses.find(x => x.id === b.dataset.li), () => reload('licenses'))));
   }
@@ -780,20 +838,20 @@ function licenseActions(anchor, l, onDone) {
   actionMenu(anchor, [{ key: 'renew', label: 'Renew 12 months', icon: 'refresh' }, { key: 'edit', label: 'Change end date or notes', icon: 'edit' }, l.status === 'active' ? { key: 'suspend', label: 'Suspend', icon: 'pause' } : { key: 'reactivate', label: 'Reactivate', icon: 'play' }, { key: 'copy', label: 'Copy key', icon: 'copy' }, '-', { key: 'revoke', label: 'Revoke', icon: 'x', danger: true }, { key: 'delete', label: 'Delete', icon: 'trash', danger: true, disabled: !can('owner') }], async k => {
     try {
       if (k === 'copy') { await navigator.clipboard.writeText(l.key); toast('Key copied'); return; }
-      if (k === 'edit') { const fields = [{ key: 'endsAt', label: 'Ends (blank for open-ended)', type: 'date' }, { key: 'seats', label: 'Seats', type: 'number', min: 1 }, { key: 'autoRenew', label: 'Auto-renew', type: 'check' }, { key: 'notes', label: 'Notes', type: 'textarea', span: true }]; openModal(`<h2>Edit licence</h2><p class="sub mono">${esc(l.key)}</p>${formHtml(fields, l)}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="leOk">Save</button></div>`, { onMount: ov => $('#leOk').addEventListener('click', async () => { const f = readForm(ov, fields); try { await api('/api/licenses/' + l.id, { method: 'PATCH', body: { endsAt: f.endsAt, seats: f.seats || 1, autoRenew: f.autoRenew, notes: f.notes } }); closeModal(); invalidate('licenses', 'customers'); toast('Saved'); onDone(); } catch (e) { apiToast(e); } }) }); return; }
-      if (k === 'delete') { if (!(await confirmModal('Delete this licence?', 'The record is removed and the linked account loses the plan unless another grant covers it.', { okLabel: 'Delete', danger: true }))) return; await api('/api/licenses/' + l.id, { method: 'DELETE' }); }
-      else if (k === 'revoke') { if (!(await confirmModal('Revoke this licence?', 'The linked Ricorsa account returns to Free unless a trial or another licence covers it.', { okLabel: 'Revoke', danger: true }))) return; await api('/api/licenses/' + l.id, { method: 'PATCH', body: { action: 'revoke' } }); }
+      if (k === 'edit') { const fields = [{ key: 'endsAt', label: 'Ends (blank for open-ended)', type: 'date' }, { key: 'seats', label: 'Seats', type: 'number', min: 1 }, { key: 'autoRenew', label: 'Auto-renew', type: 'check' }, { key: 'notes', label: 'Notes', type: 'textarea', span: true }]; openModal(`<h2>Edit license</h2><p class="sub mono">${esc(l.key)}</p>${formHtml(fields, l)}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="leOk">Save</button></div>`, { onMount: ov => $('#leOk').addEventListener('click', async () => { const f = readForm(ov, fields); try { await api('/api/licenses/' + l.id, { method: 'PATCH', body: { endsAt: f.endsAt, seats: f.seats || 1, autoRenew: f.autoRenew, notes: f.notes } }); closeModal(); invalidate('licenses', 'customers'); toast('Saved'); onDone(); } catch (e) { apiToast(e); } }) }); return; }
+      if (k === 'delete') { if (!(await confirmModal('Delete this license?', 'The record is removed and the linked account loses the plan unless another grant covers it.', { okLabel: 'Delete', danger: true }))) return; await api('/api/licenses/' + l.id, { method: 'DELETE' }); }
+      else if (k === 'revoke') { if (!(await confirmModal('Revoke this license?', 'The linked Ricorsa account returns to Free unless a trial or another license covers it.', { okLabel: 'Revoke', danger: true }))) return; await api('/api/licenses/' + l.id, { method: 'PATCH', body: { action: 'revoke' } }); }
       else { const r = await api('/api/licenses/' + l.id, { method: 'PATCH', body: { action: k, months: 12 } }); if (r.sync && r.sync.applied) toast('Applied: ' + r.sync.applied); }
       invalidate('licenses', 'customers', 'dashboard'); toast('Done'); onDone();
     } catch (e) { apiToast(e); }
   });
 }
 function trialActions(anchor, t, onDone) {
-  actionMenu(anchor, [{ key: 'extend', label: 'Extend by 7 days', icon: 'clock' }, { key: 'extend14', label: 'Extend by 14 days', icon: 'clock' }, { key: 'convert', label: 'Convert to a paid licence', icon: 'key' }, '-', { key: 'cancel', label: 'Cancel trial', icon: 'x', danger: true }, { key: 'delete', label: 'Delete', icon: 'trash', danger: true, disabled: !can('owner') }], async k => {
+  actionMenu(anchor, [{ key: 'extend', label: 'Extend by 7 days', icon: 'clock' }, { key: 'extend14', label: 'Extend by 14 days', icon: 'clock' }, { key: 'convert', label: 'Convert to a paid license', icon: 'key' }, '-', { key: 'cancel', label: 'Cancel trial', icon: 'x', danger: true }, { key: 'delete', label: 'Delete', icon: 'trash', danger: true, disabled: !can('owner') }], async k => {
     try {
       if (k === 'delete') { if (!(await confirmModal('Delete this trial?', 'The record is removed.', { okLabel: 'Delete', danger: true }))) return; await api('/api/trials/' + t.id, { method: 'DELETE' }); }
-      else if (k === 'cancel') { if (!(await confirmModal('Cancel this trial?', 'The linked account returns to Free unless a licence covers it.', { okLabel: 'Cancel trial', danger: true }))) return; await api('/api/trials/' + t.id, { method: 'PATCH', body: { action: 'cancel' } }); }
-      else if (k === 'convert') { const r = await api('/api/trials/' + t.id, { method: 'PATCH', body: { action: 'convert' } }); toast(r.license ? `Converted: licence ${r.license.key}` : 'Converted'); }
+      else if (k === 'cancel') { if (!(await confirmModal('Cancel this trial?', 'The linked account returns to Free unless a license covers it.', { okLabel: 'Cancel trial', danger: true }))) return; await api('/api/trials/' + t.id, { method: 'PATCH', body: { action: 'cancel' } }); }
+      else if (k === 'convert') { const r = await api('/api/trials/' + t.id, { method: 'PATCH', body: { action: 'convert' } }); toast(r.license ? `Converted: license ${r.license.key}` : 'Converted'); }
       else { const r = await api('/api/trials/' + t.id, { method: 'PATCH', body: { action: 'extend', days: k === 'extend14' ? 14 : 7 } }); toast('Extended to ' + fmtDate(r.trial.endsAt)); }
       invalidate('trials', 'customers', 'dashboard'); onDone();
     } catch (e) { apiToast(e); }
@@ -806,13 +864,18 @@ async function renderSignups() {
   const week = Date.now() - 7 * 86400e3, month = Date.now() - 30 * 86400e3;
   const columns = [
     { key: 'email', label: 'Email', primary: true, width: 240, render: r => `<span class="lnk">${esc(r.email || r.id)}</span>${r.name ? `<span class="cell-sub">${esc(r.name)}</span>` : ''}`, text: r => `${r.email || ''} ${r.name || ''}` },
-    { key: 'plan', label: 'Plan', width: 90, render: r => planPill(r.plan), text: r => PLAN_LABEL[r.plan] || r.plan },
+    { key: 'plan', label: 'Plan', width: 110, render: r => planPill(r.plan), text: r => PLAN_LABEL[r.plan] || r.plan },
+    { key: 'billingCycle', label: 'Billing', width: 95, render: r => cyclePill(r.billingCycle), text: r => CYCLE_LABEL[r.billingCycle] || '' },
     { key: 'subscriptionStatus', label: 'Status', width: 120, text: r => r.subscriptionStatus ? r.subscriptionStatus.toLowerCase() : 'none', render: r => r.subscriptionStatus ? `<span class="pill ${['ACTIVE', 'APPROVAL_PENDING'].includes(r.subscriptionStatus) ? 'good' : r.subscriptionStatus === 'TRIAL' ? 'trial' : r.subscriptionStatus === 'LICENSED' ? 'accent' : 'warn'}">${esc(r.subscriptionStatus.toLowerCase())}</span>` : '<span class="muted small">none</span>' },
     { key: 'createdAt', label: 'Signed up', type: 'datetime', width: 150, text: r => `${fmtDate(r.createdAt)} (${relTime(r.createdAt)})` },
     { key: 'lastSeenAt', label: 'Last seen', type: 'datetime', width: 120, text: r => relTime(r.lastSeenAt) },
     { key: 'questionsMonth', label: 'Questions (month)', type: 'number', width: 130 },
     { key: 'researchMonth', label: 'Research (month)', type: 'number', width: 130, hidden: true },
+    { key: 'buildsMonth', label: 'App versions (month)', type: 'number', width: 140, hidden: true, render: r => `${r.buildsMonth}${r.allowance && r.allowance.buildsPerMonth != null ? ` <span class="muted small">of ${r.allowance.buildsPerMonth} raised</span>` : ''}` },
+    { key: 'ideasMonth', label: 'Idea sets (month)', type: 'number', width: 130, hidden: true },
     { key: 'costMonthMicros', label: 'Model cost (month)', type: 'number', width: 140, text: r => money(Math.round(r.costMonthMicros / 10000)), sortValue: r => r.costMonthMicros },
+    { key: 'mrrCents', label: 'Monthly value', type: 'number', width: 110, text: r => r.mrrCents ? money(r.mrrCents) : '', sortValue: r => r.mrrCents, render: r => r.mrrCents ? money(r.mrrCents) : '<span class="muted">–</span>' },
+    { key: 'marginCents', label: 'Margin (30 days)', type: 'number', width: 130, text: r => r.marginCents == null ? '' : money(r.marginCents), sortValue: r => r.marginCents == null ? -1e12 : r.marginCents, render: r => r.marginCents == null ? '<span class="muted">–</span>' : `<span class="money ${r.marginCents < 0 ? 'bad' : ''}">${money(r.marginCents)}</span><span class="cell-sub">${money(Math.round(r.cost30Micros / 10000))} cost</span>` },
     { key: 'planRenewsAt', label: 'Renews or ends', type: 'date', width: 130 },
     { key: 'customerId', label: 'Customer record', width: 150, text: r => r.customerId ? 'yes' : 'no', render: r => r.customerId ? `<a href="#/customers/${esc(r.customerId)}">Open record</a>` : (can('manager') ? `<button type="button" class="btn xs" data-addc="${esc(r.id)}">${icon('plus', 12)}Add as customer</button>` : '<span class="muted">none</span>') },
     { key: 'id', label: 'Account id', width: 200, hidden: true, text: r => r.id },
@@ -820,12 +883,12 @@ async function renderSignups() {
   let grid;
   grid = createGrid({
     key: 'signups', columns, rows: data.accounts, rowId: r => r.id, noun: 'accounts', csvName: 'ricorsa-accounts', defaultSort: { key: 'createdAt', dir: 'desc' }, searchPlaceholder: 'Search by email or name',
-    filters: [{ key: 'when', allLabel: 'All time', options: [{ value: 'week', label: 'This week' }, { value: 'month', label: '30 days' }], test: (r, v) => r.createdAt >= (v === 'week' ? week : month) }, { key: 'paying', options: [{ value: 'paying', label: 'Paying' }, { value: 'granted', label: 'Trial or licence' }, { value: 'free', label: 'Free' }], test: (r, v) => v === 'paying' ? ['ACTIVE', 'APPROVAL_PENDING'].includes(r.subscriptionStatus || '') : v === 'granted' ? ['TRIAL', 'LICENSED'].includes(r.subscriptionStatus || '') : r.plan === 'free' }],
+    filters: [{ key: 'when', allLabel: 'All time', options: [{ value: 'week', label: 'This week' }, { value: 'month', label: '30 days' }], test: (r, v) => r.createdAt >= (v === 'week' ? week : month) }, { key: 'paying', options: [{ value: 'paying', label: 'Paying' }, { value: 'granted', label: 'Trial or license' }, { value: 'free', label: 'Free' }], test: (r, v) => v === 'paying' ? ['ACTIVE', 'APPROVAL_PENDING'].includes(r.subscriptionStatus || '') : v === 'granted' ? ['TRIAL', 'LICENSED'].includes(r.subscriptionStatus || '') : r.plan === 'free' }, { key: 'cycle', options: CYCLE_OPTS, test: (r, v) => r.billingCycle === v }],
     emptyTitle: 'No accounts yet', emptyText: 'People who sign up at ricorsa.com appear here.',
     onRowClick: r => accountSheet(r, grid),
-    actions: r => [{ key: 'view', label: 'View account', icon: 'eye' }, r.customerId ? { key: 'open', label: 'Open customer record', icon: 'users' } : { key: 'add', label: 'Add as customer', icon: 'userPlus', disabled: !can('manager') }, { key: 'grant', label: 'Set plan, trial or licence', icon: 'sparkles', disabled: !can('manager') }],
-    onAction: (r, k) => { if (k === 'view') accountSheet(r, grid); else if (k === 'open') go('#/customers/' + r.customerId); else if (k === 'add') addAsCustomer(r, grid); else if (k === 'grant') grantModal(r, a => { grid.update(r.id, { plan: a.plan, subscriptionStatus: a.subscriptionStatus, planRenewsAt: a.planRenewsAt }); }); },
-    footExtra: rows => `${rows.filter(r => ['ACTIVE', 'APPROVAL_PENDING'].includes(r.subscriptionStatus || '')).length} paying`,
+    actions: r => [{ key: 'view', label: 'View account', icon: 'eye' }, r.customerId ? { key: 'open', label: 'Open customer record', icon: 'users' } : { key: 'add', label: 'Add as customer', icon: 'userPlus', disabled: !can('manager') }, { key: 'grant', label: 'Set plan, trial or license', icon: 'sparkles', disabled: !can('manager') }, { key: 'allow', label: 'Raise allowances', icon: 'sliders', disabled: !can('manager') }],
+    onAction: async (r, k) => { if (k === 'view') accountSheet(r, grid); else if (k === 'open') go('#/customers/' + r.customerId); else if (k === 'add') addAsCustomer(r, grid); else if (k === 'grant') grantModal(r, a => { grid.update(r.id, { plan: a.plan, subscriptionStatus: a.subscriptionStatus, planRenewsAt: a.planRenewsAt }); }); else if (k === 'allow') { try { const a = (await api('/api/accounts/' + encodeURIComponent(r.id))).account; allowanceModal(a, x => grid.update(r.id, { allowance: x.allowance })); } catch (e) { apiToast(e); } } },
+    footExtra: rows => { const paying = rows.filter(r => ['ACTIVE', 'APPROVAL_PENDING'].includes(r.subscriptionStatus || '')); return `${paying.length} paying · ${money(paying.reduce((a, r) => a + (r.mrrCents || 0), 0))} a month · ${paying.filter(r => r.billingCycle === 'annual').length} annual`; },
   });
   page('Ricorsa sign-ups', `${data.total.toLocaleString('en-US')} account${data.total === 1 ? '' : 's'} on ricorsa.com`, grid.el);
   grid.el.addEventListener('click', e => { const b = e.target.closest('[data-addc]'); if (b) { e.stopPropagation(); addAsCustomer(data.accounts.find(a => a.id === b.dataset.addc), grid); } });
@@ -837,14 +900,15 @@ async function accountSheet(r, grid) {
   let a; try { a = (await api('/api/accounts/' + encodeURIComponent(r.id))).account; } catch (e) { apiToast(e); return; }
   const paying = ['ACTIVE', 'APPROVAL_PENDING'].includes(a.subscriptionStatus || '');
   openModal(`<h2>${esc(a.email || a.id)}</h2><p class="sub">${esc(a.name || '')} · signed up ${esc(fmtDate(a.createdAt))} · last seen ${esc(relTime(a.lastSeenAt))}</p>
-    <dl class="kv"><dt>Plan</dt><dd>${planPill(a.plan)} ${a.subscriptionStatus ? `<span class="pill ${paying ? 'good' : 'warn'}">${esc(a.subscriptionStatus.toLowerCase())}</span>` : ''}${a.planRenewsAt ? ` <span class="muted small">until ${esc(fmtDate(a.planRenewsAt))}</span>` : ''}</dd><dt>This month</dt><dd>${a.usage.month.questions} questions · ${a.usage.month.research} research · about ${money(Math.round(a.usage.month.costMicros / 10000))} in model cost</dd><dt>Library</dt><dd>${a.counts.threads} threads · ${a.counts.builds} builds · ${a.counts.spaces} spaces</dd><dt>PayPal</dt><dd>${a.paypalSubscriptionId ? `<span class="mono">${esc(a.paypalSubscriptionId)}</span>` : '<span class="muted">none</span>'}</dd></dl>
-    <div class="modal-actions">${can('manager') ? `<button type="button" class="btn left" id="shGrant">${icon('sparkles', 14)}Set plan</button>` : ''}${r.customerId ? `<a class="btn" href="#/customers/${esc(r.customerId)}">Open customer record</a>` : (can('manager') ? `<button type="button" class="btn primary" id="shAdd">${icon('userPlus', 14)}Add as customer</button>` : '')}<button type="button" class="btn" data-close>Close</button></div>`, { onMount: () => {
+    <dl class="kv"><dt>Plan</dt><dd>${planPill(a.plan)} ${a.billingCycle ? cyclePill(a.billingCycle) : ''} ${a.subscriptionStatus ? `<span class="pill ${paying ? 'good' : 'warn'}">${esc(a.subscriptionStatus.toLowerCase())}</span>` : ''}${a.planRenewsAt ? ` <span class="muted small">until ${esc(fmtDate(a.planRenewsAt))}</span>` : ''}</dd>${paying ? `<dt>Worth</dt><dd>${money(a.money.mrrCents)} a month${a.money.marginCents == null ? '' : ` · <b class="${a.money.marginCents < 0 ? 'bad' : ''}">${money(a.money.marginCents)}</b> margin after 30 days of model cost`}</dd>` : ''}<dt>This month</dt><dd>${a.usage.month.questions} questions · ${a.usage.month.research} research · ${a.usage.month.builds || 0} app versions · ${a.usage.month.ideas || 0} idea sets · about ${money(Math.round(a.usage.month.costMicros / 10000))} in model cost</dd><dt>Allowances</dt><dd>${allowanceText(a)}</dd><dt>Library</dt><dd>${a.counts.threads} threads · ${a.counts.builds} builds · ${a.counts.spaces} spaces</dd><dt>PayPal</dt><dd>${a.paypalSubscriptionId ? `<span class="mono">${esc(a.paypalSubscriptionId)}</span>` : '<span class="muted">none</span>'}</dd></dl>
+    <div class="modal-actions">${can('manager') ? `<button type="button" class="btn left" id="shGrant">${icon('sparkles', 14)}Set plan</button><button type="button" class="btn left" id="shAllow">${icon('sliders', 14)}Allowances</button>` : ''}${r.customerId ? `<a class="btn" href="#/customers/${esc(r.customerId)}">Open customer record</a>` : (can('manager') ? `<button type="button" class="btn primary" id="shAdd">${icon('userPlus', 14)}Add as customer</button>` : '')}<button type="button" class="btn" data-close>Close</button></div>`, { onMount: () => {
     $('#shGrant')?.addEventListener('click', () => grantModal(a, x => grid.update(r.id, { plan: x.plan, subscriptionStatus: x.subscriptionStatus, planRenewsAt: x.planRenewsAt })));
+    $('#shAllow')?.addEventListener('click', () => allowanceModal(a, x => grid.update(r.id, { allowance: x.allowance })));
     $('#shAdd')?.addEventListener('click', () => { closeModal(); addAsCustomer(r, grid); });
   } });
 }
 
-// ---------- Licences and trials ----------
+// ---------- Licenses and trials ----------
 const custCell = r => r.customer ? `<a href="#/customers/${esc(r.customerId)}">${esc(r.customer.name)}</a>${r.customer.company && r.customer.company !== r.customer.name ? `<span class="cell-sub">${esc(r.customer.company)}</span>` : ''}` : '<span class="muted">–</span>';
 const custText = r => r.customer ? `${r.customer.name} ${r.customer.company || ''} ${r.customer.email || ''}` : '';
 async function renderLicenses() {
@@ -852,7 +916,8 @@ async function renderLicenses() {
   const columns = [
     { key: 'key', label: 'Key', primary: true, width: 230, render: r => `<span class="lnk mono">${esc(r.key)}</span>` },
     { key: 'customer', label: 'Customer', width: 220, render: custCell, text: custText },
-    { key: 'plan', label: 'Plan', width: 80, render: r => planPill(r.plan), text: r => PLAN_LABEL[r.plan] },
+    { key: 'plan', label: 'Plan', width: 110, render: r => planPill(r.plan), text: r => PLAN_LABEL[r.plan] || r.plan },
+    { key: 'billingCycle', label: 'Billing', width: 95, render: r => cyclePill(r.billingCycle), text: r => CYCLE_LABEL[r.billingCycle] || '' },
     { key: 'status', label: 'Status', width: 110, render: r => pill(r.endsAt && r.endsAt < Date.now() && r.status === 'active' ? 'lapsed' : r.status, r.endsAt && r.endsAt < Date.now() && r.status === 'active' ? 'expired' : r.status), text: r => r.status },
     { key: 'seats', label: 'Seats', type: 'number', width: 70 },
     { key: 'startsAt', label: 'Starts', type: 'date', width: 110 }, { key: 'endsAt', label: 'Ends', type: 'date', width: 130, text: r => r.endsAt ? `${fmtDate(r.endsAt)} (${inDays(r.endsAt)})` : 'open-ended' },
@@ -861,15 +926,15 @@ async function renderLicenses() {
   ];
   let grid;
   grid = createGrid({
-    key: 'licenses', columns, rows: data.licenses, rowId: r => r.id, noun: 'licences', csvName: 'licences', defaultSort: { key: 'createdAt', dir: 'desc' }, searchPlaceholder: 'Search keys and customers',
-    filters: [{ key: 'status', options: [{ value: 'active', label: 'Active' }, { value: 'ending', label: 'Ending in 30 days' }, { value: 'suspended', label: 'Suspended' }, { value: 'revoked', label: 'Revoked or expired' }], test: (r, v) => v === 'ending' ? r.status === 'active' && r.endsAt && r.endsAt - Date.now() < 30 * 86400e3 : v === 'revoked' ? r.status === 'revoked' || r.status === 'expired' || (r.endsAt && r.endsAt < Date.now()) : r.status === v }],
-    addLabel: can('manager') ? 'Issue licence' : null, onAdd: () => licenseModal(null, () => renderLicenses()),
-    emptyTitle: 'No licences yet', emptyText: 'Issue one from a customer record or here.',
+    key: 'licenses', columns, rows: data.licenses, rowId: r => r.id, noun: 'licenses', csvName: 'licenses', defaultSort: { key: 'createdAt', dir: 'desc' }, searchPlaceholder: 'Search keys and customers',
+    filters: [{ key: 'status', options: [{ value: 'active', label: 'Active' }, { value: 'ending', label: 'Ending in 30 days' }, { value: 'suspended', label: 'Suspended' }, { value: 'revoked', label: 'Revoked or expired' }], test: (r, v) => v === 'ending' ? r.status === 'active' && r.endsAt && r.endsAt - Date.now() < 30 * 86400e3 : v === 'revoked' ? r.status === 'revoked' || r.status === 'expired' || (r.endsAt && r.endsAt < Date.now()) : r.status === v }, { key: 'cycle', options: CYCLE_OPTS, test: (r, v) => r.billingCycle === v }],
+    addLabel: can('manager') ? 'Issue license' : null, onAdd: () => licenseModal(null, () => renderLicenses()),
+    emptyTitle: 'No licenses yet', emptyText: 'Issue one from a customer record or here.',
     onRowClick: r => { if (r.customerId) go('#/customers/' + r.customerId + '?tab=licenses'); },
     actions: r => can('manager') ? [{ key: 'acts', label: 'Renew, suspend, revoke…', icon: 'more' }] : [],
     onAction: (r, k) => { if (k === 'acts') licenseActions($(`tr[data-id="${CSS.escape(r.id)}"] [data-more]`, grid.el) || document.body, r, () => renderLicenses()); },
   });
-  page('Licences', `${data.licenses.filter(l => l.status === 'active').length} active`, grid.el);
+  page('Licenses', `${data.licenses.filter(l => l.status === 'active').length} active`, grid.el);
 }
 async function renderTrials() {
   const data = await load('trials', '/api/trials', true);
@@ -1042,7 +1107,7 @@ async function renderStaff() {
   const body = contentEl(`${pending.length ? `<div class="notice" style="margin-bottom:14px">${icon('alert', 16)}<div><b>${pending.length} access request${pending.length === 1 ? '' : 's'}</b> waiting for an owner.</div></div>` : ''}
     <div class="card"><div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><h3 style="margin:0">People</h3><span class="muted small">${rows.filter(s => s.status === 'active').length} active</span><span style="flex:1"></span>${can('owner') ? `<button type="button" class="btn sm primary" id="stInvite">${icon('userPlus', 14)}Invite</button>` : ''}</div>
     <div class="list">${rows.map(s => `<div class="li"><span class="avatar-sm" style="background:${colorFor(s.email)};color:#fff">${s.picture ? `<img src="${esc(s.picture)}" alt="" style="width:100%;height:100%;border-radius:50%;object-fit:cover">` : esc(initials(s.name || s.email))}</span><div class="grow"><b>${esc(s.name || s.email)}</b> ${pill(s.role, s.role)} ${s.status !== 'active' ? pill(s.status, s.status) : ''}${s.id === state.me.id ? ' <span class="muted small">(you)</span>' : ''}<div class="sub">${esc(s.email)}${s.lastSeenAt ? ' · last seen ' + esc(relTime(s.lastSeenAt)) : s.invitedAt ? ' · invited ' + esc(relTime(s.invitedAt)) : ''}</div></div>${can('owner') && s.id !== state.me.id ? `${s.status === 'requested' ? `<button type="button" class="btn xs primary" data-approve="${esc(s.id)}">Approve</button>` : ''}<button type="button" class="icon-btn sm" data-st="${esc(s.id)}" aria-label="Actions">${icon('more', 16)}</button>` : ''}</div>`).join('')}</div></div>
-    <div class="card" style="margin-top:16px"><h3>Roles</h3><dl class="kv" style="margin-top:8px"><dt>Owner</dt><dd>Everything: staff, settings, deleting records, voiding invoices. Owners named in the console configuration cannot be demoted.</dd><dt>Manager</dt><dd>Customers, contacts, licences, trials, communication, invoices and payments, and plan grants on Ricorsa accounts.</dd><dt>Viewer</dt><dd>Sees everything, changes nothing.</dd></dl></div>`);
+    <div class="card" style="margin-top:16px"><h3>Roles</h3><dl class="kv" style="margin-top:8px"><dt>Owner</dt><dd>Everything: staff, settings, deleting records, voiding invoices. Owners named in the console configuration cannot be demoted.</dd><dt>Manager</dt><dd>Customers, contacts, licenses, trials, communication, invoices and payments, and plan grants on Ricorsa accounts.</dd><dt>Viewer</dt><dd>Sees everything, changes nothing.</dd></dl></div>`);
   page('Staff', 'Who can use the console', body);
   $('#stInvite')?.addEventListener('click', () => inviteModal(() => renderStaff()));
   $$('[data-approve]', body).forEach(b => b.addEventListener('click', async () => { try { await api('/api/staff/' + b.dataset.approve, { method: 'PATCH', body: { status: 'active' } }); toast('Approved'); renderStaff(); } catch (e) { apiToast(e); } }));
@@ -1063,7 +1128,9 @@ async function renderSettings() {
   const company = [{ key: 'name', label: 'Company name' }, { key: 'legalName', label: 'Legal name' }, { key: 'email', label: 'Email', type: 'email' }, { key: 'phone', label: 'Phone', type: 'tel' }, { key: 'website', label: 'Website', type: 'url' }, { key: 'taxId', label: 'Tax ID' }, { key: 'line1', label: 'Address line 1', span: true }, { key: 'city', label: 'City' }, { key: 'region', label: 'State or region' }, { key: 'postal', label: 'Postal code' }, { key: 'country', label: 'Country' }];
   const invoice = [{ key: 'prefix', label: 'Number prefix' }, { key: 'nextNumber', label: 'Next number', type: 'number', min: 1 }, { key: 'dueDays', label: 'Due after (days)', type: 'number', min: 0 }, { key: 'taxRate', label: 'Default tax rate (%)', type: 'number', min: 0, max: 100 }, { key: 'currency', label: 'Currency' }, { key: 'terms', label: 'Default terms', type: 'textarea', span: true }, { key: 'footer', label: 'PDF footer', span: true }];
   const email = [{ key: 'from', label: 'From (name <address>)', span: true, hint: 'The address must be on a domain verified with the email service.' }, { key: 'replyTo', label: 'Reply-to', span: true }, { key: 'signature', label: 'Signature', type: 'textarea', span: true }];
-  const trial = [{ key: 'days', label: 'Default length (days)', type: 'number', min: 1, max: 365 }, { key: 'plan', label: 'Default plan', type: 'select', options: [{ value: 'pro', label: 'Pro' }, { value: 'team', label: 'Team' }] }];
+  const trial = [{ key: 'days', label: 'Default length (days)', type: 'number', min: 1, max: 365 }, { key: 'plan', label: 'Default plan', type: 'select', options: PAID_PLAN_OPTS }];
+  const trueup = [{ key: 'build', label: 'Per app version ($)', type: 'number', min: 0, step: 0.01 }, { key: 'ideaSet', label: 'Per Discover idea set ($)', type: 'number', min: 0, step: 0.01 }, { key: 'question', label: 'Per question ($)', type: 'number', min: 0, step: 0.01 }, { key: 'research', label: 'Per Research report ($)', type: 'number', min: 0, step: 0.01 }, { key: 'dueDays', label: 'Due after (days)', type: 'number', min: 0 }];
+  const tu = s.trueup || {};
   const a = s.company.address || {};
   const body = contentEl(`<div class="settings-grid">
     <div class="card"><h3>Integrations</h3><div class="sub">Secrets are set on the Cloudflare Worker, not here.</div><div class="list">
@@ -1074,6 +1141,7 @@ async function renderSettings() {
     <div class="card"><h3>Invoices</h3><div class="sub">Numbering and defaults for new invoices.</div>${formHtml(invoice, s.invoice)}${ro ? '' : `<div class="modal-actions"><button type="button" class="btn primary" data-save="invoice">Save</button></div>`}</div>
     <div class="card"><h3>Email</h3><div class="sub">How messages from the console are signed.</div>${formHtml(email, s.email)}${ro ? '' : `<div class="modal-actions"><button type="button" class="btn primary" data-save="email">Save</button></div>`}</div>
     <div class="card"><h3>Trials</h3><div class="sub">Defaults when starting a trial.</div>${formHtml(trial, s.trial)}${ro ? '' : `<div class="modal-actions"><button type="button" class="btn primary" data-save="trial">Save</button></div>`}</div>
+    <div class="card"><h3>True-ups</h3><div class="sub">Unit prices for what an annual account used beyond its plan's monthly allowance. A price of zero leaves that unit off the invoice.</div>${formHtml(trueup, { build: (tu.buildCents || 0) / 100, ideaSet: (tu.ideaSetCents || 0) / 100, question: (tu.questionCents || 0) / 100, research: (tu.researchCents || 0) / 100, dueDays: tu.dueDays ?? 14 })}${ro ? '' : `<div class="modal-actions"><button type="button" class="btn primary" data-save="trueup">Save</button></div>`}</div>
     <div class="card"><h3>This console</h3><dl class="kv" style="margin-top:8px"><dt>You</dt><dd>${esc(state.me.email)} · ${esc(state.me.role)}</dd><dt>Address</dt><dd>${esc(location.origin)}</dd><dt>Product</dt><dd><a href="${esc(state.app.productUrl)}" target="_blank" rel="noopener">${esc(state.app.productUrl)}</a></dd><dt>Layouts</dt><dd>Grid columns, widths, sorts and filters are remembered for you on every device. <button type="button" class="btn xs" id="resetLayouts">Reset all grid layouts</button></dd></dl></div>
   </div>`);
   page('Settings', ro ? 'Read only: owners can change these' : '', body);
@@ -1084,6 +1152,7 @@ async function renderSettings() {
     else if (key === 'invoice') { const f = readForm(card, invoice); patch = { prefix: f.prefix, nextNumber: f.nextNumber || 1, dueDays: f.dueDays ?? 14, taxRate: f.taxRate ?? 0, currency: (f.currency || 'USD').toUpperCase(), terms: f.terms, footer: f.footer }; }
     else if (key === 'email') { const f = readForm(card, email); patch = { from: f.from, replyTo: f.replyTo, signature: f.signature }; }
     else if (key === 'trial') { const f = readForm(card, trial); patch = { days: f.days || 14, plan: f.plan }; }
+    else if (key === 'trueup') { const f = readForm(card, trueup); const c = v => Math.round((Number(v) || 0) * 100); patch = { buildCents: c(f.build), ideaSetCents: c(f.ideaSet), questionCents: c(f.question), researchCents: c(f.research), dueDays: f.dueDays ?? 14 }; }
     b.disabled = true;
     try { const r = await api('/api/settings', { method: 'PATCH', body: { [key]: patch } }); state.settings = r.settings; toast('Saved'); } catch (e) { apiToast(e); }
     b.disabled = false;
@@ -1103,7 +1172,7 @@ async function renderActivity() {
   ];
   const grid = createGrid({
     key: 'activity', columns, rows: data.activity, rowId: r => r.id, noun: 'entries', csvName: 'activity', defaultSort: { key: 'at', dir: 'desc' }, searchPlaceholder: 'Search the log',
-    filters: [{ key: 'type', options: [{ value: 'customer', label: 'Customers' }, { value: 'invoice', label: 'Invoices' }, { value: 'license', label: 'Licences' }, { value: 'trial', label: 'Trials' }, { value: 'communication', label: 'Communication' }, { value: 'staff', label: 'Staff' }, { value: 'ricorsa', label: 'Ricorsa' }], test: (r, v) => r.entityType === v }],
+    filters: [{ key: 'type', options: [{ value: 'customer', label: 'Customers' }, { value: 'invoice', label: 'Invoices' }, { value: 'license', label: 'Licenses' }, { value: 'trial', label: 'Trials' }, { value: 'communication', label: 'Communication' }, { value: 'staff', label: 'Staff' }, { value: 'ricorsa', label: 'Ricorsa' }], test: (r, v) => r.entityType === v }],
     emptyTitle: 'Nothing recorded yet',
     onRowClick: r => { if (r.customerId) go('#/customers/' + r.customerId); else if (r.entityType === 'invoice' && r.entityId) go('#/invoices/' + r.entityId); },
   });

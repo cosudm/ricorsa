@@ -4,12 +4,13 @@ import { currentStaff } from '@/lib/session';
 import { handle, json, readJson } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { listCustomers } from '@/lib/customers';
-import { parse, zCustomerStatus, zId, zOptText, zPlan, zTags } from '@/lib/validate';
+import { parse, zCustomerStatus, zId, zOptText, zPlan, zTags, zBillingCycle } from '@/lib/validate';
+import { normalizePlanKey } from '@/lib/plans';
 import { logActivity } from '@/lib/activity';
 
 export const dynamic = 'force-dynamic';
 
-const Bulk = z.object({ ids: z.array(zId).min(1).max(1000), set: z.object({ status: zCustomerStatus.optional(), plan: zPlan.optional(), ownerId: zOptText(60), source: zOptText(80), addTags: zTags.optional(), removeTags: zTags.optional() }) });
+const Bulk = z.object({ ids: z.array(zId).min(1).max(1000), set: z.object({ status: zCustomerStatus.optional(), plan: zPlan.optional(), billingCycle: zBillingCycle.nullable().optional(), ownerId: zOptText(60), source: zOptText(80), addTags: zTags.optional(), removeTags: zTags.optional() }) });
 
 /** PATCH /api/customers/bulk — one change on many rows: status, plan, owner, source, tags added or removed. */
 export const PATCH = handle(async (req: Request) => {
@@ -20,7 +21,8 @@ export const PATCH = handle(async (req: Request) => {
   for (const r of rows) {
     const set: Record<string, unknown> = { updatedAt: new Date() };
     if (b.set.status) set.status = b.set.status;
-    if (b.set.plan) set.plan = b.set.plan;
+    if (b.set.plan) set.plan = b.set.plan === 'custom' ? 'custom' : normalizePlanKey(b.set.plan);
+    if (b.set.billingCycle !== undefined) set.billingCycle = b.set.billingCycle;
     if (b.set.ownerId !== undefined) set.ownerId = b.set.ownerId;
     if (b.set.source !== undefined) set.source = b.set.source;
     if (b.set.addTags || b.set.removeTags) { let tags = [...(r.tags || [])]; for (const t of b.set.addTags || []) if (!tags.includes(t)) tags.push(t); if (b.set.removeTags) tags = tags.filter(t => !b.set.removeTags!.includes(t)); set.tags = tags; }

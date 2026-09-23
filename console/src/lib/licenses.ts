@@ -1,4 +1,4 @@
-/** Licence keys: RIC-XXXX-XXXX-XXXX-XXXX from an unambiguous alphabet, with a check character at the end. */
+/** License keys: RIC-XXXX-XXXX-XXXX-XXXX from an unambiguous alphabet, with a check character at the end. */
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export function newLicenseKey(): string {
   const bytes = new Uint8Array(15); crypto.getRandomValues(bytes);
