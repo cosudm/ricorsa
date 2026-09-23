@@ -8,7 +8,7 @@ export type Cycle = 'monthly' | 'annual';
 export type PlanCard = {
   key: string; name: string; blurb: string; features: string[]; hot: boolean;
   priceUsd: number; priceUsdYear: number | null;
-  /** The annual price spread over twelve months, to the cent. */
+  /** The annual price spread over twelve months, in whole dollars (rounded up). */
   monthlyEquivalent: number | null;
   /** What twelve monthly payments would cost beyond the annual price. */
   saving: number;
@@ -61,11 +61,10 @@ export function PricingPlans({ plans, signedIn, current, currentCycle, currentNa
           const switching = onThisPlan && heldCycle === 'monthly' && annual;
           const replaces = hasSubscription && current !== 'free' ? `${currentName} (${heldCycle})` : null;
           const shown = annual && p.monthlyEquivalent != null ? p.monthlyEquivalent : p.priceUsd;
-          const whole = Math.floor(shown); const cents = Math.round((shown - whole) * 100);
           return (
             <div key={p.key} className={'plan' + (p.hot ? ' hot' : '')}>
               <div className="name">{p.name}{p.hot && <span className="tag">Most popular</span>}{onThisPlan && <span className="tag current">Current{currentCycle ? `, ${currentCycle}` : ''}</span>}</div>
-              <div className="price">${whole}{cents > 0 && <span className="cents">.{String(cents).padStart(2, '0')}</span>}{p.priceMarker && <sup className="mark" title={p.licensing}>{p.priceMarker}</sup>}<small>/ month{annual ? '*' : ''}</small></div>
+              <div className="price">${shown}{p.priceMarker && <sup className="mark" title={p.licensing}>{p.priceMarker}</sup>}<small>/ month{annual ? '*' : ''}</small></div>
               {price != null && (
                 <div className="trial">{trialDays > 0 ? `${trialDays}-day free trial, then ${money(price)} ${per}` : `${money(price)} ${per}, billed from today`}</div>
               )}

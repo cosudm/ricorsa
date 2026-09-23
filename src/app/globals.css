@@ -120,7 +120,6 @@ button { font: inherit; cursor: pointer; }
 .plan .price { font-size: 38px; font-weight: 600; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
 .plan .price small { font-size: 14px; font-weight: 500; color: var(--ink-3); letter-spacing: 0; margin-left: 4px; }
 .plan .price sup.mark { font-size: 15px; font-weight: 600; color: var(--accent); letter-spacing: 0; margin-left: 3px; vertical-align: top; line-height: 1; }
-.plan .price .cents { font-size: 20px; font-weight: 600; letter-spacing: -.01em; color: var(--ink-2); }
 .plan .tag.current { background: #E6F3EA; color: var(--good); }
 /* billing cycle toggle: annual first, monthly beside it */
 .cycle-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 18px; }

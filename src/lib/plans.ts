@@ -175,9 +175,12 @@ export function priceFor(plan: Plan, cycle: BillingCycle): number | null {
   if (cycle === 'annual') return plan.priceUsdYear ?? null;
   return plan.priceUsd || null;
 }
-/** What a year costs per month on the annual plan, to the cent, for the pricing page's monthly-equivalent figure. */
+/**
+ * What a year costs per month on the annual plan, in whole dollars, for the pricing page's monthly-equivalent figure.
+ * Rounded up, so the card never shows less than what is paid; the footnote carries the exact yearly amount.
+ */
 export function monthlyEquivalent(plan: Plan): number | null {
-  return plan.priceUsdYear ? Math.round((plan.priceUsdYear / 12) * 100) / 100 : null;
+  return plan.priceUsdYear ? Math.ceil(plan.priceUsdYear / 12) : null;
 }
 /** What a year of monthly payments would cost beyond the annual price: the "two months free". */
 export function annualSaving(plan: Plan): number {
