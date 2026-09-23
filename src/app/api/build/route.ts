@@ -5,14 +5,14 @@ import { fail, readJson, HttpError, uid, truncate } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import type { BuildMessage } from '@/lib/db/schema';
 import { loadGraph } from '@/lib/graph';
-import { statusGrants, planFor } from '@/lib/plans';
+import { planFor } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
 import { buildSystem, buildMessages, parseBuild, applyEdits, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, repairRequestFor, type BuildSpec, type BuildCheck } from '@/lib/build';
 import { auditApp } from '@/lib/build-audit';
 import { withKit, stripKit } from '@/lib/app-kit';
 import { runApp, runFindings, seriousFindings, browserRunAvailable } from '@/lib/build-run';
 import { describeProviderError } from '@/lib/llm';
-import { recordUsage } from '@/lib/usage';
+import { recordUsage, assertBuildQuota } from '@/lib/usage';
 import { estimateCostMicros } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
@@ -53,8 +53,8 @@ type Review = { findings: string[]; serious: number; ran: boolean; check: BuildC
 export async function POST(req: Request) {
   let user; try { user = await currentUser(); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Sign-in check failed'); }
   const plan = planFor(user.plan);
-  if (plan.caps.discover !== 'full') return fail(402, 'Building from Discover is part of the Professional and Enterprise plans.', 'upgrade_required');
-  if (!user.admin && !statusGrants(user.subscriptionStatus)) return fail(402, 'Your subscription is not active.', 'subscription_inactive');
+  // The plan must include the studio, the subscription must be current, and this month's ceiling on versions must not be reached.
+  try { await assertBuildQuota(user); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Could not start the build'); }
   const parsed = Body.safeParse(await readJson(req).catch(() => ({})));
   if (!parsed.success) return fail(400, 'Invalid request', 'invalid_request');
   const b = parsed.data;
@@ -277,7 +277,7 @@ export async function POST(req: Request) {
         const check: BuildCheck = { ...rev.check, left: rev.findings.length, rounds };
         console.log('[build] checked', JSON.stringify({ ...check, model: modelUsed, usage }));
         send('phase', { text: 'final', check, left: rev.findings.slice(0, 8) });
-        await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
+        await recordUsage(user.id, { questions: 1, builds: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
         const html = stampHtml(p.html, { buildId: id, ideaId, graphHash, lineage });
         const summary = p.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean)[0] || spec.what;
         const next = p.next.length ? p.next : nextStepsFallback(spec.kind);

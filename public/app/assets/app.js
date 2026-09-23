@@ -1579,6 +1579,7 @@ async function fetchDiscover(cat, refresh, anchorId) {
   try {
     const r = await api('/api/discover', { body: { category: cat, refresh, ...(anchorId ? { anchor: anchorId } : {}) } });
     state.discoverGen[key] = { items: r.items, personal: !!r.personal, graphHash: r.graphHash || null, anchor: r.anchor || null };
+    if (r.limited) toast(r.limited, 'bad');
   } catch (err) { apiToast(err, 'Could not generate ideas right now'); }
   const rq = state.route && state.route.query ? state.route.query.anchor : null;
   const routeAnchor = rq ? findGraphNode(rq) : null;

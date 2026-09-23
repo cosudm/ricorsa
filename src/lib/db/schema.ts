@@ -19,6 +19,8 @@ export const users = sqliteTable('users', {
   paypalSubscriptionId: text('paypal_subscription_id'),
   subscriptionStatus: text('subscription_status'), // ACTIVE | SUSPENDED | CANCELLED | EXPIRED | APPROVAL_PENDING
   planRenewsAt: ts('plan_renews_at'),
+  /** How the current subscription bills: monthly or annual (null for the free state and for console grants that did not say). */
+  billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull().$defaultFn(() => ({})).default(sql`'{}'`),
   createdAt: tsNow('created_at'),
   lastSeenAt: tsNow('last_seen_at'),
@@ -135,6 +137,10 @@ export const usage = sqliteTable('usage', {
   tokensOut: integer('tokens_out').notNull().default(0),
   searches: integer('searches').notNull().default(0),
   costMicros: integer('cost_micros').notNull().default(0), // estimated cost in millionths of a dollar
+  /** App versions the Build studio wrote (a question of the studio that only got a reply does not count). */
+  builds: integer('builds').notNull().default(0),
+  /** Discover idea sets generated from the graph (a cached set served again does not count). */
+  ideas: integer('ideas').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.userId, t.period] })]);
 
 /** Discover picks are generated once per category per day (per person when drawn from their graph). */

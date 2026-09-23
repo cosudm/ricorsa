@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { and, eq, ne, desc } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
-import { handle, json, readJson, fail, truncate, plain } from '@/lib/http';
+import { handle, json, readJson, fail, truncate, plain, HttpError } from '@/lib/http';
+import { assertIdeaQuota, recordUsage } from '@/lib/usage';
 import { db, schema } from '@/lib/db';
 import { quickJson } from '@/lib/llm';
 import { loadGraph, topNodes } from '@/lib/graph';
@@ -69,6 +70,11 @@ export const POST = handle(async (req: Request) => {
   const key = `${user.id}|${cat}${anchorNode ? '|' + anchorNode.id : ''}`;
   const cached = await db().select().from(schema.discoverCache).where(and(eq(schema.discoverCache.category, key), eq(schema.discoverCache.day, day))).limit(1);
   if (cached[0] && !b.data.refresh) return json({ items: cached[0].items, personal: true, graphHash: hash, anchor: anchorNode ? { id: anchorNode.id, label: anchorNode.label, type: anchorNode.type } : null });
+  // A new set is the expensive act: it counts against the plan's monthly idea sets. At the ceiling, the last set (if any) is served with a note.
+  try { await assertIdeaQuota(user); } catch (e) {
+    if (e instanceof HttpError && cached[0]) return json({ items: cached[0].items, personal: true, graphHash: hash, anchor: anchorNode ? { id: anchorNode.id, label: anchorNode.label, type: anchorNode.type } : null, limited: e.message });
+    throw e;
+  }
 
   const [threads, built] = await Promise.all([
     db().select({ title: schema.threads.title, updatedAt: schema.threads.updatedAt }).from(schema.threads).where(eq(schema.threads.userId, user.id)).orderBy(desc(schema.threads.updatedAt)).limit(12),
@@ -101,6 +107,7 @@ ${brief}${anchorLine}${avoid.length ? `\n\nShown before (propose different ideas
   }));
   if (items.length < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, fallback: true, graphHash: hash });
   const stamped = await stamp(items, user.id, graph, cat, false);
+  await recordUsage(user.id, { ideas: 1, tokensIn: 0, tokensOut: 0 });
   await db().insert(schema.discoverCache).values({ category: key, day, items: stamped })
     .onConflictDoUpdate({ target: [schema.discoverCache.category, schema.discoverCache.day], set: { items: stamped } });
   // Older sets for this category (earlier graph states) are no longer needed.

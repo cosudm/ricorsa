@@ -25,7 +25,7 @@ export const GET = handle(async () => {
   return json({
     user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings, admin: !!user.admin },
     plan: { key: plan.key, name: plan.name, caps: plan.caps, tiers: plan.tiers, questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
-    usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research },
+    usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research, builds: usage.month.builds, ideas: usage.month.ideas },
     connectors: { total: connectors.length, active: connectors.filter(c => c.enabled && c.status === 'ok').length, limit: user.admin ? 100 : plan.caps.connectors },
     threads,
     spaces: spaces.map(s => ({ ...s, createdAt: new Date(s.createdAt).getTime() })),

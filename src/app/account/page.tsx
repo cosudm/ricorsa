@@ -43,6 +43,8 @@ export default async function Account() {
                 <div className="stat"><b>{usage.day.questions} / {plan.questionsPerDay}</b><span>questions today</span></div>
                 <div className="stat"><b>{usage.month.questions} / {plan.questionsPerMonth}</b><span>this month</span></div>
                 <div className="stat"><b>{usage.month.research} / {plan.researchPerMonth}</b><span>Research reports</span></div>
+                {plan.buildsPerMonth > 0 && <div className="stat"><b>{usage.month.builds} / {plan.buildsPerMonth}</b><span>app versions built</span></div>}
+                {plan.ideaSetsPerMonth > 0 && <div className="stat"><b>{usage.month.ideas} / {plan.ideaSetsPerMonth}</b><span>Discover idea sets</span></div>}
               </div>
             </div>
             <div className="card">
