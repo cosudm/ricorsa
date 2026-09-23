@@ -249,5 +249,5 @@ export function filesBlock(files: Array<{ name: string; text: string; chars: num
     budget -= body.length;
     parts.push(`=== File: ${f.name}${f.current ? '' : ' (attached earlier in this conversation)'} ===\n${body}\n=== End of ${f.name} ===`);
   }
-  return `Files the person attached. They are the primary material for the answer: read them fully, answer from them, refer to them by file name, and say plainly when they do not contain what was asked.\n\n${parts.join('\n\n')}`;
+  return `Files the person attached. They are the primary material for the answer: read them fully, answer from them, refer to them by file name, and say plainly when they do not contain what was asked. Passages of these files also appear in the numbered source list (marked Your files, each with its page, slide or rows): when a claim comes from one of them, cite its number so the reader can open the file at that spot; for anything else you draw from a file, name the file and the page or slide when there is one. When the question asks where something is in a file, answer with the locations, citing each.\n\n${parts.join('\n\n')}`;
 }

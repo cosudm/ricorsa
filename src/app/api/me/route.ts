@@ -36,7 +36,7 @@ export const GET = handle(async () => {
   });
 });
 
-const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), focus: z.enum(['web', 'academic', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional(), demoPlan: z.enum(['free', 'essentials', 'professional', 'enterprise', 'pro', 'team', '']).optional() });
+const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), focus: z.enum(['web', 'academic', 'technical', 'legal', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional(), demoPlan: z.enum(['free', 'essentials', 'professional', 'enterprise', 'pro', 'team', '']).optional() });
 export const PATCH = handle(async (req: Request) => {
   const user = await currentUser();
   const b = Settings.safeParse(await readJson(req)); if (!b.success) return fail(400, 'Invalid settings');

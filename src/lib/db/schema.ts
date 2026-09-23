@@ -43,7 +43,7 @@ export type Turn = {
   q: string;
   mode: 'search' | 'research';
   tier: 'quick' | 'default' | 'complex';
-  focus: 'web' | 'academic' | 'writing' | 'math' | 'code';
+  focus: 'web' | 'academic' | 'technical' | 'legal' | 'writing' | 'math' | 'code';
   length: 'concise' | 'balanced' | 'detailed' | null;
   createdAt: number;
   status: 'pending' | 'running' | 'done' | 'stopped' | 'error';

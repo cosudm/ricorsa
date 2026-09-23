@@ -39,7 +39,7 @@ export async function saveTurns(thread: ThreadRow, turns: Turn[]): Promise<void>
 export function makeTurn(q: string, o: { mode?: string; tier?: string; focus?: string; length?: string | null }): Turn {
   return {
     id: uid(), q, mode: (o.mode === 'research' ? 'research' : 'search'), tier: (['quick', 'default', 'complex'].includes(o.tier || '') ? o.tier : 'default') as Turn['tier'],
-    focus: (['web', 'academic', 'writing', 'math', 'code'].includes(o.focus || '') ? o.focus : 'web') as Turn['focus'],
+    focus: (['web', 'academic', 'technical', 'legal', 'writing', 'math', 'code'].includes(o.focus || '') ? o.focus : 'web') as Turn['focus'],
     length: (['concise', 'balanced', 'detailed'].includes(o.length || '') ? o.length : null) as Turn['length'],
     createdAt: Date.now(), status: 'pending', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null,
   };

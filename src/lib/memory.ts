@@ -193,10 +193,18 @@ export async function recall(userId: string, question: string, opts: { limit?: n
   return out;
 }
 
-/** Where a recalled passage opens: the thread, scrolled to the turn (and the file it came with). */
-export function memoryUrl(m: Pick<Recalled, 'threadId' | 'turnId' | 'fileId'>): string {
+/** Where a recalled passage opens: the thread, scrolled to the turn; for a file, the viewer at the passage, highlighted. */
+export function memoryUrl(m: Pick<Recalled, 'threadId' | 'turnId' | 'fileId' | 'text'>): string {
   if (!m.threadId) return '';
-  const q = new URLSearchParams(); if (m.turnId) q.set('turn', m.turnId); if (m.fileId) q.set('file', m.fileId);
+  const q = new URLSearchParams(); if (m.turnId) q.set('turn', m.turnId);
+  if (m.fileId) {
+    q.set('file', m.fileId);
+    // The passage keeps the landmark it was cut under when the text was chunked, so the viewer can jump to the page.
+    const page = /^\[Page (\d+)\]/.exec(m.text || ''); const slide = /^\[Slide (\d+)\]/.exec(m.text || ''); const sheet = /^\[Sheet: (.*?)\]/.exec(m.text || '');
+    if (page) q.set('p', page[1]); if (slide) q.set('slide', slide[1]); if (sheet) q.set('sheet', sheet[1]);
+    const body = String(m.text || '').replace(/^\[(?:Page \d+|Slide \d+|Sheet: .*?)\]\s*/, '').replace(/\s+/g, ' ').trim();
+    if (body) q.set('hl', body.slice(0, 90));
+  }
   const s = q.toString();
   return `/app#/thread/${encodeURIComponent(m.threadId)}${s ? '?' + s : ''}`;
 }

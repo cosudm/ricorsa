@@ -364,11 +364,217 @@ function renderReadText(f) {
   return chunks.length > 1 ? `${chunks.length} pages of text` : 'Text as read';
 }
 
-const RENDERERS = { sheet: renderWorkbook, csv: renderDelimited, docx: renderDocx, pptx: renderDeck, markdown: renderMarkdown, html: renderHtml, json: renderCode, code: renderCode, text: renderPlain, read: renderReadText };
+// ---------- PDF: pages drawn with pdf.js, each with a text layer, so passages can be found and highlighted ----------
+// Pages are laid out at once (placeholders sized from the first page) and drawn as they scroll into view. The text of
+// every page is read up front, which is cheap, so Find can search the whole document before a page is drawn.
+const PDF = { doc: null, pages: [], texts: [], scale: 1, host: null, observer: null };
+async function renderPdf(f) {
+  tell({ type: 'status', text: 'Opening the PDF' });
+  await loadScript('vendor/pdfjs/pdf.min.js');
+  const lib = window.pdfjsLib; if (!lib) throw new Error('The PDF library did not load');
+  lib.GlobalWorkerOptions.workerSrc = new URL('vendor/pdfjs/pdf.worker.min.js', location.href).href;
+  const doc = await lib.getDocument({ data: new Uint8Array(f.buffer), isEvalSupported: false, disableFontFace: false }).promise;
+  root.innerHTML = '<div class="fill pdf-host" data-host><div class="pdf-pages" data-pages></div></div>';
+  const host = root.querySelector('[data-host]'), pagesEl = root.querySelector('[data-pages]');
+  PDF.doc = doc; PDF.pages = []; PDF.texts = []; PDF.host = host;
+  const first = await doc.getPage(1); const vp1 = first.getViewport({ scale: 1 });
+  const avail = Math.max(320, host.clientWidth - 32);
+  PDF.scale = Math.min(1.6, avail / vp1.width);
+  for (let n = 1; n <= doc.numPages; n++) {
+    const el = document.createElement('div'); el.className = 'pdf-page'; el.dataset.page = String(n);
+    el.style.width = Math.floor(vp1.width * PDF.scale) + 'px'; el.style.height = Math.floor(vp1.height * PDF.scale) + 'px';
+    el.innerHTML = `<span class="pdf-no">${n}</span>`;
+    pagesEl.appendChild(el); PDF.pages.push({ n, el, drawn: false, drawing: null, textLayer: null });
+  }
+  if (PDF.observer) PDF.observer.disconnect();
+  PDF.observer = new IntersectionObserver((entries) => { for (const e of entries) if (e.isIntersecting) drawPdfPage(Number(e.target.dataset.page)); }, { root: host, rootMargin: '600px 0px' });
+  PDF.pages.forEach(p => PDF.observer.observe(p.el));
+  // The text of every page, for Find; read in the background after the first pages are up.
+  (async () => { for (let n = 1; n <= doc.numPages; n++) { if (PDF.doc !== doc) return; try { PDF.texts[n - 1] = await pdfPageText(doc, n); } catch { PDF.texts[n - 1] = ''; } } if (PDF.pending) { const q = PDF.pending; PDF.pending = null; findInDocument(q.query, q.dir); } })();
+  return `${doc.numPages} page${doc.numPages === 1 ? '' : 's'}`;
+}
+async function pdfPageText(doc, n) {
+  const page = await doc.getPage(n); const tc = await page.getTextContent();
+  let out = '';
+  for (const it of tc.items) { if (!('str' in it)) continue; out += it.str; if (it.hasEOL) out += '\n'; else if (it.str && !/\s$/.test(it.str)) out += ' '; }
+  return out;
+}
+async function drawPdfPage(n) {
+  const p = PDF.pages[n - 1]; if (!p || p.drawn || p.drawing) return;
+  const doc = PDF.doc; if (!doc) return;
+  p.drawing = (async () => {
+    const page = await doc.getPage(n); if (PDF.doc !== doc) return;
+    const vp = page.getViewport({ scale: PDF.scale }); const dpr = Math.min(2, window.devicePixelRatio || 1);
+    p.el.style.width = Math.floor(vp.width) + 'px'; p.el.style.height = Math.floor(vp.height) + 'px';
+    const canvas = document.createElement('canvas'); canvas.width = Math.floor(vp.width * dpr); canvas.height = Math.floor(vp.height * dpr); canvas.style.width = Math.floor(vp.width) + 'px'; canvas.style.height = Math.floor(vp.height) + 'px';
+    const ctx = canvas.getContext('2d'); ctx.scale(dpr, dpr);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    if (PDF.doc !== doc) return;
+    const layer = document.createElement('div'); layer.className = 'pdf-text'; layer.style.width = canvas.style.width; layer.style.height = canvas.style.height;
+    // pdf.js 3.x sizes the text layer with this CSS variable.
+    layer.style.setProperty('--scale-factor', String(vp.scale));
+    p.el.appendChild(canvas); p.el.appendChild(layer);
+    try { const tc = await page.getTextContent(); await window.pdfjsLib.renderTextLayer({ textContentSource: tc, container: layer, viewport: vp, textDivs: [] }).promise; } catch (e) { console.warn('[viewer] text layer', e); }
+    p.textLayer = layer; p.drawn = true;
+    if (p.afterDraw) { const fn = p.afterDraw; p.afterDraw = null; fn(); }
+  })().catch(e => console.warn('[viewer] page', n, e)).finally(() => { p.drawing = null; });
+  return p.drawing;
+}
+/** Scroll a PDF page into view and draw it if it is not yet; resolves when its text layer exists. */
+function showPdfPage(n) {
+  return new Promise((resolve) => {
+    const p = PDF.pages[n - 1]; if (!p) { resolve(null); return; }
+    p.el.scrollIntoView({ block: 'start' });
+    if (p.drawn) { resolve(p); return; }
+    p.afterDraw = () => resolve(p); drawPdfPage(n);
+  });
+}
+
+// ---------- Find and highlight, over whatever is on screen ----------
+// The rendered text is read through a walker into one normalized string (lowercase, runs of whitespace collapsed)
+// with a map back to the text nodes, so a phrase can be found across runs, cells and spans and wrapped in <mark>.
+const FIND = { query: '', hits: [], index: -1, pdf: null };
+const BLOCKS = new Set(['P', 'DIV', 'LI', 'TD', 'TH', 'TR', 'TABLE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SECTION', 'ARTICLE', 'PRE', 'BLOCKQUOTE', 'BR', 'UL', 'OL', 'DT', 'DD', 'FIGCAPTION']);
+function textIndex(rootEl, spanBoundaries) {
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, { acceptNode(n) { const p = n.parentElement; if (!p || p.closest('script, style, noscript, .note, .pdf-no, .slide-no, .rn, thead, .fbar, .tabs, .bar')) return NodeFilter.FILTER_REJECT; return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP; } });
+  const nodes = []; const map = []; let norm = ''; let lastSpace = true; let prevParent = null;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const parent = n.parentElement;
+    if (nodes.length && !lastSpace) {
+      // A boundary between two text nodes counts as a space when it crosses a block, or between the spans of a PDF text layer.
+      let block = spanBoundaries; if (!block && parent !== prevParent) { let a = prevParent; while (a && a !== rootEl && !BLOCKS.has(a.tagName)) a = a.parentElement; let b = parent; while (b && b !== rootEl && !BLOCKS.has(b.tagName)) b = b.parentElement; block = a !== b; }
+      if (block) { norm += ' '; map.push(map[map.length - 1]); lastSpace = true; }
+    }
+    const ni = nodes.push(n) - 1; const t = n.nodeValue;
+    for (let i = 0; i < t.length; i++) {
+      const ch = t[i];
+      if (/\s/.test(ch)) { if (lastSpace) continue; norm += ' '; map.push([ni, i]); lastSpace = true; }
+      else { const lc = ch.toLowerCase(); norm += lc.length === 1 ? lc : ch; map.push([ni, i]); lastSpace = false; }
+    }
+    prevParent = parent;
+  }
+  return { nodes, norm, map };
+}
+function normQuery(q) { return String(q || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+/** Wrap the normalized ranges [a, b) in <mark> elements; ranges are applied last to first so earlier offsets stay valid. */
+function markRanges(idx, ranges, cls) {
+  const marks = [];
+  for (const [a, b] of ranges.slice().sort((x, y) => y[0] - x[0])) {
+    const s = idx.map[a], e = idx.map[b - 1]; if (!s || !e) continue;
+    const pieces = [];
+    for (let ni = s[0]; ni <= e[0]; ni++) {
+      const node = idx.nodes[ni]; if (!node || !node.parentNode) continue;
+      const from = ni === s[0] ? s[1] : 0, to = ni === e[0] ? e[1] + 1 : node.nodeValue.length;
+      if (to <= from) continue;
+      pieces.push([node, from, to]);
+    }
+    const made = [];
+    for (const [node, from, to] of pieces.reverse()) {
+      let target = node;
+      if (to < node.nodeValue.length) target.splitText(to);
+      if (from > 0) target = target.splitText(from);
+      const m = document.createElement('mark'); m.className = cls; target.parentNode.insertBefore(m, target); m.appendChild(target); made.unshift(m);
+    }
+    if (made.length) marks.unshift(made);
+  }
+  return marks;
+}
+function clearMarks(cls) {
+  for (const m of Array.from(root.querySelectorAll('mark.' + cls))) { const parent = m.parentNode; while (m.firstChild) parent.insertBefore(m.firstChild, m); parent.removeChild(m); parent.normalize(); }
+}
+/** Find every occurrence of a phrase in the rendered document (or, for a PDF, in every page's text). */
+function findInDocument(query, dir) {
+  const q = normQuery(query);
+  clearMarks('hit'); FIND.hits = []; FIND.index = -1; FIND.query = q;
+  if (!q || q.length < 2) { tell({ type: 'found', count: 0, index: -1, query: q }); return; }
+  if (PDF.doc) {
+    if (PDF.texts.length < PDF.doc.numPages) { PDF.pending = { query, dir }; tell({ type: 'found', count: 0, index: -1, query: q, reading: true }); return; }
+    const hits = [];
+    PDF.texts.forEach((t, i) => { const n = normQuery(t); let at = n.indexOf(q); while (at >= 0 && hits.length < 2000) { hits.push({ page: i + 1, at }); at = n.indexOf(q, at + q.length); } });
+    FIND.hits = hits; FIND.pdf = true;
+    tell({ type: 'found', count: hits.length, index: hits.length ? 0 : -1, query: q });
+    if (hits.length) gotoHit(0);
+    return;
+  }
+  const idx = textIndex(root, false);
+  const ranges = []; let at = idx.norm.indexOf(q);
+  while (at >= 0 && ranges.length < 2000) { ranges.push([at, at + q.length]); at = idx.norm.indexOf(q, at + q.length); }
+  FIND.hits = markRanges(idx, ranges, 'hit'); FIND.pdf = false;
+  tell({ type: 'found', count: FIND.hits.length, index: FIND.hits.length ? 0 : -1, query: q });
+  if (FIND.hits.length) gotoHit(0);
+}
+async function gotoHit(i) {
+  if (!FIND.hits.length) return;
+  FIND.index = ((i % FIND.hits.length) + FIND.hits.length) % FIND.hits.length;
+  root.querySelectorAll('mark.hit.cur').forEach(m => m.classList.remove('cur'));
+  if (FIND.pdf) {
+    const h = FIND.hits[FIND.index]; const p = await showPdfPage(h.page); if (!p || !p.textLayer) { tell({ type: 'found', count: FIND.hits.length, index: FIND.index, query: FIND.query }); return; }
+    // Mark every occurrence on this page; the current one is the nth on the page.
+    clearMarks('hit');
+    const idx = textIndex(p.textLayer, true); const ranges = []; let at = idx.norm.indexOf(FIND.query);
+    while (at >= 0 && ranges.length < 500) { ranges.push([at, at + FIND.query.length]); at = idx.norm.indexOf(FIND.query, at + FIND.query.length); }
+    const marks = markRanges(idx, ranges, 'hit');
+    const onPage = FIND.hits.filter(x => x.page === h.page); const k = onPage.indexOf(h);
+    const cur = marks[Math.min(k, marks.length - 1)];
+    if (cur) { cur.forEach(m => m.classList.add('cur')); cur[0].scrollIntoView({ block: 'center' }); }
+    tell({ type: 'found', count: FIND.hits.length, index: FIND.index, query: FIND.query, page: h.page });
+    return;
+  }
+  const cur = FIND.hits[FIND.index]; cur.forEach(m => m.classList.add('cur')); cur[0].scrollIntoView({ block: 'center' });
+  tell({ type: 'found', count: FIND.hits.length, index: FIND.index, query: FIND.query });
+}
+/**
+ * Light one passage: the snippet a citation carries (the passage's first words), on the page it names when there is one.
+ * Falls back to a shorter and shorter prefix of the snippet, since a rendered file's whitespace and line breaks differ
+ * from the text that was read.
+ */
+/** From a match of the snippet, the end of the sentence it starts (so the whole sentence lights up), within reason. */
+function sentenceEnd(norm, at, len, prose) {
+  let end = at + len; if (!prose) return end;
+  const limit = Math.min(norm.length, at + len + 420);
+  for (let i = end; i < limit; i++) { const ch = norm[i]; if ((ch === '.' || ch === '!' || ch === '?') && (i + 1 >= norm.length || norm[i + 1] === ' ' || norm[i + 1] === '"' || norm[i + 1] === '”')) return i + 1; }
+  return end;
+}
+async function highlightPassage(m) {
+  clearMarks('ctx');
+  const snippet = normQuery(m.snippet); if (!snippet) { tell({ type: 'highlighted', ok: false }); return; }
+  const prose = !m.sheet;
+  const tries = [snippet, snippet.slice(0, 60), snippet.slice(0, 40), snippet.split(' ').slice(0, 4).join(' ')].filter((x, i, a) => x.length >= 8 && a.indexOf(x) === i);
+  if (PDF.doc) {
+    let pages = m.page ? [m.page] : [];
+    if (!pages.length) { if (PDF.texts.length < PDF.doc.numPages) { await new Promise(r => { const t = setInterval(() => { if (PDF.texts.length >= PDF.doc.numPages) { clearInterval(t); r(); } }, 100); setTimeout(() => { clearInterval(t); r(); }, 8000); }); } for (const q of tries) { PDF.texts.forEach((t, i) => { if (normQuery(t).includes(q)) pages.push(i + 1); }); if (pages.length) break; } }
+    if (!pages.length) { tell({ type: 'highlighted', ok: false }); return; }
+    const p = await showPdfPage(pages[0]); if (!p || !p.textLayer) { tell({ type: 'highlighted', ok: false, page: pages[0] }); return; }
+    const idx = textIndex(p.textLayer, true);
+    for (const q of tries) { const at = idx.norm.indexOf(q); if (at >= 0) { const marks = markRanges(idx, [[at, sentenceEnd(idx.norm, at, q.length, prose)]], 'ctx'); if (marks[0]) { marks[0][0].scrollIntoView({ block: 'center' }); tell({ type: 'highlighted', ok: true, page: pages[0] }); return; } } }
+    tell({ type: 'highlighted', ok: false, page: pages[0] });
+    return;
+  }
+  // Slides, sheets and the text-as-read pages have landmarks of their own to jump to first.
+  if (m.slide) { const el = root.querySelectorAll('.deck .slide-wrap, .deck .slide')[m.slide - 1] || root.querySelectorAll('.page')[m.slide - 1]; if (el) el.scrollIntoView({ block: 'start' }); }
+  else if (m.page && !m.sheet) { const el = root.querySelectorAll('section.docx')[m.page - 1] || root.querySelectorAll('.page')[m.page - 1]; if (el) el.scrollIntoView({ block: 'start' }); }
+  else if (m.sheet) { const tab = Array.from(root.querySelectorAll('.tabs [data-tab]')).find(b => (b.textContent || '').trim() === m.sheet); if (tab && !tab.classList.contains('on')) tab.click(); }
+  await new Promise(r => setTimeout(r, 30));
+  const idx = textIndex(root, false);
+  for (const q of tries) {
+    const at = idx.norm.indexOf(q);
+    if (at >= 0) { const marks = markRanges(idx, [[at, sentenceEnd(idx.norm, at, q.length, prose)]], 'ctx'); if (marks[0]) { marks[0][0].scrollIntoView({ block: 'center' }); tell({ type: 'highlighted', ok: true }); return; } }
+  }
+  tell({ type: 'highlighted', ok: false });
+}
+
+const RENDERERS = { sheet: renderWorkbook, csv: renderDelimited, docx: renderDocx, pptx: renderDeck, markdown: renderMarkdown, html: renderHtml, json: renderCode, code: renderCode, text: renderPlain, read: renderReadText, pdf: renderPdf };
 
 window.addEventListener('message', async (e) => {
-  if (e.source !== window.parent || !e.data || e.data.type !== 'open') return;
+  if (e.source !== window.parent || !e.data) return;
+  if (e.data.type === 'find') { findInDocument(e.data.query, 1); return; }
+  if (e.data.type === 'findNext') { gotoHit(FIND.index + (e.data.dir < 0 ? -1 : 1)); return; }
+  if (e.data.type === 'clearFind') { clearMarks('hit'); FIND.hits = []; FIND.index = -1; FIND.query = ''; return; }
+  if (e.data.type === 'highlight') { highlightPassage(e.data); return; }
+  if (e.data.type === 'clearHighlight') { clearMarks('ctx'); return; }
+  if (e.data.type !== 'open') return;
   const f = e.data;
+  PDF.doc = null; PDF.pages = []; PDF.texts = []; FIND.hits = []; FIND.index = -1; FIND.pdf = false; if (PDF.observer) { PDF.observer.disconnect(); PDF.observer = null; }
   const render = RENDERERS[f.kind] || renderReadText;
   root.innerHTML = '<div class="center"><span class="spinner"></span></div>';
   try {

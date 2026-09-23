@@ -29,6 +29,24 @@
   .spinner { width: 20px; height: 20px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* PDF pages (pdf.js): a canvas per page with a transparent text layer over it, so text can be selected, found and highlighted */
+  .pdf-host { background: var(--paper); padding: 24px 16px 48px; }
+  .pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 22px; }
+  .pdf-page { position: relative; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.14), 0 8px 24px -12px rgba(0,0,0,.25); flex: none; }
+  .pdf-page canvas { display: block; }
+  .pdf-no { position: absolute; left: -38px; top: 0; width: 28px; text-align: right; font-size: 12px; color: var(--ink-3); }
+  .pdf-text { position: absolute; inset: 0; overflow: hidden; line-height: 1; text-align: initial; transform-origin: 0 0; -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; z-index: 2; }
+  .pdf-text :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+  .pdf-text span.markedContent { top: 0; height: 0; }
+  .pdf-text ::selection { background: rgba(45,95,138,.35); }
+  .pdf-text mark { color: transparent; }
+  @media (max-width: 720px) { .pdf-host { padding: 12px 8px 32px; } .pdf-no { display: none; } }
+  /* Find and highlight marks, in every kind of file */
+  mark.hit { background: rgba(255, 213, 0, .5); color: inherit; border-radius: 2px; padding: 0; }
+  mark.hit.cur { background: rgba(255, 140, 0, .75); }
+  mark.ctx { background: rgba(45, 95, 138, .22); box-shadow: 0 0 0 2px rgba(45, 95, 138, .22); color: inherit; border-radius: 2px; padding: 0; animation: ctx-in .6s ease-out; }
+  @keyframes ctx-in { 0% { box-shadow: 0 0 0 10px rgba(45, 95, 138, .35); } 100% { box-shadow: 0 0 0 2px rgba(45, 95, 138, .22); } }
+
   /* Notes shown above a fallback view */
   .note { display: flex; gap: 8px; align-items: flex-start; padding: 9px 14px; font-size: 13px; color: var(--warn); background: var(--warn-soft); border-bottom: 1px solid #F0E2C2; }
   .note svg { flex: none; margin-top: 2px; }

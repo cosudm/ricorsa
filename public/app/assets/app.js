@@ -50,6 +50,7 @@ const ICONS = {
   map: '<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/>',
   pin: '<path d="M12 21s-6-5.2-6-10a6 6 0 0 1 12 0c0 4.8-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>',
   filter: '<path d="M4 5h16l-6 7v6l-4 2v-8z"/>',
+  wrench: '<path d="M21 6.6a5 5 0 0 1-6.5 4.8L6.2 19.7a2 2 0 0 1-2.9-2.9l8.3-8.3A5 5 0 0 1 17.4 3l-2.9 2.9 3.6 3.6z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   folderPlus: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v6M9 14h6"/>',
   send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
@@ -185,6 +186,8 @@ const TIERS = {
 const FOCI = {
   web:      { label: 'Web',      icon: 'globe',      desc: 'General knowledge, any topic' },
   academic: { label: 'Academic', icon: 'graduation', desc: 'Scholarly framing and precise terms' },
+  technical: { label: 'Technical', icon: 'wrench', desc: 'Specifications, standards, parameters with units' },
+  legal: { label: 'Legal', icon: 'scale', desc: 'Governing law, citations to statute and case, jurisdiction' },
   writing:  { label: 'Writing',  icon: 'pen',        desc: 'Draft and edit, no references' },
   math:     { label: 'Math',     icon: 'sigma',      desc: 'Step-by-step working' },
   code:     { label: 'Code',     icon: 'code',       desc: 'Code blocks and official docs' },
@@ -263,7 +266,11 @@ function closeFileViewer() {
   v.el.remove(); document.body.classList.remove('viewer-open');
   if (v.prevFocus && v.prevFocus.focus) { try { v.prevFocus.focus(); } catch {} }
 }
-function openFileViewer(att, list) {
+/**
+ * Open a file. `opts` may carry where to start (page, slide, sheet) and a snippet to highlight (hl), the thread the file
+ * belongs to (threadId, turnId), and `ask: true` to open with the Ask pane showing.
+ */
+function openFileViewer(att, list, opts = {}) {
   if (!att || !att.id) return;
   closeFileViewer(); closePop();
   const files = (list && list.length ? list : [att]).filter(a => a && a.id);
@@ -271,17 +278,75 @@ function openFileViewer(att, list) {
   el.className = 'viewer'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
   el.innerHTML = `<div class="viewer-bar"><span class="ficon" data-v-icon></span><div class="viewer-title"><b data-v-name></b><span data-v-meta></span></div>
     <div class="viewer-nav" data-v-nav hidden><button type="button" class="icon-btn" data-v-prev aria-label="Previous file" title="Previous file (Left arrow)">${icon('chevronLeft', 18)}</button><span data-v-pos></span><button type="button" class="icon-btn" data-v-next aria-label="Next file" title="Next file (Right arrow)">${icon('chevronRight', 18)}</button></div>
+    <div class="viewer-find" data-v-findbox hidden>${icon('search', 14)}<input type="search" data-v-find placeholder="Find in this file" aria-label="Find in this file" autocomplete="off"><span class="cnt" data-v-findcount></span><button type="button" class="icon-btn" data-v-findprev aria-label="Previous match" title="Previous match (Shift+Enter)">${icon('chevronLeft', 16)}</button><button type="button" class="icon-btn" data-v-findnext aria-label="Next match" title="Next match (Enter)">${icon('chevronRight', 16)}</button></div>
+    <button type="button" class="btn sm primary" data-v-ask title="Ask Ricorsa about this file; the answer points back into it">${icon('sparkles', 14)}<span>Ask about this</span></button>
     <a class="btn sm" data-v-open target="_blank" rel="noopener" title="Open the file in its own browser tab">${icon('external', 14)}<span>Open</span></a>
     <a class="btn sm" data-v-download title="Save the original file">${icon('download', 14)}<span>Download</span></a>
     <button type="button" class="icon-btn" data-v-close aria-label="Close" title="Close (Esc)">${icon('x', 18)}</button></div>
-    <div class="viewer-body" data-v-body></div>`;
+    <div class="viewer-main"><div class="viewer-body" data-v-body></div><aside class="viewer-ask" data-v-askpane hidden></aside></div>`;
   document.body.appendChild(el); document.body.classList.add('viewer-open');
-  viewer = { el, files, index: Math.max(0, files.findIndex(a => a.id === att.id)), att: null, frame: null, prevFocus: document.activeElement, seq: 0 };
+  viewer = { el, files, index: Math.max(0, files.findIndex(a => a.id === att.id)), att: null, frame: null, prevFocus: document.activeElement, seq: 0, opts: Object.assign({}, opts), threadId: opts.threadId || null, turnId: opts.turnId || null, frameDone: false, highlightReq: null, askOpen: false };
   $('[data-v-close]', el).addEventListener('click', closeFileViewer);
   $('[data-v-prev]', el).addEventListener('click', () => viewerShow(viewer.index - 1));
   $('[data-v-next]', el).addEventListener('click', () => viewerShow(viewer.index + 1));
+  // Find in this file: every keystroke searches, Enter and Shift+Enter walk the matches, Escape clears.
+  const find = $('[data-v-find]', el); let findTimer = null;
+  const post = (msg) => { if (viewer && viewer.frame && viewer.frameDone) viewer.frame.contentWindow.postMessage(msg, '*'); };
+  find.addEventListener('input', () => { clearTimeout(findTimer); findTimer = setTimeout(() => post({ type: 'find', query: find.value }), 160); });
+  find.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); post({ type: 'findNext', dir: e.shiftKey ? -1 : 1 }); } else if (e.key === 'Escape' && find.value) { e.preventDefault(); e.stopPropagation(); find.value = ''; post({ type: 'clearFind' }); $('[data-v-findcount]', el).textContent = ''; } });
+  $('[data-v-findprev]', el).addEventListener('click', () => post({ type: 'findNext', dir: -1 }));
+  $('[data-v-findnext]', el).addEventListener('click', () => post({ type: 'findNext', dir: 1 }));
+  $('[data-v-ask]', el).addEventListener('click', () => viewerToggleAsk());
+  if (opts.hl || opts.page || opts.slide || opts.sheet) viewer.highlightReq = { snippet: opts.hl || '', page: opts.page ? +opts.page : undefined, slide: opts.slide ? +opts.slide : undefined, sheet: opts.sheet || undefined };
   viewerShow(viewer.index);
+  if (opts.ask) viewerToggleAsk(true);
   $('[data-v-close]', el).focus();
+}
+/** Light a passage in the open file (from a citation): now if the file is drawn, otherwise as soon as it is. */
+function viewerHighlight(req) {
+  const v = viewer; if (!v) return;
+  v.highlightReq = req;
+  if (v.frame && v.frameDone) { v.frame.contentWindow.postMessage(Object.assign({ type: 'highlight' }, req), '*'); v.highlightReq = null; }
+}
+/** The Ask pane: a question about the open file becomes a turn on the conversation it belongs to, answered beside the file. */
+function viewerToggleAsk(force) {
+  const v = viewer; if (!v) return;
+  const pane = $('[data-v-askpane]', v.el); const open = force === undefined ? pane.hidden : !!force;
+  v.askOpen = open; pane.hidden = !open; v.el.classList.toggle('ask-open', open); $('[data-v-ask]', v.el).classList.toggle('on', open);
+  if (!open) return;
+  if (!pane.dataset.built) {
+    pane.dataset.built = '1';
+    pane.innerHTML = `<div class="va-head">${icon('sparkles', 15)}<b>Ask about this file</b><button type="button" class="icon-btn" data-va-close aria-label="Close the question pane">${icon('x', 16)}</button></div>
+      <p class="va-sub" data-va-sub>Ask anything about it, or say where to look: "where does it mention the renewal option", "summarize page 3", "what are the totals in the second sheet". Every claim in the answer points back into the file; click a number and the passage lights up here.</p>
+      <div class="va-turns" data-va-turns></div>
+      <form class="va-form" data-va-form><textarea rows="2" placeholder="Ask anything about this file" aria-label="Your question about this file"></textarea><button type="submit" class="btn primary sm" aria-label="Ask">${icon('arrowUp', 16)}</button></form>`;
+    $('[data-va-close]', pane).addEventListener('click', () => viewerToggleAsk(false));
+    const form = $('[data-va-form]', pane), ta = $('textarea', form);
+    ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
+    form.addEventListener('submit', e => { e.preventDefault(); const q = ta.value.trim(); if (!q) return; ta.value = ''; viewerAsk(q); });
+  }
+  const ta = $('[data-va-form] textarea', pane); if (ta) ta.focus();
+}
+async function viewerAsk(q) {
+  const v = viewer; if (!v || !v.att) return;
+  const att = v.att; const threadId = v.threadId || att.threadId || null;
+  if (!threadId) {
+    // A file that is still only attached to the composer: the question goes there, with the file.
+    closeFileViewer();
+    const ta = $('#main textarea'); if (ta) { ta.value = q; ta.dispatchEvent(new Event('input')); ta.focus(); }
+    toast('Send it from the composer; the file is attached to your question');
+    return;
+  }
+  let thread = state.threadCache[threadId];
+  if (!thread) { try { thread = await loadThread(threadId); } catch (e) { toast('Could not open the conversation this file belongs to', 'bad'); return; } }
+  if (!viewer || viewer !== v) return;
+  const box = $('[data-va-turns]', v.el); const sub = $('[data-va-sub]', v.el); if (sub) sub.hidden = true;
+  // The file rides along as this question's attachment, so the answer treats it as the primary material.
+  followUp(thread, q, { mode: 'search', tier: state.settings.tier, focus: state.settings.focus, attachments: [{ id: att.id, name: att.name, size: att.size || 0, chars: att.chars || 0 }] });
+  const turn = thread.turns[thread.turns.length - 1];
+  box.insertAdjacentHTML('beforeend', turnHtml(thread, turn));
+  const sec = box.lastElementChild; sec.classList.add('va-turn'); paintTurn(sec, thread, turn); wireTurn(sec, thread, turn);
+  sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function viewerStatus(text) { if (viewer) $('[data-v-meta]', viewer.el).textContent = text; }
 function viewerShow(i) {
@@ -298,6 +363,8 @@ function viewerShow(i) {
   $('[data-v-prev]', el).disabled = i === 0; $('[data-v-next]', el).disabled = i === v.files.length - 1;
   const openA = $('[data-v-open]', el); openA.href = src; openA.hidden = !k.native;
   const dl = $('[data-v-download]', el); dl.href = src + '?download=1'; dl.setAttribute('download', att.name);
+  v.frameDone = false; const findBox = $('[data-v-findbox]', el); findBox.hidden = k.kind === 'image'; $('[data-v-find]', el).value = ''; $('[data-v-findcount]', el).textContent = '';
+  $('[data-v-ask]', el).hidden = !!att.api;
   body.innerHTML = `<div class="viewer-loading" data-v-loading><span class="spinner"></span><span>Opening ${esc(k.label.toLowerCase())}</span></div>`;
   const loading = $('[data-v-loading]', body);
   const fresh = () => viewer === v && v.seq === seq;
@@ -327,27 +394,36 @@ function viewerShow(i) {
     if (m.type === 'ready' && v.pending) { const msg = v.pending, tr = v.transfer; v.pending = null; v.transfer = null; v.frame.contentWindow.postMessage(msg, '*', tr || []); return; }
     if (m.type === 'key') { if (m.key === 'Escape') closeFileViewer(); else viewerShow(v.index + (m.key === 'ArrowLeft' ? -1 : 1)); return; }
     if (m.type === 'status') { info(m.text); return; }
-    if (m.type === 'done') { loading.hidden = true; info(m.info); return; }
+    if (m.type === 'done') { loading.hidden = true; v.frameDone = true; info(m.info); if (v.highlightReq) { const req = v.highlightReq; v.highlightReq = null; v.frame.contentWindow.postMessage(Object.assign({ type: 'highlight' }, req), '*'); } const f = $('[data-v-find]', el); if (f && f.value.trim()) v.frame.contentWindow.postMessage({ type: 'find', query: f.value }, '*'); return; }
+    if (m.type === 'found') { const c = $('[data-v-findcount]', el); if (c) c.textContent = m.reading ? 'Reading the pages' : !m.query ? '' : m.count ? `${m.index + 1} of ${m.count}${m.page ? ` · page ${m.page}` : ''}` : 'No matches'; return; }
+    if (m.type === 'highlighted') { info(m.ok ? `Passage highlighted${m.page ? ` on page ${m.page}` : ''}` : 'That passage could not be located in the drawn file' + (m.page ? ` (page ${m.page} shown)` : '')); return; }
     if (m.type === 'error') {
+      if (k.kind === 'pdf' && !v.nativeShown && navigator.pdfViewerEnabled !== false) { v.nativeShown = true; showNativePdf(); return; }
       if (v.readShown) { loading.innerHTML = `${icon('alert', 18)}<span>${esc(m.message || 'Could not open this file')}</span>`; return; }
       v.readShown = true; showRead(`Ricorsa could not draw this file the way its own app would (${m.message || 'unknown error'}), so here is the text it read. Download the original to open it in its app.`);
     }
   };
+  // The browser's own PDF viewer, when pdf.js could not draw the file: no find or highlight, but the document shows.
+  const showNativePdf = () => {
+    if (!fresh()) return;
+    if (v.frame) { v.frame.remove(); v.frame = null; }
+    findBox.hidden = true;
+    const fr = document.createElement('iframe'); fr.className = 'viewer-native'; fr.title = att.name; fr.src = src + '#toolbar=1&navpanes=0' + (v.opts && v.opts.page ? '&page=' + v.opts.page : '');
+    fr.addEventListener('load', () => { if (fresh()) { loading.hidden = true; info(att.chars ? `${att.chars.toLocaleString('en-US')} characters read · shown by the browser` : 'shown by the browser'); } });
+    body.insertBefore(fr, loading);
+  };
+  v.nativeShown = false;
   v.readShown = false;
   (async () => {
     // What is known about the file: whether the original is stored, and its details.
     let meta = null;
     try { meta = (await api(apiBase)).file; } catch (e) { if (fresh()) loading.innerHTML = `${icon('alert', 18)}<span>${esc((e && e.message) || 'Could not open this file')}</span>`; return; }
     if (!fresh()) return;
-    Object.assign(att, { stored: meta.stored, size: meta.size || att.size, chars: meta.chars });
+    Object.assign(att, { stored: meta.stored, size: meta.size || att.size, chars: meta.chars, threadId: meta.threadId || att.threadId || null });
+    if (!v.threadId && meta.threadId) v.threadId = meta.threadId;
     if (!meta.stored) { openA.hidden = true; dl.hidden = true; v.readShown = true; showRead('Only the text of this file was kept when it was attached, before files could be opened here. Attach it again to see the original.'); return; }
     dl.hidden = false;
-    if (k.kind === 'pdf') {
-      if (navigator.pdfViewerEnabled === false) { v.readShown = true; showRead('This browser cannot show PDFs inline, so here is the text Ricorsa read. Download the file to open it in a PDF app.'); return; }
-      const fr = document.createElement('iframe'); fr.className = 'viewer-native'; fr.title = att.name; fr.src = src + '#toolbar=1&navpanes=0' + (att.page ? '&page=' + att.page : '');
-      fr.addEventListener('load', () => { if (fresh()) { loading.hidden = true; info(att.chars ? `${att.chars.toLocaleString('en-US')} characters read` : ''); } });
-      body.insertBefore(fr, loading); return;
-    }
+    // PDFs are drawn page by page with a text layer (so passages can be found and highlighted); the browser's own viewer is the fallback.
     if (k.kind === 'image') {
       const wrap = document.createElement('div'); wrap.className = 'viewer-img'; wrap.title = 'Click to switch between fit and actual size';
       const img = document.createElement('img'); img.alt = att.name; img.src = src;
@@ -389,7 +465,19 @@ function isOwnSource(url) { return /^(?:\/app)?#\/thread\//.test(String(url || '
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[href*="#/thread/"]'); if (!a || !isOwnSource(a.getAttribute('href'))) return;
   const hash = '#' + a.getAttribute('href').split('#')[1];
-  e.preventDefault(); go(hash);
+  e.preventDefault();
+  const [path, qs] = hash.replace(/^#\//, '').split('?'); const threadId = decodeURIComponent(path.split('/')[1] || ''); const q = Object.fromEntries(new URLSearchParams(qs || ''));
+  const req = q.file ? { snippet: q.hl || '', page: q.p ? +q.p : undefined, slide: q.slide ? +q.slide : undefined, sheet: q.sheet || undefined } : null;
+  // The passage is in the file that is open: light it there.
+  if (req && viewer && viewer.att && viewer.att.id === q.file) { viewerHighlight(req); return; }
+  if (req && viewer) { const i = viewer.files.findIndex(f => f.id === q.file); if (i >= 0) { viewer.highlightReq = req; viewerShow(i); return; } }
+  // The thread is the one on screen: open the file, or scroll to the turn, without redrawing the page.
+  if (state.route.name === 'thread' && state.route.id === threadId && state.threadCache[threadId]) {
+    const thread = state.threadCache[threadId]; const t = thread.turns.find(x => x.id === q.turn) || thread.turns.find(x => (x.attachments || []).some(f => f.id === q.file));
+    if (req && t) { const list = t.attachments || []; const att = list.find(f => f.id === q.file); if (att) { openFileViewer(att, list, { page: q.p, slide: q.slide, sheet: q.sheet, hl: q.hl, threadId, turnId: t.id }); return; } }
+    if (t) { const sec = $(`[data-turn="${t.id}"]`, $('#main')); if (sec) { sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); sec.classList.add('flash'); setTimeout(() => sec.classList.remove('flash'), 2600); return; } }
+  }
+  go(hash);
 });
 
 // ---------- Popover ----------
@@ -853,7 +941,7 @@ async function runTurn(thread, turn, { rewrite } = {}) {
     }
     await readSse(res, (ev, data) => {
       if (ev === 'meta') {
-        if (data.turnId && data.turnId !== turn.id) { const sec = $(`[data-turn="${turn.id}"]`); turn.id = data.turnId; if (sec) sec.dataset.turn = data.turnId; }
+        if (data.turnId && data.turnId !== turn.id) { const secs = $$(`[data-turn="${turn.id}"]`); turn.id = data.turnId; secs.forEach(sec => { sec.dataset.turn = data.turnId; }); }
         if (data.title && thread.title !== data.title) thread.title = data.title;
       } else if (ev === 'status') { turn.statusText = data.text || ''; liveRender(thread, turn); }
       else if (ev === 'sources') { turn.sources = data || []; liveRender(thread, turn); }
@@ -1116,14 +1204,13 @@ function wireTopbar(root) {
 // ---------- Thread ----------
 const paintQueue = new Map();
 function liveRender(thread, turn, final) {
-  if (state.route.name === 'thread' && state.route.id === thread.id) {
-    const sec = $(`[data-turn="${turn.id}"]`);
-    if (sec) {
-      if (final) { paintTurn(sec, thread, turn); }
-      else { let fn = paintQueue.get(turn.id); if (!fn) { fn = raf(() => { const s = $(`[data-turn="${turn.id}"]`); if (s) paintTurn(s, thread, turn); }); paintQueue.set(turn.id, fn); } fn(); }
-    }
-    const comp = $('.dock .composer'); if (comp && comp._composer) comp._composer.refresh();
+  // The turn may be on screen twice: on the thread page and in the file viewer's Ask pane. Both are painted.
+  const secs = $$(`[data-turn="${turn.id}"]`).filter(s => (state.route.name === 'thread' && state.route.id === thread.id && !s.closest('.viewer')) || s.closest('.viewer'));
+  if (secs.length) {
+    if (final) secs.forEach(s => paintTurn(s, thread, turn));
+    else { let fn = paintQueue.get(turn.id); if (!fn) { fn = raf(() => { $$(`[data-turn="${turn.id}"]`).forEach(s => paintTurn(s, thread, turn)); }); paintQueue.set(turn.id, fn); } fn(); }
   }
+  if (state.route.name === 'thread' && state.route.id === thread.id) { const comp = $('.dock .composer'); if (comp && comp._composer) comp._composer.refresh(); }
   if (final) paintQueue.delete(turn.id);
 }
 function renderThread(id) {
@@ -1152,7 +1239,8 @@ function renderThread(id) {
   if (target) {
     sc.scrollTop = target.offsetTop - 12; target.classList.add('flash'); setTimeout(() => target.classList.remove('flash'), 2600);
     const fileId = state.route.query.file; const t = thread.turns.find(x => x.id === wantTurn);
-    if (fileId && t && (t.attachments || []).some(a => a.id === fileId)) setTimeout(() => openFileViewer((t.attachments || []).find(a => a.id === fileId), t.attachments || []), 400);
+    const q = state.route.query;
+    if (fileId && t && (t.attachments || []).some(a => a.id === fileId)) setTimeout(() => openFileViewer((t.attachments || []).find(a => a.id === fileId), t.attachments || [], { page: q.p, slide: q.slide, sheet: q.sheet, hl: q.hl, threadId: thread.id, turnId: t.id }), 400);
   } else if (thread.turns.length > 1) { const lastSec = $(`[data-turn="${last.id}"]`, main); if (lastSec) sc.scrollTop = lastSec.offsetTop - 12; }
 }
 function threadMenu(anchor, thread) {
@@ -1242,7 +1330,7 @@ function paintTurn(sec, thread, t) {
   if (t.lineage) pills.push(`<span class="pill hashpill" title="Lineage hash ${esc(t.lineage)}">${icon('loop', 12)}${esc(shortHash(t.lineage))}</span>`);
   pills.push(`<span>${relTime(t.createdAt)}</span>`);
   $('[data-meta]', sec).innerHTML = pills.join('');
-  $$('[data-file]', sec).forEach(b => b.addEventListener('click', () => { const list = t.attachments || []; openFileViewer(list.find(a => a.id === b.dataset.file), list); }));
+  $$('[data-file]', sec).forEach(b => b.addEventListener('click', () => { const list = t.attachments || []; openFileViewer(list.find(a => a.id === b.dataset.file), list, { threadId: thread.id, turnId: t.id }); }));
 
   const running = t.status === 'running';
   const sources = t.sources || [];
@@ -1307,7 +1395,7 @@ function paintTurn(sec, thread, t) {
 
   const spane = $('[data-pane="sources"]', sec);
   spane.innerHTML = sources.length
-    ? `<div class="sources-list">${sources.map(s => `<div class="source-card" data-src-n="${s.n}"><span class="n">${s.n}</span><span class="favi" style="background:${colorFor(s.domain || s.title)};margin-top:2px">${esc((s.domain || s.title)[0] || '?')}</span><div><div class="t">${esc(s.title)}</div><div class="u">${s.url ? `<a href="${esc(s.url)}"${isOwnSource(s.url) ? '' : ' target="_blank" rel="noopener noreferrer"'}>${esc(/#\/vault\//.test(s.url) ? 'VDRPros Vault · opens the page in the viewer' : isOwnSource(s.url) ? (s.domain === 'Your files' ? 'A file you attached earlier · opens that conversation' : 'Your earlier conversation · opens at that answer') : s.url)}</a>` : esc(s.domain || '')}</div></div>${s.url ? `<a class="icon-btn" href="${esc(s.url)}"${isOwnSource(s.url) ? '' : ' target="_blank" rel="noopener noreferrer"'} aria-label="Open">${icon(isOwnSource(s.url) ? 'arrowRight' : 'external', 15)}</a>` : ''}</div>`).join('')}</div>`
+    ? `<div class="sources-list">${sources.map(s => `<div class="source-card" data-src-n="${s.n}"><span class="n">${s.n}</span><span class="favi" style="background:${colorFor(s.domain || s.title)};margin-top:2px">${esc((s.domain || s.title)[0] || '?')}</span><div><div class="t">${esc(s.title)}</div><div class="u">${s.url ? `<a href="${esc(s.url)}"${isOwnSource(s.url) ? '' : ' target="_blank" rel="noopener noreferrer"'}>${esc(/#\/vault\//.test(s.url) ? 'VDRPros Vault · opens the page in the viewer' : isOwnSource(s.url) ? (s.domain === 'Your files' ? 'Your file · opens it at this passage, highlighted' : 'Your earlier conversation · opens at that answer') : s.url)}</a>` : esc(s.domain || '')}</div></div>${s.url ? `<a class="icon-btn" href="${esc(s.url)}"${isOwnSource(s.url) ? '' : ' target="_blank" rel="noopener noreferrer"'} aria-label="Open">${icon(isOwnSource(s.url) ? 'arrowRight' : 'external', 15)}</a>` : ''}</div>`).join('')}</div>`
     : `<div class="empty">${icon('book', 28)}<div>${running ? 'Sources arrive before the answer is written.' : 'No sources were used for this answer.'}</div></div>`;
 }
 /**

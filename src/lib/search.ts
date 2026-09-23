@@ -19,6 +19,8 @@ export function searchPlan(mode: 'search' | 'research', focus: string): SearchOp
 
 const FOCUS_SITES: Record<string, string> = {
   academic: ' (site:arxiv.org OR site:pubmed.ncbi.nlm.nih.gov OR site:.edu OR site:.gov OR site:scholar.google.com OR site:nature.com OR site:sciencedirect.com)',
+  technical: ' specification standard',
+  legal: ' (site:law.cornell.edu OR site:.gov OR site:courtlistener.com OR site:justia.com OR site:findlaw.com OR site:americanbar.org OR site:.edu)',
   code: ' documentation',
 };
 
@@ -106,5 +108,5 @@ export function sourcesBlock(sources: Source[]): string {
   if (!sources.length) return '';
   const lines = sources.map(s => `[${s.n}] ${s.title} (${s.domain}) ${s.url}\n${s.text ? s.text.slice(0, 7000) : (s.snippet || '')}`);
   const own = sources.some(s => s.domain === 'Your threads' || s.domain === 'Your files');
-  return `${own && !sources.some(s => s.domain !== 'Your threads' && s.domain !== 'Your files') ? 'Sources for this question' : 'Web sources retrieved just now for this question'}. Cite them with their number in square brackets, like [2], right after the claim they support. Only cite numbers from this list.${own ? ' Sources marked (Your threads) or (Your files) are passages from this person\'s own earlier answers and attached files in Ricorsa: build on them, refer to them as "your earlier answer" or "your file", and cite them the same way; if a passage contradicts a newer web source, say which is newer.' : ''}\n\n${lines.join('\n\n')}`;
+  return `${own && !sources.some(s => s.domain !== 'Your threads' && s.domain !== 'Your files') ? 'Sources for this question' : 'Web sources retrieved just now for this question'}. Cite them with their number in square brackets, like [2], right after the claim they support. Only cite numbers from this list.${own ? ' Sources marked (Your files) are passages of files the person attached, with where each sits (page, slide or rows); sources marked (Your threads) are passages of this person\'s own earlier answers in Ricorsa. Build on them, refer to them as "your file" or "your earlier answer", and cite them by number the same way; if one contradicts a newer web source, say which is newer.' : ''}\n\n${lines.join('\n\n')}`;
 }

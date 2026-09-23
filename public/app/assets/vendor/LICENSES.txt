@@ -10,3 +10,4 @@ filereader.js             MIT                  https://github.com/meshesha/filer
 dingbat.js                MIT                  https://github.com/meshesha/PPTXjs               (bullet glyphs for PPTXjs)
 D3 3.x                    BSD 3-Clause         https://d3js.org                                 (charts inside decks)
 NVD3 1.8                  Apache License 2.0   https://nvd3.org                                 (charts inside decks)
+pdf.js 3.11.174           Apache License 2.0   https://mozilla.github.io/pdf.js/                 (PDFs: pages drawn to canvas with a text layer, so passages can be found and highlighted; pdfjs/pdf.min.js and pdf.worker.min.js as published)

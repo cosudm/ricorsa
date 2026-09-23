@@ -21,6 +21,7 @@ import { CONSOLE_GUIDE, consoleContext } from '@/lib/console';
 import { SITE_PRESET, numberSiteHits, numberSitePage } from '@/lib/sites';
 import { geocodePending } from '@/lib/geo';
 import { recall, remember, numberRecalled, backfillOnce, memoryEnabled } from '@/lib/memory';
+import { selectFilePassages, numberFilePassages, isLookup } from '@/lib/passages';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -30,7 +31,7 @@ const Body = z.object({
   question: z.string().trim().min(1).max(4000).optional(),
   mode: z.enum(['search', 'research']).default('search'),
   tier: z.enum(['quick', 'default', 'complex']).default('default'),
-  focus: z.enum(['web', 'academic', 'writing', 'math', 'code']).default('web'),
+  focus: z.enum(['web', 'academic', 'technical', 'legal', 'writing', 'math', 'code']).default('web'),
   length: z.enum(['concise', 'balanced', 'detailed']).nullable().optional(),
   spaceId: z.string().nullable().optional(),
   rewrite: z.object({ turnId: z.string(), how: z.enum(['again', 'concise', 'detailed', 'complex', 'research']) }).optional(),
@@ -127,6 +128,19 @@ export async function POST(req: Request) {
             send('sources', turn.sources);
             if (turn.mode === 'research' && sources.length) { send('status', { text: 'Reading the top pages' }); await readPages(sources, 5, ctl.signal); }
           } catch (e) { console.warn('[search] retrieval failed', String((e as Error)?.message || e)); }
+        }
+
+        // 1a. The attached files, passage by passage: the ones that bear on the question are numbered after the web sources,
+        //     each with its page, slide or rows and a link that opens the file in the viewer at that passage, highlighted.
+        if (attRows.length) {
+          try {
+            const picks = selectFilePassages(attIds.map(id => attRows.find(r => r.id === id)).filter((r): r is NonNullable<typeof r> => !!r).map(r => ({ id: r.id, name: r.name, text: r.text, current: currentIds.has(r.id) })), turn.q, turn.mode === 'research' || isLookup(turn.q) ? 12 : 6);
+            if (picks.length) {
+              sources = [...sources, ...numberFilePassages(picks, sources.length, th.id, turn.id)];
+              turn.sources = sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url }));
+              send('sources', turn.sources);
+            }
+          } catch (e) { console.warn('[files] passages failed', String((e as Error)?.message || e)); }
         }
 
         // 1b. Institutional memory: passages from the person's own earlier answers and files that bear on this question,
