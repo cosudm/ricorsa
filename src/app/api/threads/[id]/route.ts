@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, truncate } from '@/lib/http';
 import { getThreadOwned, toClient } from '@/lib/threads';
@@ -35,6 +35,7 @@ export const DELETE = handle(async (_req: Request, ctx: Ctx) => {
   // Any file attached to this thread goes with it: its text and the stored copy. So does what was remembered from it.
   await deleteThreadAttachments(t.id);
   try { await deleteBrowseShots(user.id, t.turns); } catch (e) { console.warn('[browse] shots not removed', String((e as Error)?.message || e)); }
+  try { await db().delete(schema.browseSessions).where(and(eq(schema.browseSessions.threadId, t.id), eq(schema.browseSessions.userId, user.id))); } catch (e) { console.warn('[browse] session rows not removed', String((e as Error)?.message || e)); }
   try { await forgetThread(user.id, t.id); } catch (e) { console.warn('[memory] forget thread failed', String((e as Error)?.message || e)); }
   return json({ ok: true });
 });

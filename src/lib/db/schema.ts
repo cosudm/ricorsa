@@ -51,8 +51,16 @@ export const subscriptions = sqliteTable('subscriptions', {
 }, (t) => [index('subscriptions_user_idx').on(t.userId)]);
 
 /** One thing the browser did: the action, what it acted on, where it was afterwards, and the screenshot taken then. */
-export type BrowseStep = { n: number; action: 'open' | 'click' | 'type' | 'select' | 'scroll' | 'back' | 'read' | 'find'; detail: string; url: string; title: string; shot: boolean; at: number; error?: string };
-export type BrowseRecord = { steps: BrowseStep[]; actions: number; pages: number; /** Why the browser stopped before the model was done, when it did. */ stopped?: 'actions' | 'time' | 'aborted' };
+export type BrowseStep = { n: number; action: 'open' | 'click' | 'type' | 'select' | 'scroll' | 'back' | 'read' | 'find' | 'person' | 'handback'; detail: string; url: string; title: string; shot: boolean; at: number; error?: string };
+export type BrowseRecord = {
+  steps: BrowseStep[]; actions: number; pages: number;
+  /** Why the browser stopped before the model was done, when it did. */
+  stopped?: 'actions' | 'time' | 'aborted';
+  /** The page is still open after the answer, for the person to take over, until this time (milliseconds). */
+  live?: { until: number };
+  /** A follow-up that carried on from the page an earlier turn left open. */
+  resumedFrom?: string;
+};
 
 export type Turn = {
   id: string;
@@ -315,6 +323,46 @@ export const memories = sqliteTable('memories', {
   embedded: integer('embedded', { mode: 'boolean' }).notNull().default(false),
   createdAt: tsNow('created_at'),
 }, (t) => [index('memories_user_idx').on(t.userId, t.createdAt), index('memories_thread_idx').on(t.threadId), index('memories_file_idx').on(t.fileId)]);
+
+/**
+ * A browser Ricorsa left open after a browsing answer so the person can take it over, or hand it back to the model in a
+ * follow-up. `sessionId` is the browser session (never sent to the client); the row expires with the browser's own
+ * keep-alive and is closed when the person is done. `mode` says who has the page: the model, the person, or nobody.
+ */
+export type BrowseMode = 'model' | 'person' | 'closed';
+export const browseSessions = sqliteTable('browse_sessions', {
+  turnId: text('turn_id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  threadId: text('thread_id').notNull(),
+  sessionId: text('session_id').notNull(),
+  mode: text('mode').$type<BrowseMode>().notNull().default('model'),
+  url: text('url'),
+  title: text('title'),
+  /** Hosts the person visited while in control, so a sign-in there can be kept if they ask. */
+  hosts: text('hosts', { mode: 'json' }).$type<string[]>(),
+  /** Whether the person typed into a password field while in control (the cue to offer keeping the sign-in). */
+  signInSeen: integer('sign_in_seen', { mode: 'boolean' }).notNull().default(false),
+  personStartedAt: integer('person_started_at'),
+  personLastAt: integer('person_last_at'),
+  /** Minutes of the person's control already counted against the month (one action a minute). */
+  personMinutes: integer('person_minutes').notNull().default(0),
+  expiresAt: integer('expires_at').notNull(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+}, (t) => [index('browse_sessions_user_idx').on(t.userId, t.expiresAt)]);
+
+/** A sign-in the person chose to keep: the site's cookies, sealed, restored the next time Ricorsa opens that site for them. */
+export const browseSites = sqliteTable('browse_sites', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /** The registrable domain, such as acme.com; cookies for it and its subdomains are kept together. */
+  host: text('host').notNull(),
+  label: text('label'),
+  cookies: text('cookies').notNull(),
+  cookieCount: integer('cookie_count').notNull().default(0),
+  savedAt: integer('saved_at').notNull(),
+  lastUsedAt: integer('last_used_at'),
+}, (t) => [index('browse_sites_user_idx').on(t.userId, t.host)]);
 
 export const builds = sqliteTable('builds', {
   id: text('id').primaryKey(),

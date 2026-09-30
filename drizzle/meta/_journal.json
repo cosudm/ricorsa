@@ -113,6 +113,13 @@
       "when": 1790786717743,
       "tag": "0015_browser-actions",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1790795400631,
+      "tag": "0016_browser-sessions",
+      "breakpoints": true
     }
   ]
 }

@@ -1,12 +1,13 @@
 import '../globals.css'; // site styles load only on these pages; the app under /app has its own
 import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
-import { CancelButton, DeleteAccountButton } from '@/components/AccountActions';
+import { CancelButton, DeleteAccountButton, SignedInSites } from '@/components/AccountActions';
 import { currentUser } from '@/lib/session';
 import { planFor, statusGrants, annualSaving, ANNUAL_MONTHS_FREE, usd } from '@/lib/plans';
 import { readUsage, limitsFor } from '@/lib/usage';
 import { loadGraph } from '@/lib/graph';
 import { currentSubscription } from '@/lib/billing';
+import { rememberedSites } from '@/lib/browse-live';
 
 /** Months on a monthly plan before the Account page suggests paying yearly instead. */
 const SWITCH_NUDGE_MONTHS = 3;
@@ -17,7 +18,7 @@ export const dynamic = 'force-dynamic';
 export default async function Account() {
   const user = await currentUser();
   const plan = planFor(user.plan);
-  const [usage, graph, sub] = await Promise.all([readUsage(user.id), loadGraph(user.id), currentSubscription(user)]);
+  const [usage, graph, sub, sites] = await Promise.all([readUsage(user.id), loadGraph(user.id), currentSubscription(user), rememberedSites(user.id).catch(() => [])]);
   const active = statusGrants(user.subscriptionStatus);
   const granted = user.subscriptionStatus === 'TRIAL' || user.subscriptionStatus === 'LICENSED';
   const ended = user.subscriptionStatus === 'TRIAL_ENDED' || user.subscriptionStatus === 'LICENSE_ENDED';
@@ -71,6 +72,11 @@ export default async function Account() {
               <p>{Object.keys(graph.nodes).length} nodes from {graph.events} conversations. Learning is {graph.paused ? 'paused' : 'on'}.</p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><a className="btn" href="/app#/graph">Open the graph</a><a className="btn" href="/api/account/export">Export everything</a></div>
             </div>
+            {(plan.caps.browser === 'full' || sites.length > 0) && <div className="card">
+              <h3>Sites Ricorsa stays signed in to</h3>
+              <p>Sign-ins you chose to keep after taking over Ricorsa&apos;s browser. Each is sealed in your account and used only when you send Ricorsa to that site. Signing out here deletes it; the site itself is untouched.</p>
+              <SignedInSites sites={sites} />
+            </div>}
             <div className="card">
               <h3>Delete account</h3>
               <p>Removes your threads, Spaces, graph and usage history, and cancels any active subscription. This cannot be undone.</p>

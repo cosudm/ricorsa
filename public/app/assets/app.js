@@ -20,6 +20,7 @@ const ICONS = {
   arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
   pointer: '<path d="M6 3l12 8.5-5.5 1.2 3 5.8-2.4 1.2-3-5.8L6 18z"/>',
+  hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5V4.5a1.5 1.5 0 0 1 3 0v7M14 11.5V6.5a1.5 1.5 0 0 1 3 0V13"/><path d="M17 13v-1a1.5 1.5 0 0 1 3 0v3.5A5.5 5.5 0 0 1 14.5 21h-2a5.5 5.5 0 0 1-4.6-2.5L5 14.2a1.5 1.5 0 0 1 2.4-1.7L8 13.5"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
   thumbUp: '<path d="M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM7 10l4-7a2.5 2.5 0 0 1 2.5 2.5V9h5.2a2 2 0 0 1 2 2.3l-1.2 8a2 2 0 0 1-2 1.7H7"/>',
@@ -515,6 +516,10 @@ function menuItems(items, current) {
 function renderSidebar() {
   const sb = $('#sidebar');
   sb.classList.toggle('collapsed', state.ui.sidebar === 'collapsed');
+  const hidden = state.ui.sidebar === 'hidden';
+  sb.classList.toggle('hidden-side', hidden);
+  document.body.classList.toggle('side-hidden', hidden);
+  const openBtn = $('#sideOpenBtn'); if (openBtn) openBtn.hidden = !hidden;
   $$('.nav-item[data-route]', sb).forEach(a => {
     const r = a.dataset.route;
     const on = (state.route.name === r) || (r === 'spaces' && state.route.name === 'space');
@@ -548,9 +553,17 @@ function setupSidebar() {
   $$('[data-wordmark]').forEach(el => el.outerHTML = WORDMARK(21));
   $$('[data-icon]').forEach(el => { el.innerHTML = icon(el.dataset.icon, 18); });
   $('#collapseBtn').innerHTML = icon('panel', 17);
+  $('#collapseBtn').title = `Hide the sidebar (${isMac ? '⌘' : 'Ctrl'} \\)`; $('#collapseBtn').setAttribute('aria-label', 'Hide the sidebar');
   $('#kbdHint').textContent = isMac ? '⌘ K' : 'Ctrl K';
+  // The sidebar closes and reopens: the button in its corner hides it, a button at the top left of the page (or Ctrl \) brings it back.
+  if (state.ui.sidebar === 'collapsed') state.ui.sidebar = 'expanded';
+  const openBtn = document.createElement('button');
+  openBtn.type = 'button'; openBtn.id = 'sideOpenBtn'; openBtn.className = 'side-open'; openBtn.hidden = true;
+  openBtn.title = `Show the sidebar (${isMac ? '⌘' : 'Ctrl'} \\)`; openBtn.setAttribute('aria-label', 'Show the sidebar'); openBtn.innerHTML = icon('panel', 17);
+  $('#app').appendChild(openBtn);
+  openBtn.addEventListener('click', () => { state.ui.sidebar = 'expanded'; persistUi(); renderSidebar(); });
   $('#collapseBtn').addEventListener('click', () => {
-    state.ui.sidebar = state.ui.sidebar === 'collapsed' ? 'expanded' : 'collapsed';
+    state.ui.sidebar = 'hidden';
     persistUi(); renderSidebar();
   });
   $('#newThreadBtn').addEventListener('click', () => newThread());
@@ -860,6 +873,8 @@ const ERROR_COPY = {
   subscription_inactive: 'Your subscription is not active. Update it on the Account page.',
   browser_limit: 'You have used this month\u2019s browser actions on your plan.',
   browser_unavailable: 'Ricorsa\u2019s browser is not available right now. Try again in a little while, or ask without opening the site.',
+  browser_gone: 'That page has closed. Ask Ricorsa to open the site again.',
+  browser_busy: 'The page is busy for a moment. Try again.',
 };
 const BLOCKING = new Set([]);
 const PLAN_CODES = new Set(['daily_limit', 'monthly_limit', 'research_limit', 'upgrade_required', 'subscription_inactive', 'browser_limit']);
@@ -909,7 +924,7 @@ function applyParsed(turn) {
   if (p.learned) turn.learned = p.learned;
 }
 function makeTurn(q, o) {
-  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.browse && (o.tier || 'default') === 'quick' ? 'default' : (o.tier || 'default'), focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '', attachments: o.attachments || [], browse: !!o.browse, browser: null };
+  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.browse && (o.tier || 'default') === 'quick' ? 'default' : (o.tier || 'default'), focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '', attachments: o.attachments || [], browse: !!o.browse, browser: null, resumeTurnId: o.resumeTurnId || null };
 }
 /** Read an SSE response body and dispatch events. Resolves when the stream ends. */
 async function readSse(res, onEvent) {
@@ -935,7 +950,7 @@ async function runTurn(thread, turn, { rewrite } = {}) {
   const ctl = new AbortController();
   state.runs.set(thread.id, ctl);
   liveRender(thread, turn);
-  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, tier: turn.tier, focus: turn.focus, length: turn.length || state.settings.length, attachments: (turn.attachments || []).map(a => a.id).filter(Boolean), browse: !!turn.browse };
+  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, tier: turn.tier, focus: turn.focus, length: turn.length || state.settings.length, attachments: (turn.attachments || []).map(a => a.id).filter(Boolean), browse: !!turn.browse, resumeTurnId: turn.browse && turn.resumeTurnId ? turn.resumeTurnId : undefined };
   try {
     const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
     if (res.status === 401) { location.href = '/auth/login?returnTo=' + encodeURIComponent('/app#/thread/' + thread.id); return; }
@@ -1025,7 +1040,7 @@ function learnedSummary(L) {
 
 // ---------- Composer ----------
 function createComposer(o) {
-  const c = { mode: o.mode || state.settings.mode, tier: o.tier || state.settings.tier, focus: o.focus || state.settings.focus, files: [], browse: !!o.browse };
+  const c = { mode: o.mode || state.settings.mode, tier: o.tier || state.settings.tier, focus: o.focus || state.settings.focus, files: [], browse: !!o.browse, resume: null };
   const el = document.createElement('div');
   el.className = 'composer ' + (o.variant === 'compact' ? 'compact' : 'hero');
   el.innerHTML = `
@@ -1108,7 +1123,8 @@ function createComposer(o) {
     const attachments = c.files.filter(f => f.status === 'ready' && f.id).map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, chars: f.chars, stored: f.stored }));
     c.files = [];
     ta.value = ''; autosize(); paintAttach(); paintSend(); closePop();
-    o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, attachments, browse: c.browse });
+    const resumeTurnId = c.browse && c.resume ? c.resume : null; c.resume = null;
+    o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, attachments, browse: c.browse, resumeTurnId });
   };
   ta.addEventListener('input', () => { autosize(); paintSend(); if (o.onInput) o.onInput(ta.value); });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
@@ -1144,7 +1160,7 @@ function createComposer(o) {
   if (o.initial) { ta.value = o.initial; }
   paintChips(); paintAttach(); paintSend();
   requestAnimationFrame(autosize);
-  el._composer = { el, ta, refresh() { paintSend(); paintAttach(); }, set(v) { ta.value = v; autosize(); paintSend(); ta.focus(); ta.setSelectionRange(v.length, v.length); }, setBrowse(v) { c.browse = !!v; paintChips(); }, get mode() { return c.mode; }, get browse() { return c.browse; } };
+  el._composer = { el, ta, refresh() { paintSend(); paintAttach(); }, set(v) { ta.value = v; autosize(); paintSend(); ta.focus(); ta.setSelectionRange(v.length, v.length); }, setBrowse(v) { c.browse = !!v; paintChips(); }, setResume(turnId) { c.resume = turnId || null; if (turnId) { c.browse = true; paintChips(); } }, get mode() { return c.mode; }, get browse() { return c.browse; } };
   return el;
 }
 
@@ -1260,7 +1276,7 @@ function renderThread(id) {
   if (last && last.browse && last.status === 'running') openBrowsePane(thread, last);
   else if (state.browsePane && state.browsePane.threadId === thread.id) { const t = thread.turns.find(x => x.id === state.browsePane.turnId); if (t) paintBrowsePane(thread, t); }
   const comp = createComposer({ variant: 'compact', placeholder: 'Ask a follow-up', threadId: thread.id, mode: last ? last.mode : undefined, tier: last ? last.tier : undefined, focus: last ? last.focus : undefined, browse: !!(last && last.browse && canBrowse()),
-    onSubmit: ({ text, mode, tier, focus, attachments, browse }) => followUp(thread, text, { mode, tier, focus, attachments, browse }) });
+    onSubmit: ({ text, mode, tier, focus, attachments, browse, resumeTurnId }) => followUp(thread, text, { mode, tier, focus, attachments, browse, resumeTurnId }) });
   $('[data-dock]', main).appendChild(comp);
   $('[data-share]', main).addEventListener('click', async () => { const ok = await copyText(threadMarkdown(thread)); toast(ok ? 'Copied the thread as Markdown' : 'Could not copy', ok ? 'ok' : 'bad'); });
   $('[data-more]', main).addEventListener('click', e => threadMenu(e.currentTarget, thread));
@@ -1402,7 +1418,8 @@ function paintTurn(sec, thread, t) {
   if (t.browse) {
     const b = t.browser; const n = b ? (b.actions || 0) : 0; const pg = b ? (b.pages || 0) : 0;
     const stopped = b && b.stopped === 'actions' ? ' The actions available for one answer ran out.' : b && b.stopped === 'time' ? ' The time available for one answer ran out.' : b && b.stopped === 'aborted' ? ' Stopped.' : '';
-    noteHtml += `<div class="answer-note browse-note">${icon('globe', 14)}<span>${running ? (n ? `Working in the browser: ${n} action${n === 1 ? '' : 's'} so far` : 'Opening the browser') : n ? `Used the browser: ${n} action${n === 1 ? '' : 's'} across ${pg} page${pg === 1 ? '' : 's'}.${stopped}` : 'The browser was not needed.'}${b && b.steps && b.steps.length ? ` <button type="button" class="linkish" data-browse-show>Show</button>` : ''}</span></div>`;
+    const open = !running && b && b.live && b.live.until > Date.now();
+    noteHtml += `<div class="answer-note browse-note">${icon('globe', 14)}<span>${running ? (n ? `Working in the browser: ${n} action${n === 1 ? '' : 's'} so far` : 'Opening the browser') : n ? `Used the browser: ${n} action${n === 1 ? '' : 's'} across ${pg} page${pg === 1 ? '' : 's'}.${stopped}` : 'The browser was not needed.'}${open ? ' The page is still open, so you can take it over.' : ''}${b && b.steps && b.steps.length ? ` <button type="button" class="linkish" data-browse-show>${open ? 'Show' : 'Show'}</button>` : ''}</span></div>`;
   }
   if (t.status === 'done') { const files = (t.attachments || []).length, vault = (t.sources || []).filter(s => s.domain === 'VDRPros Vault').length, browsed = t.browse && t.browser ? (t.browser.pages || 0) : 0, web = (t.sources || []).length - vault - browsed; noteHtml += `<div class="answer-note">${icon('info', 14)}${browsed ? `Answered from ${browsed} page${browsed === 1 ? '' : 's'} Ricorsa opened in its browser${web > 0 ? ' and web sources retrieved when you asked' : ''}; the numbered citations open the pages.` : vault && web ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault and web sources retrieved when you asked.` : vault ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault; the numbered citations open the pages.` : files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.</div>`; }
   note.innerHTML = noteHtml;
@@ -1502,7 +1519,7 @@ function wireTurn(sec, thread, t) {
 }
 
 // ---------- Ricorsa's browser: the pane beside the thread where each step is shown as it happens ----------
-const STEP_ICON = { open: 'globe', click: 'pointer', type: 'edit', select: 'chevron', scroll: 'arrowUp', back: 'arrowLeft', read: 'book', find: 'search' };
+const STEP_ICON = { open: 'globe', click: 'pointer', type: 'edit', select: 'chevron', scroll: 'arrowUp', back: 'arrowLeft', read: 'book', find: 'search', person: 'hand', handback: 'arrowRight' };
 function ensureBrowsePane() {
   let pane = $('#browsePane');
   if (pane) return pane;
@@ -1513,21 +1530,170 @@ function ensureBrowsePane() {
       <span class="bp-ico">${icon('globe', 16)}</span>
       <div class="bp-title"><b>Ricorsa's browser</b><span data-bp-url title=""></span></div>
       <button type="button" class="btn sm" data-bp-stop hidden>${icon('stop', 13)}Stop</button>
+      <button type="button" class="btn sm primary" data-bp-take hidden title="Operate the page yourself: sign in, pass a step, look around; then hand it back to Ricorsa">${icon('hand', 13)}Take over</button>
+      <button type="button" class="btn sm primary" data-bp-handback hidden title="Give the page back to Ricorsa and tell it what to do next">${icon('arrowRight', 13)}Hand back</button>
+      <button type="button" class="btn sm" data-bp-done hidden title="Close the page">Done</button>
       <button type="button" class="icon-btn" data-bp-close aria-label="Close the browser pane" title="Close">${icon('x', 16)}</button>
+    </div>
+    <div class="bp-livebar" data-bp-livebar hidden>
+      <button type="button" class="icon-btn" data-bp-back aria-label="Back" title="Back">${icon('arrowLeft', 15)}</button>
+      <button type="button" class="icon-btn" data-bp-reload aria-label="Reload" title="Reload">${icon('refresh', 14)}</button>
+      <form class="bp-go" data-bp-goform><input type="text" data-bp-go placeholder="Go to an address" aria-label="Go to an address" autocomplete="off" spellcheck="false"><button type="button" class="btn sm" data-bp-gobtn>Go</button></form>
     </div>
     <div class="bp-shot" data-bp-shot>
       <img data-bp-img alt="What Ricorsa's browser shows after the selected step" hidden>
       <div class="bp-empty" data-bp-empty><span class="spinner"></span><span>Opening the browser</span></div>
       <span class="bp-live" data-bp-live hidden>Live</span>
+      <span class="bp-live you" data-bp-you hidden>You have the page</span>
     </div>
+    <div class="bp-hint" data-bp-hint hidden>Click, type and scroll on the picture. Your typing goes to the page only. A minute in control counts as one browser action.</div>
     <div class="bp-status" data-bp-status></div>
     <ol class="bp-steps" data-bp-steps aria-label="Steps"></ol>
-    <div class="bp-foot">Public websites only. Ricorsa never signs in and never fills passwords or card numbers; those stay yours.</div>`;
+    <div class="bp-foot">Public websites only. Ricorsa itself never signs in and never fills passwords or card numbers; when you take over, you can, and you decide whether a sign-in is kept.</div>`;
   $('#app').appendChild(pane);
   $('[data-bp-close]', pane).addEventListener('click', closeBrowsePane);
   $('[data-bp-stop]', pane).addEventListener('click', () => { const bp = state.browsePane; if (bp) stopRun(bp.threadId); });
-  $('[data-bp-steps]', pane).addEventListener('click', e => { const li = e.target.closest('[data-step]'); if (!li) return; const bp = state.browsePane; if (!bp) return; bp.selected = +li.dataset.step; bp.follow = false; const th = state.threadCache[bp.threadId]; const t = th && th.turns.find(x => x.id === bp.turnId); if (t) paintBrowsePane(th, t); });
+  $('[data-bp-steps]', pane).addEventListener('click', e => { const li = e.target.closest('[data-step]'); if (!li) return; const bp = state.browsePane; if (!bp || bp.live) return; bp.selected = +li.dataset.step; bp.follow = false; const th = state.threadCache[bp.threadId]; const t = th && th.turns.find(x => x.id === bp.turnId); if (t) paintBrowsePane(th, t); });
+  $('[data-bp-take]', pane).addEventListener('click', () => takeOver());
+  $('[data-bp-handback]', pane).addEventListener('click', () => endTakeOver('handback'));
+  $('[data-bp-done]', pane).addEventListener('click', () => endTakeOver('close'));
+  $('[data-bp-back]', pane).addEventListener('click', () => liveAct({ type: 'back' }));
+  $('[data-bp-reload]', pane).addEventListener('click', () => liveAct({ type: 'reload' }));
+  const goForm = $('[data-bp-goform]', pane), goInput = $('[data-bp-go]', pane);
+  const go = () => { const v = goInput.value.trim(); if (!v) return; liveAct({ type: 'nav', url: v }); goInput.blur(); };
+  goForm.addEventListener('submit', e => { e.preventDefault(); go(); });
+  $('[data-bp-gobtn]', pane).addEventListener('click', go);
+  // The picture is the page while the person has it: clicks, wheel and keys go through.
+  const img = $('[data-bp-img]', pane);
+  img.tabIndex = -1;
+  const rel = e => { const r = img.getBoundingClientRect(); return { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) }; };
+  img.addEventListener('click', e => { const bp = state.browsePane; if (!bp || !bp.live) return; e.preventDefault(); img.focus(); const p = rel(e); liveAct({ type: 'click', x: p.x, y: p.y }); });
+  img.addEventListener('dblclick', e => { const bp = state.browsePane; if (!bp || !bp.live) return; e.preventDefault(); const p = rel(e); liveAct({ type: 'click', x: p.x, y: p.y, double: true }); });
+  img.addEventListener('wheel', e => { const bp = state.browsePane; if (!bp || !bp.live) return; e.preventDefault(); const p = rel(e); liveScroll(p, e.deltaY); }, { passive: false });
+  img.addEventListener('keydown', e => { const bp = state.browsePane; if (!bp || !bp.live) return; liveKey(e); });
   return pane;
+}
+// ---- the person's turn at the page ----
+const LIVE_KEYS = { Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace', Delete: 'Delete', Escape: 'Escape', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown' };
+function liveState() { const bp = state.browsePane; return bp && bp.live ? bp.live : null; }
+async function takeApi(turnId, body) {
+  const res = await fetch('/api/browse/take/' + encodeURIComponent(turnId), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  let data = null; try { data = await res.json(); } catch {}
+  if (!res.ok) throw { status: res.status, code: (data && data.code) || 'error', message: (data && data.error) || ERROR_COPY.upstream_error };
+  return data;
+}
+function currentBrowseTurn() { const bp = state.browsePane; if (!bp) return null; const th = state.threadCache[bp.threadId]; const t = th && th.turns.find(x => x.id === bp.turnId); return t ? { thread: th, turn: t } : null; }
+async function takeOver() {
+  const bp = state.browsePane; const cur = currentBrowseTurn(); if (!bp || !cur || bp.live) return;
+  const pane = $('#browsePane'); const btn = $('[data-bp-take]', pane); btn.disabled = true;
+  try {
+    const frame = await takeApi(bp.turnId, { op: 'start' });
+    bp.live = { frame, busy: false, timer: null, buffer: '', flush: null, hosts: new Set(), signInSeen: !!frame.signInSeen, minutes: frame.minutes || 0 };
+    noteHost(frame.url);
+    paintBrowsePane(cur.thread, cur.turn);
+    schedulePoll();
+    setTimeout(() => { const img = $('[data-bp-img]', pane); if (img) img.focus(); }, 50);
+  } catch (e) { liveError(e); }
+  finally { btn.disabled = false; }
+}
+function noteHost(url) { const l = liveState(); if (!l || !url) return; try { const h = new URL(url).hostname.replace(/^www\./, ''); if (h) l.hosts.add(h); } catch {} }
+function schedulePoll() {
+  const l = liveState(); if (!l) return;
+  clearTimeout(l.timer);
+  l.timer = setTimeout(async () => {
+    const live = liveState(); if (!live) return;
+    if (live.busy || (live.queue && live.queue.length)) { schedulePoll(); return; }
+    const bp = state.browsePane;
+    live.busy = true;
+    try { const frame = await takeApi(bp.turnId, { op: 'frame' }); applyFrame(frame); }
+    catch (e) { if (e && (e.status === 410 || e.code === 'browser_gone')) { liveError(e); return; } }
+    finally { const l2 = liveState(); if (l2) { l2.busy = false; pumpLive(); } }
+    schedulePoll();
+  }, 1600);
+}
+function applyFrame(frame) {
+  const l = liveState(); if (!l || !frame) return;
+  l.frame = frame; if (frame.signInSeen) l.signInSeen = true; if (frame.minutes) l.minutes = frame.minutes; noteHost(frame.url);
+  const cur = currentBrowseTurn(); if (cur) paintBrowsePane(cur.thread, cur.turn);
+}
+/** Moves go to the page one at a time, in the order they were made; typed text waiting in the buffer goes ahead of any other move. */
+function liveAct(action) {
+  const l = liveState(); if (!l) return;
+  if (l.flush) { clearTimeout(l.flush); l.flush = null; }
+  l.queue = l.queue || [];
+  if (l.buffer && action.type !== 'type') { const text = l.buffer; l.buffer = ''; l.queue.push({ type: 'type', text }); }
+  l.queue.push(action);
+  pumpLive();
+}
+async function pumpLive() {
+  const l = liveState(); if (!l || l.busy || !l.queue || !l.queue.length) return;
+  const bp = state.browsePane; const action = l.queue.shift();
+  l.busy = true;
+  const cur = currentBrowseTurn(); if (cur) paintBrowsePane(cur.thread, cur.turn);
+  try { const frame = await takeApi(bp.turnId, { op: 'act', action }); applyFrame(frame); }
+  catch (e) {
+    if (e && e.code === 'browser_busy') { await new Promise(r => setTimeout(r, 700)); try { const frame = await takeApi(bp.turnId, { op: 'act', action }); applyFrame(frame); } catch (e2) { liveError(e2); } }
+    else liveError(e);
+  } finally { const l2 = liveState(); if (l2) { l2.busy = false; pumpLive(); } }
+}
+let scrollAcc = 0, scrollTimer = null, scrollPos = null;
+function liveScroll(p, dy) { scrollAcc += dy; scrollPos = p; clearTimeout(scrollTimer); scrollTimer = setTimeout(() => { const d = Math.max(-1200, Math.min(1200, Math.round(scrollAcc))); scrollAcc = 0; if (d) liveAct({ type: 'scroll', x: scrollPos.x, y: scrollPos.y, dy: d }); }, 140); }
+function liveKey(e) {
+  const l = liveState(); if (!l) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); liveAct({ type: 'select_all' }); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (LIVE_KEYS[e.key]) { e.preventDefault(); liveAct({ type: 'key', key: LIVE_KEYS[e.key] }); return; }
+  if (e.key.length === 1) {
+    e.preventDefault(); l.buffer += e.key;
+    clearTimeout(l.flush); l.flush = setTimeout(() => { const text = l.buffer; l.buffer = ''; l.flush = null; if (text) liveAct({ type: 'type', text }); }, 260);
+  }
+}
+function liveError(e) {
+  const msg = (e && e.message) || ERROR_COPY.upstream_error;
+  toast(msg, 'bad');
+  if (e && (e.status === 410 || e.code === 'browser_gone' || e.code === 'not_in_control')) {
+    const bp = state.browsePane; if (bp && bp.live) { clearTimeout(bp.live.timer); bp.live = null; }
+    const cur = currentBrowseTurn(); if (cur) { if (cur.turn.browser) delete cur.turn.browser.live; paintBrowsePane(cur.thread, cur.turn); paintTurnById(cur.thread, cur.turn); }
+  }
+}
+function paintTurnById(thread, turn) { $$(`[data-turn="${turn.id}"]`).forEach(sec => paintTurn(sec, thread, turn)); }
+async function endTakeOver(how) {
+  const bp = state.browsePane; const l = liveState(); const cur = currentBrowseTurn(); if (!bp || !l || !cur) return;
+  clearTimeout(l.timer); if (l.flush) { clearTimeout(l.flush); l.flush = null; }
+  // Whatever is still on its way to the page goes first; the queue drains before the page is handed over or closed.
+  if (l.buffer) { const text = l.buffer; l.buffer = ''; (l.queue = l.queue || []).push({ type: 'type', text }); }
+  for (let i = 0; i < 100 && ((l.queue && l.queue.length) || l.busy); i++) { pumpLive(); await new Promise(r => setTimeout(r, 150)); }
+  const hosts = [...l.hosts];
+  let remember = [];
+  if (l.signInSeen && hosts.length) remember = await askKeepSignIn(hosts);
+  const pane = $('#browsePane'); $$('[data-bp-handback], [data-bp-done]', pane).forEach(b => b.disabled = true);
+  try {
+    const r = await takeApi(bp.turnId, { op: 'end', how, remember });
+    bp.live = null;
+    // The steps the server recorded (took over, handed back, the closing picture) come back with the thread.
+    const fresh = await loadThread(cur.thread.id, true).catch(() => null);
+    const thread = fresh || cur.thread; const turn = thread.turns.find(x => x.id === bp.turnId) || cur.turn;
+    if (turn.browser) { if (r.until) turn.browser.live = { until: r.until }; else delete turn.browser.live; }
+    if (fresh && state.route.name === 'thread' && state.route.id === thread.id) { renderThread(thread.id); openBrowsePane(thread, turn); }
+    else { paintBrowsePane(thread, turn); paintTurnById(thread, turn); }
+    if (r.remembered && r.remembered.length) toast(`Ricorsa will stay signed in to ${r.remembered.join(', ')}`, 'ok');
+    if (how === 'handback') {
+      const comp = $('.dock .composer'); if (comp && comp._composer) { comp._composer.setResume(turn.id); comp._composer.set(comp._composer.ta.value.trim() || 'Carry on from where I left the page.'); }
+      toast('Tell Ricorsa what to do next, then send', 'ok');
+    } else toast('The page is closed', 'ok');
+  } catch (e) { liveError(e); }
+  finally { $$('[data-bp-handback], [data-bp-done]', pane).forEach(b => b.disabled = false); }
+}
+/** After a sign-in during a take-over: keep it for next time? Resolves with the hosts to keep. */
+function askKeepSignIn(hosts) {
+  return new Promise(resolve => {
+    let settled = false; const done = v => { if (!settled) { settled = true; resolve(v); } };
+    openModal(`<h2>${icon('globe', 20)}Stay signed in?</h2><p class="sub">You signed in on ${esc(hosts.length === 1 ? hosts[0] : hosts.join(', '))}. Ricorsa can keep that sign-in, sealed in your account, and use it the next time you send it to ${hosts.length === 1 ? 'that site' : 'those sites'}, so it works inside your account without asking you to sign in again. Nothing is kept unless you say so, and you can sign out any time from your Account page.</p><div class="modal-actions"><button type="button" class="btn" id="ksNo">Not now</button><button type="button" class="btn primary" id="ksYes">Keep the sign-in</button></div>`, {
+      onMount: ov => { $('#ksYes', ov).addEventListener('click', () => { closeModal(); done(hosts); }); $('#ksNo', ov).addEventListener('click', () => { closeModal(); done([]); }); }
+    });
+    // Closing the modal any other way means "not now".
+    const check = setInterval(() => { if (!$('#ksYes')) { clearInterval(check); done([]); } }, 400);
+  });
 }
 function openBrowsePane(thread, turn) {
   const pane = ensureBrowsePane();
@@ -1540,6 +1706,7 @@ function openBrowsePane(thread, turn) {
 function closeBrowsePane() {
   const pane = $('#browsePane'); if (pane) pane.hidden = true;
   document.body.classList.remove('browse-open');
+  const l = liveState(); if (l) { clearTimeout(l.timer); if (l.flush) clearTimeout(l.flush); }
   state.browsePane = null;
 }
 function paintBrowsePane(thread, turn) {
@@ -1551,6 +1718,26 @@ function paintBrowsePane(thread, turn) {
   const rec = turn.browser || { steps: [], actions: 0, pages: 0 };
   const steps = rec.steps || [];
   const shots = steps.filter(x => x.shot);
+  const live = bp.live;
+  const alive = !running && !live && rec.live && rec.live.until > Date.now();
+  pane.classList.toggle('in-control', !!live);
+  $('[data-bp-take]', pane).hidden = !alive;
+  $('[data-bp-handback]', pane).hidden = !live;
+  $('[data-bp-done]', pane).hidden = !live;
+  $('[data-bp-livebar]', pane).hidden = !live;
+  $('[data-bp-hint]', pane).hidden = !live;
+  $('[data-bp-you]', pane).hidden = !live;
+  if (live) {
+    const img = $('[data-bp-img]', pane), empty = $('[data-bp-empty]', pane);
+    if (live.frame && live.frame.image) { if (img.src !== live.frame.image) img.src = live.frame.image; img.hidden = false; empty.hidden = true; }
+    $('[data-bp-live]', pane).hidden = true; $('[data-bp-stop]', pane).hidden = true;
+    const urlEl = $('[data-bp-url]', pane); const f = live.frame || {};
+    urlEl.textContent = f.title ? `${f.title} · ${shortUrl(f.url)}` : shortUrl(f.url || ''); urlEl.title = f.url || '';
+    const goInput = $('[data-bp-go]', pane); if (goInput && document.activeElement !== goInput) goInput.value = f.url || '';
+    $('[data-bp-status]', pane).textContent = `You have the page${live.minutes ? ` · ${live.minutes} minute${live.minutes === 1 ? '' : 's'}` : ''}${live.busy ? ' · working' : ''}`;
+    $('[data-bp-steps]', pane).innerHTML = steps.map(st => `<li data-step="${st.n}" class="${st.error ? 'err' : ''}"><span class="n">${st.n}</span><span class="ico">${icon(STEP_ICON[st.action] || 'globe', 13)}</span><span class="d"><span class="a">${esc(st.detail || st.action)}</span>${st.title ? `<span class="t">${esc(st.title)}</span>` : ''}</span></li>`).join('');
+    return;
+  }
   if (bp.follow || !bp.selected || !steps.some(x => x.n === bp.selected)) bp.selected = shots.length ? shots[shots.length - 1].n : (steps.length ? steps[steps.length - 1].n : null);
   if (running) bp.follow = bp.follow !== false;
   const sel = steps.find(x => x.n === bp.selected) || steps[steps.length - 1] || null;
@@ -1569,7 +1756,7 @@ function paintBrowsePane(thread, turn) {
   const urlEl = $('[data-bp-url]', pane); const cur = sel || steps[steps.length - 1];
   urlEl.textContent = cur ? (cur.title ? `${cur.title} · ${shortUrl(cur.url)}` : shortUrl(cur.url)) : ''; urlEl.title = cur ? (cur.url || '') : '';
   const n = rec.actions || 0, pg = rec.pages || 0;
-  $('[data-bp-status]', pane).textContent = running ? `${n} action${n === 1 ? '' : 's'} so far${pg ? ` · ${pg} page${pg === 1 ? '' : 's'}` : ''}` : steps.length ? `${n} action${n === 1 ? '' : 's'} across ${pg} page${pg === 1 ? '' : 's'}${rec.stopped === 'actions' ? ' · stopped at the limit for one answer' : rec.stopped === 'time' ? ' · stopped at the time limit for one answer' : rec.stopped === 'aborted' ? ' · stopped' : ' · done'}` : '';
+  $('[data-bp-status]', pane).textContent = running ? `${n} action${n === 1 ? '' : 's'} so far${pg ? ` · ${pg} page${pg === 1 ? '' : 's'}` : ''}` : steps.length ? `${n} action${n === 1 ? '' : 's'} across ${pg} page${pg === 1 ? '' : 's'}${rec.stopped === 'actions' ? ' · stopped at the limit for one answer' : rec.stopped === 'time' ? ' · stopped at the time limit for one answer' : rec.stopped === 'aborted' ? ' · stopped' : ' · done'}${alive ? ` · the page is still open for ${Math.max(1, Math.round((rec.live.until - Date.now()) / 60000))} min` : ''}` : '';
   const list = $('[data-bp-steps]', pane);
   list.innerHTML = steps.map(st => `<li data-step="${st.n}" class="${sel && st.n === sel.n ? 'on' : ''}${st.error ? ' err' : ''}"><span class="n">${st.n}</span><span class="ico">${icon(STEP_ICON[st.action] || 'globe', 13)}</span><span class="d"><span class="a">${esc(st.detail || st.action)}</span>${st.title ? `<span class="t">${esc(st.title)}</span>` : ''}</span>${st.shot ? '' : '<span class="noshot" title="No picture for this step"></span>'}</li>`).join('');
   if (running && bp.follow) { const last = list.lastElementChild; if (last) last.scrollIntoView({ block: 'nearest' }); }
@@ -3189,6 +3376,7 @@ function init() {
   document.addEventListener('keydown', e => {
     const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '') || (e.target && e.target.isContentEditable);
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); newThread(); return; }
+    if ((e.metaKey || e.ctrlKey) && (e.key === '\\' || e.code === 'Backslash')) { e.preventDefault(); state.ui.sidebar = state.ui.sidebar === 'hidden' ? 'expanded' : 'hidden'; persistUi(); renderSidebar(); return; }
     if (e.key === 'Escape') { if (viewer) { closeFileViewer(); return; } closePop(); closeModal(); closeDrawer(); return; }
     if (viewer && !inField && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { viewerShow(viewer.index + (e.key === 'ArrowLeft' ? -1 : 1)); return; }
     if (e.key === '/' && !inField) { const ta = $('#main textarea'); if (ta) { e.preventDefault(); ta.focus(); } }

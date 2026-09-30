@@ -23,6 +23,7 @@ import { geocodePending } from '@/lib/geo';
 import { recall, remember, numberRecalled, backfillOnce, memoryEnabled } from '@/lib/memory';
 import { selectFilePassages, numberFilePassages, isLookup } from '@/lib/passages';
 import { BrowseSession, browserGuide, browserAvailable, MAX_ACTIONS_PER_ANSWER } from '@/lib/browse';
+import { resumableSession, registerLiveSession, closeOtherSessions, rememberedSites } from '@/lib/browse-live';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -40,6 +41,8 @@ const Body = z.object({
   attachments: z.array(z.string().max(60)).max(20).optional(),
   /** Open the site and work it in Ricorsa's browser while the person watches (Professional and Enterprise). */
   browse: z.boolean().optional(),
+  /** Carry on from the page an earlier turn of this thread left open (after the person took it over and handed it back). */
+  resumeTurnId: z.string().max(60).optional(),
 });
 
 /** Whether the question names a website to open, so the web need not be searched first. */
@@ -112,7 +115,16 @@ export async function POST(req: Request) {
       const send = (event: string, data: unknown) => { try { controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch {} };
       let raw = '';
       let browse: BrowseSession | null = null;
-      const finish = async () => { if (browse) { try { await browse.close(); } catch {} } try { await saveTurns(th, turns); } catch (e) { console.error('save failed', e); } try { controller.close(); } catch {} };
+      let resumedFrom: string | null = null;
+      // A browsing answer leaves its page open for a few minutes, for the person to take over or a follow-up to carry on from.
+      const leavePage = async () => {
+        const b = browse; if (!b) return; browse = null;
+        try {
+          const live = b.hasPage ? await b.release() : (await b.close(), null);
+          if (live && turn.browser) { const until = await registerLiveSession({ userId: user.id, threadId: th.id, turnId: turn.id, sessionId: live.sessionId, url: live.url, title: live.title, replaces: resumedFrom }); turn.browser.live = { until }; }
+        } catch (e) { console.warn('[browse] could not leave the page open', String((e as Error)?.message || e).slice(0, 160)); try { await b.close(); } catch {} }
+      };
+      const finish = async () => { await leavePage(); try { await saveTurns(th, turns); } catch (e) { console.error('save failed', e); } try { controller.close(); } catch {} };
       try {
         send('meta', { threadId: th.id, turnId: turn.id, title: th.title });
 
@@ -189,9 +201,18 @@ export async function POST(req: Request) {
         if (turn.mode !== 'research') { try { consoles = `${CONSOLE_GUIDE}\n\n${await consoleContext(user.id, { canBuild: user.admin || planFor(user.plan).caps.discover === 'full' })}`; } catch (e) { console.warn('console context unavailable', e); } }
         // The browser, when asked for: the model gets its tools, every page it shows becomes a numbered source, and each
         // step reaches the person as it happens (the screenshot is stored before the event goes out).
+        let resumeInfo: { url: string; title: string } | null = null;
+        let signedIn: string[] = [];
         if (turn.browse) {
+          // Carry on from the page the person handed back, when it is still open; otherwise any other open page of theirs is closed first.
+          const prior = body.resumeTurnId && !body.rewrite ? await resumableSession(user.id, body.resumeTurnId).catch(() => null) : null;
+          if (prior) { resumedFrom = prior.turnId; resumeInfo = { url: prior.url || '', title: prior.title || '' }; }
+          try { await closeOtherSessions(user.id, prior ? prior.turnId : null); } catch (e) { console.warn('[browse] other pages not closed', String((e as Error)?.message || e).slice(0, 120)); }
+          try { signedIn = (await rememberedSites(user.id)).map(s => s.host); } catch { signedIn = []; }
           browse = new BrowseSession({
             userId: user.id, turnId: turn.id, maxActions: browseCap, signal: ctl.signal,
+            resume: prior ? { sessionId: prior.sessionId, url: prior.url || '', title: prior.title || '', turnId: prior.turnId } : undefined,
+            rememberedHosts: signedIn,
             onStep: (step, rec) => { turn.browser = rec; send('browser', { step, actions: rec.actions, pages: rec.pages, stopped: rec.stopped || null }); },
             onPage: ({ url, title }) => {
               const had = sources.find(s => s.url === url); if (had) return had.n;
@@ -204,7 +225,7 @@ export async function POST(req: Request) {
             },
           });
         }
-        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp, space ? { id: space.id, name: space.name } : null), files: attached.map(a => a.name), consoles, browser: browse ? browserGuide({ maxActions: browseCap }) : undefined }));
+        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp, space ? { id: space.id, name: space.name } : null), files: attached.map(a => a.name), consoles, browser: browse ? browserGuide({ maxActions: browseCap, resume: resumeInfo, signedIn }) : undefined }));
         const messages = buildMessages(history, turn.q, sourcesBlock(sources), fileText);
         turn.tools = [];
 
@@ -247,12 +268,13 @@ export async function POST(req: Request) {
         turn.answer = p.answer; turn.related = p.related; turn.learned = p.learned; turn.truncated = result.truncated; turn.tierApplied = turn.tier; turn.model = result.model;
         turn.usage = { in: result.usage.in, out: result.usage.out, cacheRead: result.usage.cacheRead, searches: result.usage.searches };
         turn.status = 'done';
-        if (browse) turn.browser = browse.record();
+        const browserActions = browse ? browse.actions : 0;
+        if (browse) { turn.browser = browse.record(); await leavePage(); }
 
         // 4. The loop: learn, then meter
         let touched: ReturnType<typeof mergeLearned> = null;
         if (turn.learned) { try { touched = mergeLearned(graph, turn, th.id, { ideaId: th.origin?.ideaId }); if (touched) await saveGraph(user.id, graph); } catch (e) { console.warn('learn failed', e); } }
-        await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, browserActions: browse ? browse.actions : 0, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches, result.model, result.usage.cacheWrite) });
+        await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, browserActions, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches, result.model, result.usage.cacheWrite) });
         send('done', { turn, graphEvents: graph.events });
         // 5. After the answer is on screen: put the places this turn named on the map (the geocoder is slow and polite).
         if (touched && touched.some(n => n.place && !n.geo)) { try { if (await geocodePending(graph)) await saveGraph(user.id, graph); } catch (e) { console.warn('[geo] failed', e); } }
@@ -267,8 +289,8 @@ export async function POST(req: Request) {
       } catch (e) {
         const err = e as { name?: string };
         // Whatever ended the answer, the actions the browser took were taken: they are kept on the turn and counted.
-        if (browse) { if (!browse.stopped && (err?.name === 'AbortError' || ctl.signal.aborted)) browse.stopped = 'aborted'; turn.browser = browse.record(); }
         const browserActions = browse ? browse.actions : 0;
+        if (browse) { if (!browse.stopped && (err?.name === 'AbortError' || ctl.signal.aborted)) browse.stopped = 'aborted'; turn.browser = browse.record(); await leavePage(); }
         if (err?.name === 'AbortError' || ctl.signal.aborted) {
           const p = parseStream(raw); turn.answer = p.answer; turn.related = p.related; turn.status = 'stopped';
           if (raw.length > 200 || browserActions) await recordUsage(user.id, { questions: raw.length > 200 ? 1 : 0, browserActions });
