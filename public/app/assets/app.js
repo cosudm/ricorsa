@@ -1554,7 +1554,9 @@ function ensureBrowsePane() {
   $('[data-bp-close]', pane).addEventListener('click', closeBrowsePane);
   $('[data-bp-stop]', pane).addEventListener('click', () => { const bp = state.browsePane; if (bp) stopRun(bp.threadId); });
   $('[data-bp-steps]', pane).addEventListener('click', e => { const li = e.target.closest('[data-step]'); if (!li) return; const bp = state.browsePane; if (!bp || bp.live) return; bp.selected = +li.dataset.step; bp.follow = false; const th = state.threadCache[bp.threadId]; const t = th && th.turns.find(x => x.id === bp.turnId); if (t) paintBrowsePane(th, t); });
-  $('[data-bp-take]', pane).addEventListener('click', () => takeOver());
+  $('[data-bp-take]', pane).addEventListener('click', () => takeOverNow());
+  // Clicking the picture is the natural way in: while Ricorsa works or while the page waits, a click takes it over.
+  $('[data-bp-shot]', pane).addEventListener('click', e => { const bp = state.browsePane; if (!bp || bp.live) return; if (!$('[data-bp-shot]', pane).classList.contains('can-take')) return; e.preventDefault(); takeOverNow(); });
   $('[data-bp-handback]', pane).addEventListener('click', () => endTakeOver('handback'));
   $('[data-bp-done]', pane).addEventListener('click', () => endTakeOver('close'));
   $('[data-bp-back]', pane).addEventListener('click', () => liveAct({ type: 'back' }));
@@ -1583,6 +1585,38 @@ async function takeApi(turnId, body) {
   return data;
 }
 function currentBrowseTurn() { const bp = state.browsePane; if (!bp) return null; const th = state.threadCache[bp.threadId]; const t = th && th.turns.find(x => x.id === bp.turnId); return t ? { thread: th, turn: t } : null; }
+/**
+ * Take the page now, whatever Ricorsa is doing. While an answer is running the run is stopped first (the server lets
+ * go of the page as it stops), the turn is fetched back until it says the page is open, and then the take-over starts.
+ */
+async function takeOverNow() {
+  const bp = state.browsePane; const cur = currentBrowseTurn(); if (!bp || !cur || bp.live || bp.pendingTakeover) return;
+  if (cur.turn.status !== 'running') { await takeOver(); return; }
+  bp.pendingTakeover = true;
+  const pane = $('#browsePane'); const btn = $('[data-bp-take]', pane); if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner tiny"></span>Taking over'; }
+  stopRun(bp.threadId);
+  try {
+    for (let i = 0; i < 14; i++) {
+      await new Promise(r => setTimeout(r, i === 0 ? 1200 : 1000));
+      const bp2 = state.browsePane; if (!bp2 || bp2.threadId !== bp.threadId) return;
+      const fresh = await loadThread(bp.threadId, true).catch(() => null); if (!fresh) continue;
+      const t = fresh.turns.find(x => x.id === bp.turnId) || fresh.turns[fresh.turns.length - 1];
+      if (t && t.status !== 'running' && t.browser && t.browser.live && t.browser.live.until > Date.now()) {
+        bp.pendingTakeover = false; bp.turnId = t.id;
+        if (state.route.name === 'thread' && state.route.id === fresh.id) renderThread(fresh.id);
+        openBrowsePane(fresh, t);
+        await takeOver();
+        return;
+      }
+      if (t && t.status !== 'running' && t.status !== 'pending' && !(t.browser && t.browser.live) && i >= 2) break;
+    }
+    toast('The page could not be kept open. Ask again to reopen it.', 'bad');
+  } finally {
+    bp.pendingTakeover = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = icon('hand', 13) + 'Take over'; }
+    const c = currentBrowseTurn(); if (c) paintBrowsePane(c.thread, c.turn);
+  }
+}
 async function takeOver() {
   const bp = state.browsePane; const cur = currentBrowseTurn(); if (!bp || !cur || bp.live) return;
   const pane = $('#browsePane'); const btn = $('[data-bp-take]', pane); btn.disabled = true;
@@ -1590,6 +1624,8 @@ async function takeOver() {
     const frame = await takeApi(bp.turnId, { op: 'start' });
     bp.live = { frame, busy: false, timer: null, buffer: '', flush: null, hosts: new Set(), signInSeen: !!frame.signInSeen, minutes: frame.minutes || 0 };
     noteHost(frame.url);
+    // The server wrote "You took over the page" on the turn; pick it up without replacing the objects the view holds.
+    try { const r = await api('/api/threads/' + encodeURIComponent(bp.threadId)); const t = r.thread.turns.find(x => x.id === bp.turnId); if (t && t.browser && cur.turn.browser) cur.turn.browser.steps = t.browser.steps; } catch {}
     paintBrowsePane(cur.thread, cur.turn);
     schedulePoll();
     setTimeout(() => { const img = $('[data-bp-img]', pane); if (img) img.focus(); }, 50);
@@ -1721,7 +1757,10 @@ function paintBrowsePane(thread, turn) {
   const live = bp.live;
   const alive = !running && !live && rec.live && rec.live.until > Date.now();
   pane.classList.toggle('in-control', !!live);
-  $('[data-bp-take]', pane).hidden = !alive;
+  // Take over is offered while Ricorsa works (the run is stopped first) and while the page waits afterwards.
+  const canTake = !live && (alive || (running && turn.browse && steps.length > 0));
+  $('[data-bp-take]', pane).hidden = !canTake;
+  $('[data-bp-shot]', pane).classList.toggle('can-take', canTake && !bp.pendingTakeover);
   $('[data-bp-handback]', pane).hidden = !live;
   $('[data-bp-done]', pane).hidden = !live;
   $('[data-bp-livebar]', pane).hidden = !live;
