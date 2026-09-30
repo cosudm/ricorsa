@@ -10,12 +10,12 @@ export const BILLING_CYCLES: BillingCycle[] = ['monthly', 'annual'];
 /** The keys in use before September 2026; rows and grants stored under them resolve to the plans that replaced them. */
 export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', team: 'professional' };
 
-export type Plan = { key: PlanKey; name: string; priceUsd: number; priceUsdYear: number; questionsPerDay: number; questionsPerMonth: number; researchPerMonth: number; buildsPerMonth: number; ideaSetsPerMonth: number };
+export type Plan = { key: PlanKey; name: string; priceUsd: number; priceUsdYear: number; questionsPerDay: number; questionsPerMonth: number; researchPerMonth: number; buildsPerMonth: number; ideaSetsPerMonth: number; browserActionsPerMonth: number };
 export const PLANS: Record<PlanKey, Plan> = {
-  free: { key: 'free', name: 'Free', priceUsd: 0, priceUsdYear: 0, questionsPerDay: 10, questionsPerMonth: 150, researchPerMonth: 0, buildsPerMonth: 0, ideaSetsPerMonth: 0 },
-  essentials: { key: 'essentials', name: 'Essentials', priceUsd: 45, priceUsdYear: 450, questionsPerDay: 300, questionsPerMonth: 1500, researchPerMonth: 40, buildsPerMonth: 0, ideaSetsPerMonth: 0 },
-  professional: { key: 'professional', name: 'Professional', priceUsd: 79, priceUsdYear: 790, questionsPerDay: 1000, questionsPerMonth: 5000, researchPerMonth: 150, buildsPerMonth: 30, ideaSetsPerMonth: 60 },
-  enterprise: { key: 'enterprise', name: 'Enterprise', priceUsd: 129, priceUsdYear: 1290, questionsPerDay: 3000, questionsPerMonth: 15000, researchPerMonth: 500, buildsPerMonth: 100, ideaSetsPerMonth: 200 },
+  free: { key: 'free', name: 'Free', priceUsd: 0, priceUsdYear: 0, questionsPerDay: 10, questionsPerMonth: 150, researchPerMonth: 0, buildsPerMonth: 0, ideaSetsPerMonth: 0, browserActionsPerMonth: 0 },
+  essentials: { key: 'essentials', name: 'Essentials', priceUsd: 45, priceUsdYear: 450, questionsPerDay: 300, questionsPerMonth: 1500, researchPerMonth: 40, buildsPerMonth: 0, ideaSetsPerMonth: 0, browserActionsPerMonth: 0 },
+  professional: { key: 'professional', name: 'Professional', priceUsd: 79, priceUsdYear: 790, questionsPerDay: 1000, questionsPerMonth: 5000, researchPerMonth: 150, buildsPerMonth: 30, ideaSetsPerMonth: 60, browserActionsPerMonth: 300 },
+  enterprise: { key: 'enterprise', name: 'Enterprise', priceUsd: 129, priceUsdYear: 1290, questionsPerDay: 3000, questionsPerMonth: 15000, researchPerMonth: 500, buildsPerMonth: 100, ideaSetsPerMonth: 200, browserActionsPerMonth: 1000 },
 };
 export const PLAN_KEYS: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
 export const PAID_PLAN_KEYS: PlanKey[] = ['essentials', 'professional', 'enterprise'];

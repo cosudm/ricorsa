@@ -10,7 +10,7 @@ const ts = (name: string) => integer(name, { mode: 'timestamp_ms' });
 const tsNow = (name: string) => ts(name).notNull().default(sql`(strftime('%s','now') * 1000)`).$defaultFn(now);
 
 /** Per-account allowances the console may set above the plan's, with who set them and why (operator information). */
-export type Allowance = { buildsPerMonth?: number; ideaSetsPerMonth?: number; questionsPerMonth?: number; questionsPerDay?: number; researchPerMonth?: number; note?: string; setBy?: string; setAt?: number };
+export type Allowance = { buildsPerMonth?: number; ideaSetsPerMonth?: number; questionsPerMonth?: number; questionsPerDay?: number; researchPerMonth?: number; browserActionsPerMonth?: number; note?: string; setBy?: string; setAt?: number };
 
 /** One row per signed-in person. `id` is the Auth0 subject (`sub`). */
 export const users = sqliteTable('users', {
@@ -50,6 +50,10 @@ export const subscriptions = sqliteTable('subscriptions', {
   updatedAt: tsNow('updated_at'),
 }, (t) => [index('subscriptions_user_idx').on(t.userId)]);
 
+/** One thing the browser did: the action, what it acted on, where it was afterwards, and the screenshot taken then. */
+export type BrowseStep = { n: number; action: 'open' | 'click' | 'type' | 'select' | 'scroll' | 'back' | 'read' | 'find'; detail: string; url: string; title: string; shot: boolean; at: number; error?: string };
+export type BrowseRecord = { steps: BrowseStep[]; actions: number; pages: number; /** Why the browser stopped before the model was done, when it did. */ stopped?: 'actions' | 'time' | 'aborted' };
+
 export type Turn = {
   id: string;
   q: string;
@@ -72,6 +76,10 @@ export type Turn = {
   usage?: { in: number; out: number; cacheRead?: number; searches?: number };
   /** Connector tools the model called while answering (server name, tool name, whether the call failed). */
   tools?: { server: string; name: string; error?: boolean }[];
+  /** Whether the person asked Ricorsa to open the site and work it in its browser for this question. */
+  browse?: boolean;
+  /** What the browser did for this answer: every step with the page it was on and a screenshot after it. */
+  browser?: BrowseRecord;
   /** Provenance hash for this turn: chained from the thread's origin and the previous turn. */
   lineage?: string;
   /** Files the person attached to this question (the extracted text lives in the attachments table). */
@@ -151,6 +159,8 @@ export const usage = sqliteTable('usage', {
   builds: integer('builds').notNull().default(0),
   /** Discover idea sets generated from the graph (a cached set served again does not count). */
   ideas: integer('ideas').notNull().default(0),
+  /** Actions Ricorsa's browser took on websites for the person (open, click, type, and so on). */
+  browserActions: integer('browser_actions').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.userId, t.period] })]);
 
 /** Discover picks are generated once per category per day (per person when drawn from their graph). */

@@ -100,7 +100,7 @@ export async function accountDetail(userId: string) {
     createdAt: user.createdAt.getTime(), lastSeenAt: user.lastSeenAt.getTime(),
     usage: { today: pick(dayPeriod()), month: pick(monthPeriod()) },
     /** The plan's monthly ceilings and the account's effective ones (raised where the console said so). */
-    limits: { plan: { questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, buildsPerMonth: plan.buildsPerMonth, ideaSetsPerMonth: plan.ideaSetsPerMonth }, effective: effectiveLimits(plan.key, user.allowance) },
+    limits: { plan: { questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, buildsPerMonth: plan.buildsPerMonth, ideaSetsPerMonth: plan.ideaSetsPerMonth, browserActionsPerMonth: plan.browserActionsPerMonth }, effective: effectiveLimits(plan.key, user.allowance) },
     allowance: user.allowance || null,
     money: { mrrCents, cost30Micros: c30, marginCents: paying ? mrrCents - Math.round(c30 / 10000) : null },
     counts: { threads: threads[0]?.n || 0, builds: builds[0]?.n || 0, spaces: spaces[0]?.n || 0 },
@@ -112,7 +112,7 @@ export async function accountDetail(userId: string) {
 export function effectiveLimits(plan: PlanKey, allowance: RAllowance | null | undefined) {
   const p = planFor(plan); const a = allowance || {};
   const pick = (mine: number | undefined, base: number) => (typeof mine === 'number' && mine >= 0 ? mine : base);
-  return { questionsPerDay: pick(a.questionsPerDay, p.questionsPerDay), questionsPerMonth: pick(a.questionsPerMonth, p.questionsPerMonth), researchPerMonth: pick(a.researchPerMonth, p.researchPerMonth), buildsPerMonth: pick(a.buildsPerMonth, p.buildsPerMonth), ideaSetsPerMonth: pick(a.ideaSetsPerMonth, p.ideaSetsPerMonth) };
+  return { questionsPerDay: pick(a.questionsPerDay, p.questionsPerDay), questionsPerMonth: pick(a.questionsPerMonth, p.questionsPerMonth), researchPerMonth: pick(a.researchPerMonth, p.researchPerMonth), buildsPerMonth: pick(a.buildsPerMonth, p.buildsPerMonth), ideaSetsPerMonth: pick(a.ideaSetsPerMonth, p.ideaSetsPerMonth), browserActionsPerMonth: pick(a.browserActionsPerMonth, p.browserActionsPerMonth) };
 }
 
 /**
@@ -146,7 +146,7 @@ export async function setAllowance(userId: string, input: Partial<RAllowance> & 
   if (!input.clear) {
     const p = planFor(user.plan);
     const merged: RAllowance = { ...(user.allowance || {}) };
-    for (const k of ['buildsPerMonth', 'ideaSetsPerMonth', 'questionsPerMonth', 'questionsPerDay', 'researchPerMonth'] as const) {
+    for (const k of ['buildsPerMonth', 'ideaSetsPerMonth', 'questionsPerMonth', 'questionsPerDay', 'researchPerMonth', 'browserActionsPerMonth'] as const) {
       const v = input[k];
       if (typeof v === 'number') { if (v === p[k]) delete merged[k]; else merged[k] = v; }
     }
@@ -237,7 +237,7 @@ export async function cohortStats(): Promise<{ cohorts: Cohort[]; totals: { acco
 export type TrueupCandidate = {
   userId: string; email: string | null; name: string | null; plan: PlanKey; billingCycle: BillingCycle; period: string; customerId: string | null;
   /** Each unit the account used beyond its plan's monthly allowance this period (allowances raised by the console count as the plan's for the true-up, since the raise is what is being paid for). */
-  overage: Array<{ key: 'builds' | 'ideas' | 'questions' | 'research'; label: string; used: number; allowance: number; over: number }>;
+  overage: Array<{ key: 'builds' | 'ideas' | 'questions' | 'research' | 'browser'; label: string; used: number; allowance: number; over: number }>;
   /** Whether a true-up invoice for this account and period has already been drafted. */
   invoiced: boolean;
 };
@@ -266,6 +266,7 @@ export async function trueupCandidates(period = new Date().toISOString().slice(0
     add('ideas', 'Discover idea sets', us.ideas, plan.ideaSetsPerMonth);
     add('questions', 'questions', us.questions, plan.questionsPerMonth);
     add('research', 'Research reports', us.research, plan.researchPerMonth);
+    add('browser', 'browser actions', us.browserActions || 0, plan.browserActionsPerMonth);
     if (!over.length) continue;
     const customerId = links.find(l => l.ricorsaUserId === a.id)?.id || null;
     out.push({ userId: a.id, email: a.email, name: a.name, plan: plan.key, billingCycle: 'annual', period, customerId, overage: over, invoiced: !!customerId && drafted.some(d => d.customerId === customerId) });

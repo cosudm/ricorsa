@@ -201,6 +201,19 @@ export type SearchOpts = { maxUses: number; allowedDomains?: string[] };
 export type ToolCall = { server: string; name: string; error?: boolean };
 /** A connector offered to the model as tools; Ricorsa calls the MCP server when the model asks. */
 export type McpServerSpec = { name: string; label: string; url: string; token: string | null; allowedTools: string[] | null; tools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> };
+/** A tool result as the model reads it: text, whether the call failed, and any structured data the caller may use. */
+export type ToolOutcome = { text: string; isError: boolean; structured?: unknown };
+/**
+ * Tools Ricorsa runs itself, in process (its browser), offered to the model beside the connectors' tools. `name` is
+ * what a ToolCall reports as the server; each tool's name is used as the function name the model sees.
+ */
+export type LocalToolSet = {
+  name: string; label: string;
+  tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
+  call: (tool: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<ToolOutcome>;
+  /** The status line shown while a call runs; by default "Using <label>: <tool>". */
+  status?: (tool: string, args: Record<string, unknown>) => string;
+};
 export type StreamResult = {
   text: string; truncated: boolean; model: string; sources: Source[];
   usage: { in: number; out: number; cacheRead: number; cacheWrite: number; searches: number };
@@ -234,13 +247,22 @@ function fnName(server: string, tool: string, taken: Set<string>): string {
   taken.add(out); return out;
 }
 
-function toolsFor(mcp: McpServerSpec[] | undefined): { tools: FunctionTool[]; lookup: Map<string, { spec: McpServerSpec; tool: string }> } {
-  const tools: FunctionTool[] = []; const lookup = new Map<string, { spec: McpServerSpec; tool: string }>(); const taken = new Set<string>();
+type ToolTarget = { kind: 'mcp'; spec: McpServerSpec; tool: string } | { kind: 'local'; set: LocalToolSet; tool: string };
+function toolsFor(mcp: McpServerSpec[] | undefined, local: LocalToolSet[] | undefined): { tools: FunctionTool[]; lookup: Map<string, ToolTarget> } {
+  const tools: FunctionTool[] = []; const lookup = new Map<string, ToolTarget>(); const taken = new Set<string>();
+  // Ricorsa's own tools first, under their plain names, so the model addresses them as written in its guide.
+  for (const set of local || []) {
+    for (const t of set.tools) {
+      const name = taken.has(t.name) ? fnName(set.name, t.name, taken) : (taken.add(t.name), t.name);
+      lookup.set(name, { kind: 'local', set, tool: t.name });
+      tools.push({ type: 'function', function: { name, description: t.description.slice(0, 1000), parameters: t.parameters } });
+    }
+  }
   for (const spec of mcp || []) {
     for (const t of spec.tools || []) {
       if (spec.allowedTools && !spec.allowedTools.includes(t.name)) continue;
       const name = fnName(spec.name, t.name, taken);
-      lookup.set(name, { spec, tool: t.name });
+      lookup.set(name, { kind: 'mcp', spec, tool: t.name });
       const params = t.inputSchema && typeof t.inputSchema === 'object' && t.inputSchema.type ? t.inputSchema : { type: 'object', properties: {} };
       tools.push({ type: 'function', function: { name, description: `${spec.label}: ${t.description || t.name}`.slice(0, 1000), parameters: params } });
       if (tools.length >= 96) break;
@@ -259,6 +281,10 @@ export async function streamAnswer(opts: {
   tier: Tier; system: SystemBlock[]; messages: Msg[]; maxTokens: number; signal?: AbortSignal;
   search?: SearchOpts | null;
   mcp?: McpServerSpec[] | null;
+  /** Tools Ricorsa runs itself (its browser), beside the connectors' tools. */
+  local?: LocalToolSet[] | null;
+  /** How many rounds of tool calls one answer may take; the default suits connectors, a browsing answer needs more. */
+  maxToolRounds?: number;
   temperature?: number;
   onText: (delta: string) => void;
   /** Each piece of the model's reasoning as it thinks (models that stream it); for progress, never shown as the answer. */
@@ -278,11 +304,12 @@ export async function streamAnswer(opts: {
   opts.onModel?.(model, model !== wanted ? { wanted, why: whyNot(wanted, opts.tier) } : undefined);
   const systemText = opts.system.map(b => b.text).join('\n\n');
   const convo: ChatMessage[] = [{ role: 'system', content: systemText }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
-  const { tools, lookup } = toolsFor(opts.mcp || undefined);
+  const { tools, lookup } = toolsFor(opts.mcp || undefined, opts.local || undefined);
   const labelOf = new Map((opts.mcp || []).map(m => [m.name, m.label]));
+  const maxRounds = Math.max(1, opts.maxToolRounds || MAX_TOOL_ROUNDS);
   const usage = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0, searches: 0 };
   const toolCalls: ToolCall[] = [];
-  let out = ''; let truncated = false; let rounds = 0; let continuations = 0;
+  let out = ''; let truncated = false; let rounds = 0; let continuations = 0; let budgetClosed = false;
   const tried: string[] = [model];
 
   let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let effort = effortFor(opts.tier, model); let noPartial = provider.id !== 'moonshot'; let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens; let overloadRetries = 0;
@@ -293,6 +320,7 @@ export async function streamAnswer(opts: {
     opts.onModel?.(next, fallback);
   };
   for (;;) {
+    if (opts.local?.length && rounds > 4) compactToolHistory(convo, 4, 1200);
     let res: ChatOut;
     try {
       res = provider.kind === 'anthropic'
@@ -340,24 +368,34 @@ export async function streamAnswer(opts: {
     usage.in += res.usage.in; usage.out += res.usage.out; usage.cacheRead += res.usage.cacheRead; usage.cacheWrite += res.usage.cacheWrite || 0;
     console.log('[answer]', JSON.stringify({ model, finish: res.finish, tools: res.toolCalls.length, chars: out.length, in: res.usage.in, out: res.usage.out, cacheRead: res.usage.cacheRead }));
 
-    if (res.finish === 'tool_calls' && res.toolCalls.length && rounds < MAX_TOOL_ROUNDS) {
-      rounds++;
+    if (res.finish === 'tool_calls' && res.toolCalls.length && (rounds < maxRounds || !budgetClosed)) {
       convo.push({ role: 'assistant', content: res.text || null, tool_calls: res.toolCalls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })), blocks: res.blocks });
+      if (rounds >= maxRounds) {
+        // The rounds this answer may spend on tools are used up: every pending call is answered with that, once, so the model writes from what it has.
+        budgetClosed = true;
+        for (const c of res.toolCalls) convo.push({ role: 'tool', tool_call_id: c.id, name: c.name, content: 'ERROR: No more tool calls are available for this answer. Write the answer now from what you have seen, and say what was left undone.' });
+        continue;
+      }
+      rounds++;
       for (const c of res.toolCalls) {
         const hit = lookup.get(c.name);
-        const call: ToolCall = { server: hit ? hit.spec.name : c.name, name: hit ? hit.tool : c.name };
+        const call: ToolCall = { server: hit ? (hit.kind === 'mcp' ? hit.spec.name : hit.set.name) : c.name, name: hit ? hit.tool : c.name };
         toolCalls.push(call); opts.onTool?.(call);
-        opts.onStatus?.(`Using ${hit ? labelOf.get(hit.spec.name) || hit.spec.name : c.name}: ${call.name.replace(/_/g, ' ')}`);
         let args: Record<string, unknown> = {}; try { args = c.arguments ? JSON.parse(c.arguments) : {}; } catch { args = {}; }
+        if (hit?.kind === 'local') opts.onStatus?.(hit.set.status?.(hit.tool, args) || `Using ${hit.set.label}: ${call.name.replace(/_/g, ' ')}`);
+        else opts.onStatus?.(`Using ${hit ? labelOf.get(hit.spec.name) || hit.spec.name : c.name}: ${call.name.replace(/_/g, ' ')}`);
         let text: string; let isError = false; let structured: unknown = undefined;
         if (!hit) { text = 'Unknown tool'; isError = true; }
-        else {
+        else if (hit.kind === 'local') {
+          try { const r = await hit.set.call(hit.tool, args, opts.signal); text = r.text; isError = r.isError; structured = r.structured; }
+          catch (e) { if (opts.signal?.aborted) throw e; text = String((e as Error)?.message || e); isError = true; }
+        } else {
           try { const r = await callMcpTool(hit.spec.url, hit.spec.token, hit.tool, args, { signal: opts.signal }); text = r.text; isError = r.isError; structured = r.structured; }
           catch (e) { text = `The connector could not be reached: ${String((e as Error)?.message || e)}`; isError = true; }
         }
         call.error = isError; opts.onTool?.(call);
         if (!isError && opts.onToolResult) { try { const replaced = opts.onToolResult(call, { text, isError, structured, args }); if (typeof replaced === 'string') text = replaced; } catch (e) { console.warn('[mcp] onToolResult failed', e); } }
-        console.log('[mcp] tool', call.server, call.name, isError ? 'error' : 'ok', text.length);
+        console.log('[tool]', call.server, call.name, isError ? 'error' : 'ok', text.length);
         convo.push({ role: 'tool', tool_call_id: c.id, name: c.name, content: isError ? `ERROR: ${text}` : text });
       }
       continue;
@@ -380,6 +418,20 @@ export async function streamAnswer(opts: {
 }
 
 type ChatOut = { text: string; finish: string; toolCalls: Array<{ id: string; name: string; arguments: string }>; usage: { in: number; out: number; cacheRead: number; cacheWrite?: number }; blocks?: ABlock[] };
+
+/**
+ * A browsing answer reads a page after every action; keeping every full page in the conversation would grow it by
+ * thousands of tokens a step. All but the last `keep` tool results are cut to their opening lines (the header that
+ * says which page it was and what happened), so the model keeps the trail without the text.
+ */
+function compactToolHistory(convo: ChatMessage[], keep: number, maxChars: number): void {
+  const idx = convo.map((m, i) => (m.role === 'tool' ? i : -1)).filter(i => i >= 0);
+  for (const i of idx.slice(0, Math.max(0, idx.length - keep))) {
+    const m = convo[i]; const c = m.content || '';
+    if (c.length <= maxChars || c.endsWith('(earlier page text trimmed)')) continue;
+    m.content = c.slice(0, maxChars).replace(/\s+\S*$/, '') + '\n…(earlier page text trimmed)';
+  }
+}
 
 /** The conversation as an OpenAI-compatible provider wants it: the wire fields only (no Anthropic replay blocks; Moonshot's `partial` flag kept). */
 function toChatMessages(convo: ChatMessage[]): Array<Omit<ChatMessage, 'blocks'>> {
@@ -592,11 +644,65 @@ export function parseJsonLoosely<T>(text: string): T | null {
   try { return JSON.parse(slice) as T; } catch { return null; }
 }
 
-async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; mcp?: McpServerSpec[] | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; onTool?: (call: ToolCall) => void; onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
+async function mockStream(opts: { system?: SystemBlock[]; messages: Msg[]; search?: SearchOpts | null; mcp?: McpServerSpec[] | null; local?: LocalToolSet[] | null; onText: (d: string) => void; onSources?: (s: Source[]) => void; onStatus?: (t: string) => void; onTool?: (call: ToolCall) => void; onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void; signal?: AbortSignal }, model: string): Promise<StreamResult> {
   if (opts.system?.[0]?.text.startsWith("You are Ricorsa's builder")) return mockBuild(opts, model);
   const q = opts.messages[opts.messages.length - 1]?.content.split('Question:').pop()?.trim().split('\n')[0].trim().slice(0, 80) || 'your question';
   const sources: Source[] = opts.search ? mockSources(q) : [];
   if (opts.search) { opts.onStatus?.(`Searching: ${q.slice(0, 60)}`); await new Promise(r => setTimeout(r, 300)); opts.onSources?.(sources); }
+  // With the browser offered, the stub works a site the way the model would: open the address in the question, follow the
+  // first link, scroll, look something up, and report the pages it saw. Exercises the pane, the steps and the metering locally.
+  const browser = (opts.local || []).find(l => l.name === 'browser');
+  if (browser) {
+    const full = opts.messages[opts.messages.length - 1]?.content || '';
+    const m = full.match(/https?:\/\/[^\s)>\]]+/i) || full.match(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\.[a-z]{2,}(?:\/\S*)?/i);
+    const url = m ? m[0].replace(/[.,;:!?]+$/, '') : 'https://example.com/';
+    const toolCalls: ToolCall[] = []; const seen: string[] = []; const notes: string[] = [];
+    const run = async (name: string, args: Record<string, unknown>) => {
+      const call: ToolCall = { server: 'browser', name }; toolCalls.push(call); opts.onTool?.(call);
+      opts.onStatus?.(browser.status?.(name, args) || `Using the browser: ${name}`);
+      let r: ToolOutcome; try { r = await browser.call(name, args, opts.signal); } catch (e) { if (opts.signal?.aborted) throw e; r = { text: String((e as Error)?.message || e), isError: true }; }
+      call.error = r.isError; opts.onTool?.(call);
+      if (r.isError) notes.push(r.text.slice(0, 160));
+      const page = r.text.match(/Page: "([^"]*)" (\S+)(?: · cite this page as \[(\d+)\])?/);
+      if (page && !seen.some(x => x.startsWith(page[2] + ' ') || x === page[2])) seen.push(page[2] + (page[3] ? ` [${page[3]}]` : ''));
+      return r;
+    };
+    const first = await run('browser_open', { url });
+    if (!first.isError) {
+      const link = first.text.match(/\[(\d+)\|link "([^"]{2,60})"/);
+      if (link) await run('browser_click', { ref: Number(link[1]), why: `Following "${link[2]}"` });
+      await run('browser_scroll', { to: 'down' });
+      const word = q.split(/\s+/).filter(w => w.length > 5 && !/^https?:/.test(w))[0];
+      if (word) await run('browser_find', { text: word.replace(/[^a-z0-9]/gi, '') || word });
+      const field = first.text.match(/\[(\d+)\|input (?:search|text) "([^"]*)"/);
+      if (field) await run('browser_type', { ref: Number(field[1]), text: 'ricorsa', submit: false });
+    }
+    const cites = seen.map(s => (s.match(/\[(\d+)\]$/) || [])[1]).filter(Boolean);
+    const text = `<answer>
+This is the development stub's report after working the site in Ricorsa's browser${cites[0] ? `[${cites[0]}]` : ''}.
+
+## What was done
+${seen.length ? seen.map((s, i) => `- Page ${i + 1}: ${s.replace(/ \[\d+\]$/, '')}${cites[i] ? `[${cites[i]}]` : ''}`).join('\n') : '- The site could not be opened.'}
+${notes.length ? `\n## What did not work\n${notes.map(n => `- ${n.replace(/</g, '&lt;')}`).join('\n')}\n` : ''}
+In production the model reads each page and decides the next step itself; the steps and screenshots on the right are real.
+</answer>
+<related>
+What else is on that site?
+Can you fill in the contact form with my details?
+Where is the pricing page?
+Which pages did you open?
+Can you compare it with a competitor's site?
+</related>
+<learned>
+{"intent":"You are trying out Ricorsa's browser on a site","topics":["website automation"],"entities":[],"goals":[],"expertise":[],"style":[],"places":[]}
+</learned>`;
+    for (let i = 0; i < text.length; i += 32) {
+      if (opts.signal?.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      await new Promise(r => setTimeout(r, 8));
+      opts.onText(text.slice(i, i + 32));
+    }
+    return { text, truncated: false, model, sources, usage: { in: 2400, out: 400, cacheRead: 0, cacheWrite: 0, searches: sources.length ? 1 : 0 }, tools: toolCalls };
+  }
   // With a Vault connected, the stub searches it for real (the local Vault), so the numbering and the viewer can be exercised.
   let vaultPara = ''; const toolCalls: ToolCall[] = [];
   const vault = (opts.mcp || []).find(m => (m.tools || []).some(t => t.name === 'vault_search'));

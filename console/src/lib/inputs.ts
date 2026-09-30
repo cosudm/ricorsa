@@ -39,7 +39,7 @@ export const PlanGrant = z.object({ plan: z.enum(['free', 'essentials', 'profess
 
 /** Allowances the console sets on a Ricorsa account above its plan; null clears them all. */
 const zAllow = z.number().int().min(0).max(1e6).optional();
-export const AllowanceInput = z.object({ buildsPerMonth: zAllow, ideaSetsPerMonth: zAllow, questionsPerMonth: zAllow, questionsPerDay: zAllow, researchPerMonth: zAllow, note: zText(500).optional(), clear: z.boolean().optional() });
+export const AllowanceInput = z.object({ buildsPerMonth: zAllow, ideaSetsPerMonth: zAllow, questionsPerMonth: zAllow, questionsPerDay: zAllow, researchPerMonth: zAllow, browserActionsPerMonth: zAllow, note: zText(500).optional(), clear: z.boolean().optional() });
 
 /** Draft a true-up invoice for an account's overage in a month (`period` as YYYY-MM; the current month by default). */
 export const TrueupInput = z.object({ userId: zText(200).min(1), period: z.string().regex(/^\d{4}-\d{2}$/).optional() });

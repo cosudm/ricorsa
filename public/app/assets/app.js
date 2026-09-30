@@ -18,6 +18,8 @@ const ICONS = {
   chevron: '<path d="M6 9l6 6 6-6"/>',
   arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  pointer: '<path d="M6 3l12 8.5-5.5 1.2 3 5.8-2.4 1.2-3-5.8L6 18z"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
   thumbUp: '<path d="M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1zM7 10l4-7a2.5 2.5 0 0 1 2.5 2.5V9h5.2a2 2 0 0 1 2 2.3l-1.2 8a2 2 0 0 1-2 1.7H7"/>',
@@ -856,9 +858,11 @@ const ERROR_COPY = {
   research_limit: 'You have used this month\u2019s Research reports.',
   upgrade_required: 'That needs a paid plan.',
   subscription_inactive: 'Your subscription is not active. Update it on the Account page.',
+  browser_limit: 'You have used this month\u2019s browser actions on your plan.',
+  browser_unavailable: 'Ricorsa\u2019s browser is not available right now. Try again in a little while, or ask without opening the site.',
 };
 const BLOCKING = new Set([]);
-const PLAN_CODES = new Set(['daily_limit', 'monthly_limit', 'research_limit', 'upgrade_required', 'subscription_inactive']);
+const PLAN_CODES = new Set(['daily_limit', 'monthly_limit', 'research_limit', 'upgrade_required', 'subscription_inactive', 'browser_limit']);
 // ---------- Export / copy ----------
 function threadMarkdown(thread) {
   const out = [`# ${thread.title}`, '', `_Exported from Ricorsa · ${new Date().toLocaleString()}_`, ''];
@@ -905,7 +909,7 @@ function applyParsed(turn) {
   if (p.learned) turn.learned = p.learned;
 }
 function makeTurn(q, o) {
-  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.tier || 'default', focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '', attachments: o.attachments || [] };
+  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.browse && (o.tier || 'default') === 'quick' ? 'default' : (o.tier || 'default'), focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '', attachments: o.attachments || [], browse: !!o.browse, browser: null };
 }
 /** Read an SSE response body and dispatch events. Resolves when the stream ends. */
 async function readSse(res, onEvent) {
@@ -925,18 +929,20 @@ async function readSse(res, onEvent) {
   }
 }
 async function runTurn(thread, turn, { rewrite } = {}) {
-  turn.status = 'running'; turn.error = null; turn.raw = ''; turn.answer = ''; turn.related = []; turn.sources = []; turn.tools = []; turn.truncated = false; turn.tierApplied = null; turn.learned = null; turn.learnedMerged = false; turn.statusText = (!rewrite && turn.attachments && turn.attachments.length) ? 'Reading ' + (turn.attachments.length === 1 ? turn.attachments[0].name : turn.attachments.length + ' files') : 'Searching the web';
+  turn.status = 'running'; turn.error = null; turn.raw = ''; turn.answer = ''; turn.related = []; turn.sources = []; turn.tools = []; turn.truncated = false; turn.tierApplied = null; turn.learned = null; turn.learnedMerged = false; turn.browser = null; turn.statusText = (!rewrite && turn.attachments && turn.attachments.length) ? 'Reading ' + (turn.attachments.length === 1 ? turn.attachments[0].name : turn.attachments.length + ' files') : turn.browse ? 'Opening the browser' : 'Searching the web';
+  if (turn.browse) openBrowsePane(thread, turn);
   liveRender(thread, turn);
   const ctl = new AbortController();
   state.runs.set(thread.id, ctl);
   liveRender(thread, turn);
-  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, tier: turn.tier, focus: turn.focus, length: turn.length || state.settings.length, attachments: (turn.attachments || []).map(a => a.id).filter(Boolean) };
+  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, tier: turn.tier, focus: turn.focus, length: turn.length || state.settings.length, attachments: (turn.attachments || []).map(a => a.id).filter(Boolean), browse: !!turn.browse };
   try {
     const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
     if (res.status === 401) { location.href = '/auth/login?returnTo=' + encodeURIComponent('/app#/thread/' + thread.id); return; }
     if (!res.ok) {
       let data = null; try { data = await res.json(); } catch {}
       turn.status = 'error'; turn.error = (data && data.code) || 'upstream_error'; turn.errorMessage = data && data.error;
+      if (turn.browse) closeBrowsePane();
       return;
     }
     await readSse(res, (ev, data) => {
@@ -946,12 +952,19 @@ async function runTurn(thread, turn, { rewrite } = {}) {
       } else if (ev === 'status') { turn.statusText = data.text || ''; liveRender(thread, turn); }
       else if (ev === 'sources') { turn.sources = data || []; liveRender(thread, turn); }
       else if (ev === 'tools') { turn.tools = data || []; liveRender(thread, turn); }
+      else if (ev === 'browser') {
+        const rec = turn.browser || (turn.browser = { steps: [], actions: 0, pages: 0 });
+        if (data.step && !rec.steps.some(x => x.n === data.step.n)) rec.steps.push(data.step);
+        rec.actions = data.actions || rec.actions; rec.pages = data.pages || rec.pages; rec.stopped = data.stopped || null;
+        turn.statusText = data.step ? data.step.detail : turn.statusText;
+        paintBrowsePane(thread, turn); liveRender(thread, turn);
+      }
       else if (ev === 'delta') { turn.raw += data.text || ''; applyParsed(turn); liveRender(thread, turn); }
       else if (ev === 'done') { Object.assign(turn, data.turn, { raw: turn.raw }); if (typeof data.graphEvents === 'number' && state.graph) state.graph.events = data.graphEvents; }
       else if (ev === 'error') { if (data.turn) Object.assign(turn, data.turn, { raw: turn.raw }); turn.status = 'error'; turn.error = data.code || 'upstream_error'; turn.errorMessage = data.message; }
     });
     if (turn.status === 'running') { turn.status = 'done'; }
-    if (turn.status === 'done') { state.usage.today++; state.usage.month++; if (turn.mode === 'research') state.usage.research++; refreshGraph(); }
+    if (turn.status === 'done') { state.usage.today++; state.usage.month++; if (turn.mode === 'research') state.usage.research++; if (turn.browser && turn.browser.actions) state.usage.browserActions = (state.usage.browserActions || 0) + turn.browser.actions; refreshGraph(); }
   } catch (e) {
     if (e && e.name === 'AbortError') { applyParsed(turn); turn.status = 'stopped'; }
     else { console.error(e); turn.status = 'error'; turn.error = 'upstream_error'; }
@@ -960,6 +973,7 @@ async function runTurn(thread, turn, { rewrite } = {}) {
     delete state.threadCache[thread.id]; state.threadCache[thread.id] = thread; // keep the live object as the cache
     touchThread(thread);
     liveRender(thread, turn, true);
+    if (turn.browse) paintBrowsePane(thread, turn);
   }
 }
 async function startThread(q, o = {}) {
@@ -1011,7 +1025,7 @@ function learnedSummary(L) {
 
 // ---------- Composer ----------
 function createComposer(o) {
-  const c = { mode: o.mode || state.settings.mode, tier: o.tier || state.settings.tier, focus: o.focus || state.settings.focus, files: [] };
+  const c = { mode: o.mode || state.settings.mode, tier: o.tier || state.settings.tier, focus: o.focus || state.settings.focus, files: [], browse: !!o.browse };
   const el = document.createElement('div');
   el.className = 'composer ' + (o.variant === 'compact' ? 'compact' : 'hero');
   el.innerHTML = `
@@ -1025,6 +1039,7 @@ function createComposer(o) {
       </div>
       <div class="right">
         <button type="button" class="icon-btn" data-attach-btn aria-label="Attach files" title="Attach files for the answer to read: PDF, Word, Excel, PowerPoint, text, code, images">${icon('paperclip', 17)}</button>
+        <button type="button" class="chip-btn browse" data-browse aria-pressed="false" title="Open the site: Ricorsa opens the website you name in its own browser and works it for you while you watch"></button>
         <button type="button" class="chip-btn" data-tier aria-haspopup="menu" aria-expanded="false" title="Model: which model answers"></button>
         <button type="button" class="chip-btn" data-focus aria-haspopup="menu" aria-expanded="false" title="Focus: what kind of answer you want"></button>
         <button type="button" class="send" data-send aria-label="Ask" title="Send (Enter)" disabled>${icon('arrowRight', 18)}</button>
@@ -1037,6 +1052,11 @@ function createComposer(o) {
     $('[data-tier]', el).title = `Model: ${TIERS[c.tier].label}. ${TIERS[c.tier].desc}. Click to change.`;
     $('[data-focus]', el).title = `Focus: ${FOCI[c.focus].label}. ${FOCI[c.focus].desc}. Click to change.`;
     $('[data-focus]', el).innerHTML = icon(FOCI[c.focus].icon, 15) + (c.focus !== 'web' ? `<span class="lbl">${FOCI[c.focus].label}</span>` : '') + icon('chevron', 13, 'class="caret"');
+    const bb = $('[data-browse]', el); const allowed = canBrowse();
+    bb.classList.toggle('on', c.browse); bb.classList.toggle('locked', !allowed); bb.setAttribute('aria-pressed', c.browse);
+    bb.innerHTML = icon('globe', 15) + `<span class="lbl">${c.browse ? 'Opening the site' : 'Open the site'}</span>`;
+    bb.title = allowed ? (c.browse ? 'Ricorsa will open the site you name and work it while you watch. Click to turn off.' : 'Open the site: Ricorsa opens the website you name in its own browser and works it for you while you watch') : 'Open the site: part of the Professional and Enterprise plans. Click to see what it does.';
+    ta.placeholder = c.browse ? 'Name the site and say what to do there…' : (o.placeholder || 'Ask anything…');
   };
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; if (o.variant === 'compact') el.classList.toggle('multiline', ta.scrollHeight > 44 || c.files.length > 0); };
   const running = () => o.threadId && state.runs.has(o.threadId);
@@ -1088,12 +1108,17 @@ function createComposer(o) {
     const attachments = c.files.filter(f => f.status === 'ready' && f.id).map(f => ({ id: f.id, name: f.name, type: f.type, size: f.size, chars: f.chars, stored: f.stored }));
     c.files = [];
     ta.value = ''; autosize(); paintAttach(); paintSend(); closePop();
-    o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, attachments });
+    o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, attachments, browse: c.browse });
   };
   ta.addEventListener('input', () => { autosize(); paintSend(); if (o.onInput) o.onInput(ta.value); });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
   send.addEventListener('click', submit);
   $$('[data-mode]', el).forEach(b => b.addEventListener('click', () => { c.mode = b.dataset.mode; if (c.mode === 'research' && c.tier === 'quick') c.tier = 'default'; paintChips(); ta.focus(); }));
+  $('[data-browse]', el).addEventListener('click', () => {
+    if (!canBrowse()) { browseUpgradeModal(); return; }
+    c.browse = !c.browse; if (c.browse && c.tier === 'quick') c.tier = 'default'; paintChips(); ta.focus();
+    if (c.browse && !ta.value.trim()) toast('Name the site and say what Ricorsa should do there', 'ok');
+  });
   $('[data-tier]', el).addEventListener('click', (e) => {
     const btn = e.currentTarget;
     openPop(btn, `<div class="pop-h">Model</div>` + menuItems(Object.entries(TIERS).map(([k, t]) => ({ key: k, label: t.label, desc: t.desc, icon: t.icon })), c.tier), {
@@ -1119,12 +1144,17 @@ function createComposer(o) {
   if (o.initial) { ta.value = o.initial; }
   paintChips(); paintAttach(); paintSend();
   requestAnimationFrame(autosize);
-  el._composer = { el, ta, refresh() { paintSend(); paintAttach(); }, set(v) { ta.value = v; autosize(); paintSend(); ta.focus(); ta.setSelectionRange(v.length, v.length); }, get mode() { return c.mode; } };
+  el._composer = { el, ta, refresh() { paintSend(); paintAttach(); }, set(v) { ta.value = v; autosize(); paintSend(); ta.focus(); ta.setSelectionRange(v.length, v.length); }, setBrowse(v) { c.browse = !!v; paintChips(); }, get mode() { return c.mode; }, get browse() { return c.browse; } };
   return el;
 }
 
 // ---------- Plans ----------
-function caps() { return (state.plan && state.plan.caps) || { graph: 'preview', discover: 'locked' }; }
+function caps() { return (state.plan && state.plan.caps) || { graph: 'preview', discover: 'locked', browser: 'locked' }; }
+/** Whether this account may send Ricorsa to a website (Professional and Enterprise; an admin demoing a plan sees that plan's gate). */
+function canBrowse() { return caps().browser === 'full'; }
+function browseUpgradeModal() {
+  openModal(`<h2>${icon('globe', 20)}Ricorsa can go look</h2><p class="sub">Name a website and say what to do there. Ricorsa opens it in its own browser and works it for you, one step at a time, while you watch each step in the thread: find the answer on a page, fill in a form with the details you give it, follow a flow up to the point where it would commit. It never signs in and never touches passwords or card numbers; those stay yours.</p>${upgradeCard('Open the site', 'Professional includes 300 browser actions a month; Enterprise includes 1,000. An action is an open, a click, a typed field or a scroll.', 'Professional')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`);
+}
 /** Plan names by key, including the keys used before September 2026. */
 const PLAN_NAMES = { free: 'Free', essentials: 'Essentials', professional: 'Professional', enterprise: 'Enterprise', pro: 'Essentials', team: 'Professional' };
 const PLAN_ORDER = ['free', 'essentials', 'professional', 'enterprise'];
@@ -1182,7 +1212,7 @@ function renderHome() {
   const comp = createComposer({
     variant: 'hero', initial: state.composerDraft,
     onInput: v => { state.composerDraft = v; },
-    onSubmit: ({ text, mode, tier, focus, attachments }) => { state.composerDraft = ''; startThread(text, { mode, tier, focus, attachments }); }
+    onSubmit: ({ text, mode, tier, focus, attachments, browse }) => { state.composerDraft = ''; startThread(text, { mode, tier, focus, attachments, browse }); }
   });
   $('[data-composer]', main).appendChild(comp);
   const wireTiles = () => $$('[data-tile]', main).forEach(b => b.addEventListener('click', () => comp._composer.set(state.prompts[+b.dataset.tile].q)));
@@ -1227,8 +1257,10 @@ function renderThread(id) {
   main.innerHTML = `<div class="view">${topbarHtml(thread.title, right)}<div class="scroll" id="threadScroll"><div class="col thread-col" id="turns">${thread.turns.map(t => turnHtml(thread, t)).join('')}</div></div><div class="dock" data-dock></div></div>`;
   thread.turns.forEach(t => { const sec = $(`[data-turn="${t.id}"]`, main); paintTurn(sec, thread, t); wireTurn(sec, thread, t); });
   const last = thread.turns[thread.turns.length - 1];
-  const comp = createComposer({ variant: 'compact', placeholder: 'Ask a follow-up', threadId: thread.id, mode: last ? last.mode : undefined, tier: last ? last.tier : undefined, focus: last ? last.focus : undefined,
-    onSubmit: ({ text, mode, tier, focus, attachments }) => followUp(thread, text, { mode, tier, focus, attachments }) });
+  if (last && last.browse && last.status === 'running') openBrowsePane(thread, last);
+  else if (state.browsePane && state.browsePane.threadId === thread.id) { const t = thread.turns.find(x => x.id === state.browsePane.turnId); if (t) paintBrowsePane(thread, t); }
+  const comp = createComposer({ variant: 'compact', placeholder: 'Ask a follow-up', threadId: thread.id, mode: last ? last.mode : undefined, tier: last ? last.tier : undefined, focus: last ? last.focus : undefined, browse: !!(last && last.browse && canBrowse()),
+    onSubmit: ({ text, mode, tier, focus, attachments, browse }) => followUp(thread, text, { mode, tier, focus, attachments, browse }) });
   $('[data-dock]', main).appendChild(comp);
   $('[data-share]', main).addEventListener('click', async () => { const ok = await copyText(threadMarkdown(thread)); toast(ok ? 'Copied the thread as Markdown' : 'Could not copy', ok ? 'ok' : 'bad'); });
   $('[data-more]', main).addEventListener('click', e => threadMenu(e.currentTarget, thread));
@@ -1367,7 +1399,12 @@ function paintTurn(sec, thread, t) {
     const byServer = {}; for (const c of t.tools) (byServer[c.server] = byServer[c.server] || []).push(c);
     noteHtml += `<div class="answer-note tools-note">${icon('plug', 14)}<span>${running ? 'Using' : 'Used'} your connectors: ${Object.entries(byServer).map(([srv, calls]) => `<b>${esc(srv)}</b> (${calls.map(c => esc(c.name.replace(/_/g, ' ')) + (c.error ? ' ✕' : '')).join(', ')})`).join(' · ')}</span></div>`;
   }
-  if (t.status === 'done') { const files = (t.attachments || []).length, vault = (t.sources || []).filter(s => s.domain === 'VDRPros Vault').length, web = (t.sources || []).length - vault; noteHtml += `<div class="answer-note">${icon('info', 14)}${vault && web ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault and web sources retrieved when you asked.` : vault ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault; the numbered citations open the pages.` : files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.</div>`; }
+  if (t.browse) {
+    const b = t.browser; const n = b ? (b.actions || 0) : 0; const pg = b ? (b.pages || 0) : 0;
+    const stopped = b && b.stopped === 'actions' ? ' The actions available for one answer ran out.' : b && b.stopped === 'time' ? ' The time available for one answer ran out.' : b && b.stopped === 'aborted' ? ' Stopped.' : '';
+    noteHtml += `<div class="answer-note browse-note">${icon('globe', 14)}<span>${running ? (n ? `Working in the browser: ${n} action${n === 1 ? '' : 's'} so far` : 'Opening the browser') : n ? `Used the browser: ${n} action${n === 1 ? '' : 's'} across ${pg} page${pg === 1 ? '' : 's'}.${stopped}` : 'The browser was not needed.'}${b && b.steps && b.steps.length ? ` <button type="button" class="linkish" data-browse-show>Show</button>` : ''}</span></div>`;
+  }
+  if (t.status === 'done') { const files = (t.attachments || []).length, vault = (t.sources || []).filter(s => s.domain === 'VDRPros Vault').length, browsed = t.browse && t.browser ? (t.browser.pages || 0) : 0, web = (t.sources || []).length - vault - browsed; noteHtml += `<div class="answer-note">${icon('info', 14)}${browsed ? `Answered from ${browsed} page${browsed === 1 ? '' : 's'} Ricorsa opened in its browser${web > 0 ? ' and web sources retrieved when you asked' : ''}; the numbered citations open the pages.` : vault && web ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault and web sources retrieved when you asked.` : vault ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault; the numbered citations open the pages.` : files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.</div>`; }
   note.innerHTML = noteHtml;
 
   const actions = $('[data-actions]', sec);
@@ -1448,6 +1485,7 @@ function wireTurn(sec, thread, t) {
     const cite = e.target.closest('.cite'); if (cite && cite.tagName !== 'A') { showTab('sources'); const card = $(`.source-card[data-src-n="${cite.dataset.n}"]`, sec); if (card) { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); card.style.borderColor = 'var(--accent)'; setTimeout(() => card.style.borderColor = '', 1500); } return; }
     const rel = e.target.closest('[data-rel]'); if (rel) { if (state.runs.has(thread.id)) { toast('Wait for the current answer to finish'); return; } followUp(thread, t.related[+rel.dataset.rel], { mode: t.mode === 'research' ? 'search' : t.mode, tier: t.tier, focus: t.focus }); return; }
     if (e.target.closest('[data-retry]')) { if (!state.runs.has(thread.id)) runTurn(thread, t); return; }
+    if (e.target.closest('[data-browse-show]')) { openBrowsePane(thread, t); return; }
     const act = e.target.closest('[data-act]'); if (!act) return;
     const a = act.dataset.act;
     if (a === 'copy') { const ok = await copyText((t.answer || '').trim()); toast(ok ? 'Answer copied' : 'Could not copy', ok ? 'ok' : 'bad'); }
@@ -1462,6 +1500,81 @@ function wireTurn(sec, thread, t) {
     }
   });
 }
+
+// ---------- Ricorsa's browser: the pane beside the thread where each step is shown as it happens ----------
+const STEP_ICON = { open: 'globe', click: 'pointer', type: 'edit', select: 'chevron', scroll: 'arrowUp', back: 'arrowLeft', read: 'book', find: 'search' };
+function ensureBrowsePane() {
+  let pane = $('#browsePane');
+  if (pane) return pane;
+  pane = document.createElement('aside');
+  pane.id = 'browsePane'; pane.className = 'browse-pane'; pane.hidden = true; pane.setAttribute('aria-label', "Ricorsa's browser");
+  pane.innerHTML = `
+    <div class="bp-bar">
+      <span class="bp-ico">${icon('globe', 16)}</span>
+      <div class="bp-title"><b>Ricorsa's browser</b><span data-bp-url title=""></span></div>
+      <button type="button" class="btn sm" data-bp-stop hidden>${icon('stop', 13)}Stop</button>
+      <button type="button" class="icon-btn" data-bp-close aria-label="Close the browser pane" title="Close">${icon('x', 16)}</button>
+    </div>
+    <div class="bp-shot" data-bp-shot>
+      <img data-bp-img alt="What Ricorsa's browser shows after the selected step" hidden>
+      <div class="bp-empty" data-bp-empty><span class="spinner"></span><span>Opening the browser</span></div>
+      <span class="bp-live" data-bp-live hidden>Live</span>
+    </div>
+    <div class="bp-status" data-bp-status></div>
+    <ol class="bp-steps" data-bp-steps aria-label="Steps"></ol>
+    <div class="bp-foot">Public websites only. Ricorsa never signs in and never fills passwords or card numbers; those stay yours.</div>`;
+  $('#app').appendChild(pane);
+  $('[data-bp-close]', pane).addEventListener('click', closeBrowsePane);
+  $('[data-bp-stop]', pane).addEventListener('click', () => { const bp = state.browsePane; if (bp) stopRun(bp.threadId); });
+  $('[data-bp-steps]', pane).addEventListener('click', e => { const li = e.target.closest('[data-step]'); if (!li) return; const bp = state.browsePane; if (!bp) return; bp.selected = +li.dataset.step; bp.follow = false; const th = state.threadCache[bp.threadId]; const t = th && th.turns.find(x => x.id === bp.turnId); if (t) paintBrowsePane(th, t); });
+  return pane;
+}
+function openBrowsePane(thread, turn) {
+  const pane = ensureBrowsePane();
+  const same = state.browsePane && state.browsePane.turnId === turn.id;
+  state.browsePane = same ? state.browsePane : { threadId: thread.id, turnId: turn.id, selected: null, follow: true };
+  state.browsePane.turnId = turn.id; state.browsePane.threadId = thread.id;
+  pane.hidden = false; document.body.classList.add('browse-open');
+  paintBrowsePane(thread, turn);
+}
+function closeBrowsePane() {
+  const pane = $('#browsePane'); if (pane) pane.hidden = true;
+  document.body.classList.remove('browse-open');
+  state.browsePane = null;
+}
+function paintBrowsePane(thread, turn) {
+  const pane = $('#browsePane'); const bp = state.browsePane;
+  if (!pane || pane.hidden || !bp || bp.threadId !== thread.id) return;
+  if (bp.turnId !== turn.id && turn.id !== bp.turnId) { if (!thread.turns.some(x => x.id === bp.turnId)) bp.turnId = turn.id; else return; }
+  bp.turnId = turn.id;
+  const running = turn.status === 'running';
+  const rec = turn.browser || { steps: [], actions: 0, pages: 0 };
+  const steps = rec.steps || [];
+  const shots = steps.filter(x => x.shot);
+  if (bp.follow || !bp.selected || !steps.some(x => x.n === bp.selected)) bp.selected = shots.length ? shots[shots.length - 1].n : (steps.length ? steps[steps.length - 1].n : null);
+  if (running) bp.follow = bp.follow !== false;
+  const sel = steps.find(x => x.n === bp.selected) || steps[steps.length - 1] || null;
+  const shown = sel && sel.shot ? sel : shots.filter(x => sel && x.n <= sel.n).pop() || null;
+  const img = $('[data-bp-img]', pane), empty = $('[data-bp-empty]', pane);
+  if (shown) {
+    const src = `/api/browse/shot/${encodeURIComponent(turn.id)}/${shown.n}`;
+    if (img.dataset.src !== src) { img.dataset.src = src; img.src = src; }
+    img.hidden = false; empty.hidden = true;
+  } else {
+    img.hidden = true; img.removeAttribute('src'); delete img.dataset.src; empty.hidden = false;
+    empty.innerHTML = running ? `<span class="spinner"></span><span>${esc(steps.length ? (steps[steps.length - 1].detail || 'Working') : (turn.statusText || 'Opening the browser'))}</span>` : `${icon('globe', 22)}<span>${steps.length ? 'No picture was kept for this step.' : turn.status === 'error' ? 'The browser could not be opened.' : 'The browser was not needed for this answer.'}</span>`;
+  }
+  $('[data-bp-live]', pane).hidden = !running;
+  $('[data-bp-stop]', pane).hidden = !running;
+  const urlEl = $('[data-bp-url]', pane); const cur = sel || steps[steps.length - 1];
+  urlEl.textContent = cur ? (cur.title ? `${cur.title} · ${shortUrl(cur.url)}` : shortUrl(cur.url)) : ''; urlEl.title = cur ? (cur.url || '') : '';
+  const n = rec.actions || 0, pg = rec.pages || 0;
+  $('[data-bp-status]', pane).textContent = running ? `${n} action${n === 1 ? '' : 's'} so far${pg ? ` · ${pg} page${pg === 1 ? '' : 's'}` : ''}` : steps.length ? `${n} action${n === 1 ? '' : 's'} across ${pg} page${pg === 1 ? '' : 's'}${rec.stopped === 'actions' ? ' · stopped at the limit for one answer' : rec.stopped === 'time' ? ' · stopped at the time limit for one answer' : rec.stopped === 'aborted' ? ' · stopped' : ' · done'}` : '';
+  const list = $('[data-bp-steps]', pane);
+  list.innerHTML = steps.map(st => `<li data-step="${st.n}" class="${sel && st.n === sel.n ? 'on' : ''}${st.error ? ' err' : ''}"><span class="n">${st.n}</span><span class="ico">${icon(STEP_ICON[st.action] || 'globe', 13)}</span><span class="d"><span class="a">${esc(st.detail || st.action)}</span>${st.title ? `<span class="t">${esc(st.title)}</span>` : ''}</span>${st.shot ? '' : '<span class="noshot" title="No picture for this step"></span>'}</li>`).join('');
+  if (running && bp.follow) { const last = list.lastElementChild; if (last) last.scrollIntoView({ block: 'nearest' }); }
+}
+function shortUrl(u) { try { const x = new URL(u); return x.hostname.replace(/^www\./, '') + (x.pathname === '/' ? '' : x.pathname.length > 32 ? x.pathname.slice(0, 30) + '…' : x.pathname); } catch (e) { return u || ''; } }
 
 // ---------- Discover: what your graph can become ----------
 const DISCOVER_CATS = ['For you', 'Apps', 'Agents', 'Tools', 'Decentralized', 'Data & credentials', 'Content'];
@@ -1895,7 +2008,7 @@ function renderSpace(id) {
     <div class="sec-h" style="margin:22px 0 6px">${icon('library', 17)}Threads in this Space</div>
     ${threads.length ? `<div class="list">${threads.map(t => threadRow(t)).join('')}</div>` : `<div class="empty">${icon('library', 28)}<div>Nothing here yet, ask the first question above.</div></div>`}
   </div></div></div>`;
-  const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, tier, focus, attachments }) => startThread(text, { mode, tier, focus, attachments, spaceId: s.id }) });
+  const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, tier, focus, attachments, browse }) => startThread(text, { mode, tier, focus, attachments, browse, spaceId: s.id }) });
   $('[data-composer]', main).appendChild(comp);
   $('[data-edit]', main).addEventListener('click', () => spaceModal(s));
   const scope = { spaceId: s.id, spaceName: s.name, onAdded: () => paintSpaceConnectors(s) };
@@ -3022,6 +3135,7 @@ function render() {
   closePop();
   state.route = parseRoute();
   const r = state.route;
+  if (state.browsePane && !(r.name === 'thread' && r.id === state.browsePane.threadId)) closeBrowsePane();
   if (r.name === 'home') renderHome();
   else if (r.name === 'vault') { renderHome(); openVaultDoc(r.id, r.doc, r.query.p ? +r.query.p : null); }
   else if (r.name === 'thread') renderThread(r.id);

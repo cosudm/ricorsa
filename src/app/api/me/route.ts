@@ -25,8 +25,8 @@ export const GET = handle(async () => {
   const lim = limitsFor(plan, user.allowance);
   return json({
     user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings, admin: !!user.admin },
-    plan: { key: plan.key, name: plan.name, caps: plan.caps, tiers: plan.tiers, questionsPerDay: lim.questionsPerDay, questionsPerMonth: lim.questionsPerMonth, researchPerMonth: lim.researchPerMonth, buildsPerMonth: lim.buildsPerMonth, ideaSetsPerMonth: lim.ideaSetsPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, cycle: user.billingCycle || null, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
-    usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research, builds: usage.month.builds, ideas: usage.month.ideas },
+    plan: { key: plan.key, name: plan.name, caps: plan.caps, tiers: plan.tiers, questionsPerDay: lim.questionsPerDay, questionsPerMonth: lim.questionsPerMonth, researchPerMonth: lim.researchPerMonth, buildsPerMonth: lim.buildsPerMonth, ideaSetsPerMonth: lim.ideaSetsPerMonth, browserActionsPerMonth: lim.browserActionsPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, cycle: user.billingCycle || null, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
+    usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research, builds: usage.month.builds, ideas: usage.month.ideas, browserActions: usage.month.browserActions },
     connectors: { total: connectors.length, active: connectors.filter(c => c.enabled && c.status === 'ok').length, limit: user.admin ? 100 : plan.caps.connectors },
     threads,
     spaces: spaces.map(s => ({ ...s, createdAt: new Date(s.createdAt).getTime() })),

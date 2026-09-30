@@ -24,7 +24,7 @@ export const rUsers = sqliteTable('users', {
   createdAt: ts('created_at').notNull(),
   lastSeenAt: ts('last_seen_at').notNull(),
 });
-export type RAllowance = { buildsPerMonth?: number; ideaSetsPerMonth?: number; questionsPerMonth?: number; questionsPerDay?: number; researchPerMonth?: number; note?: string; setBy?: string; setAt?: number };
+export type RAllowance = { buildsPerMonth?: number; ideaSetsPerMonth?: number; questionsPerMonth?: number; questionsPerDay?: number; researchPerMonth?: number; browserActionsPerMonth?: number; note?: string; setBy?: string; setAt?: number };
 
 export const rSubscriptions = sqliteTable('subscriptions', {
   id: text('id').primaryKey(),
@@ -50,6 +50,7 @@ export const rUsage = sqliteTable('usage', {
   costMicros: integer('cost_micros').notNull().default(0),
   builds: integer('builds').notNull().default(0),
   ideas: integer('ideas').notNull().default(0),
+  browserActions: integer('browser_actions').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.userId, t.period] })]);
 
 export const rThreads = sqliteTable('threads', {

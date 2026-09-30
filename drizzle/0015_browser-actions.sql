@@ -1,0 +1,1 @@
+ALTER TABLE `usage` ADD `browser_actions` integer DEFAULT 0 NOT NULL;

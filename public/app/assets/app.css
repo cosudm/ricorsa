@@ -1032,6 +1032,51 @@
   .tools-note b { font-weight: 600; }
   @media (max-width: 600px) { .conn-main { flex-wrap: wrap; } .conn-actions .btn { flex: 1 1 auto; justify-content: center; } }
 
+  /* ---------- Ricorsa's browser: the "Open the site" chip and the pane beside the thread ---------- */
+  .chip-btn.browse.on { background: var(--accent-soft); color: var(--accent); }
+  .chip-btn.browse.on:hover { background: var(--accent-line); }
+  .chip-btn.browse.locked { color: var(--ink-3); }
+  .chip-btn.browse.locked:hover { color: var(--ink-2); }
+  .linkish { color: var(--accent); font: inherit; font-weight: 500; text-decoration: underline; text-underline-offset: 2px; padding: 0; }
+  .linkish:hover { color: var(--accent-hover); }
+  .browse-note .linkish { margin-left: 2px; }
+  .browse-pane { flex: none; width: 480px; max-width: 46vw; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--card); }
+  .browse-pane[hidden] { display: none; }
+  .bp-bar { display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--line); min-height: 54px; flex: none; }
+  .bp-ico { color: var(--accent); flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--accent-soft); }
+  .bp-title { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+  .bp-title b { font-size: 13.5px; font-weight: 600; }
+  .bp-title span { color: var(--ink-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bp-shot { position: relative; flex: none; aspect-ratio: 16 / 10; background: var(--surface); border-bottom: 1px solid var(--line); overflow: hidden; }
+  .bp-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+  .bp-shot img[hidden] { display: none; }
+  .bp-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--ink-3); font-size: 13px; text-align: center; padding: 20px; }
+  .bp-empty[hidden] { display: none; }
+  .bp-empty .spinner { width: 22px; height: 22px; border-width: 2px; }
+  .bp-live { position: absolute; top: 10px; right: 10px; font: 600 11px/1 var(--sans); letter-spacing: .04em; text-transform: uppercase; color: #fff; background: var(--rust); padding: 5px 8px; border-radius: 999px; box-shadow: var(--shadow-1); }
+  .bp-live::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #fff; margin-right: 6px; vertical-align: 1px; animation: bpPulse 1.2s ease-in-out infinite; }
+  .bp-live[hidden] { display: none; }
+  @keyframes bpPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+  .bp-status { flex: none; padding: 10px 14px 4px; font-size: 12.5px; color: var(--ink-2); }
+  .bp-steps { flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 4px 8px 8px; }
+  .bp-steps li { display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--ink); }
+  .bp-steps li:hover { background: var(--surface); }
+  .bp-steps li.on { background: var(--accent-soft); }
+  .bp-steps li .n { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font: 600 11px/1 var(--mono); color: var(--ink-3); background: var(--surface-2); margin-top: 1px; }
+  .bp-steps li.on .n { background: var(--accent); color: var(--accent-ink); }
+  .bp-steps li .ico { flex: none; color: var(--ink-3); margin-top: 4px; }
+  .bp-steps li .d { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+  .bp-steps li .a { font-weight: 500; overflow-wrap: anywhere; }
+  .bp-steps li .t { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bp-steps li .noshot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); margin-top: 8px; }
+  .bp-foot { flex: none; padding: 8px 14px 12px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--ink-3); line-height: 1.4; }
+  @media (max-width: 1180px) { .browse-pane { width: 400px; } }
+  @media (max-width: 900px) {
+    .browse-pane { position: fixed; left: 0; right: 0; bottom: 0; width: auto; max-width: none; height: 62vh; z-index: 40; border-left: 0; border-top: 1px solid var(--line); border-radius: 16px 16px 0 0; box-shadow: var(--shadow-3); }
+    .bp-shot { aspect-ratio: auto; height: 34%; }
+    body.browse-open .dock { padding-bottom: 8px; }
+  }
+
   /* ---------- Responsive ---------- */
   .scrim { display: none; position: fixed; inset: 0; background: rgba(27,34,40,.28); z-index: 15; }
   @media (max-width: 900px) {

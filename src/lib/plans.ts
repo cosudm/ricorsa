@@ -19,8 +19,8 @@ export const ANNUAL_MONTHS_FREE = 2;
 /** The plans shown on the pricing page: the paid ones. Free is the state of an account with no subscription, not an offer. */
 export const OFFERED_PLANS: PlanKey[] = ['essentials', 'professional', 'enterprise'];
 
-/** `files`: how many files a question can carry and how large each may be. */
-export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; connectors: number; files: { perQuestion: number; maxMb: number } };
+/** `files`: how many files a question can carry and how large each may be. `browser`: whether Ricorsa may open sites and work them for the person. */
+export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; browser: 'locked' | 'full'; connectors: number; files: { perQuestion: number; maxMb: number } };
 
 export type Plan = {
   key: PlanKey;
@@ -41,6 +41,8 @@ export type Plan = {
   buildsPerMonth: number;
   /** Discover idea sets generated from the graph in a month (a set served from the cache is free; Generate again writes a new one). */
   ideaSetsPerMonth: number;
+  /** Actions Ricorsa's browser may take on websites in a month (an open, a click, a typed field each count as one). */
+  browserActionsPerMonth: number;
   tiers: Array<'quick' | 'default' | 'complex'>; // model tiers this plan may use
   spaces: number;              // max Spaces
   blurb: string;
@@ -56,12 +58,13 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'free',
     name: 'Free',
     priceUsd: 0,
-    caps: { graph: 'preview', discover: 'locked', connectors: 0, files: { perQuestion: 2, maxMb: 10 } },
+    caps: { graph: 'preview', discover: 'locked', browser: 'locked', connectors: 0, files: { perQuestion: 2, maxMb: 10 } },
     questionsPerDay: 10,
     questionsPerMonth: 150,
     researchPerMonth: 0,
     buildsPerMonth: 0,
     ideaSetsPerMonth: 0,
+    browserActionsPerMonth: 0,
     tiers: ['quick', 'default'],
     spaces: 1,
     blurb: 'Try it and let the graph start learning you.',
@@ -75,12 +78,13 @@ export const PLANS: Record<PlanKey, Plan> = {
     paypalPlanEnv: 'PAYPAL_PLAN_ESSENTIALS',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_ESSENTIALS_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_PRO',
-    caps: { graph: 'full', discover: 'locked', connectors: 3, files: { perQuestion: 5, maxMb: 25 } },
+    caps: { graph: 'full', discover: 'locked', browser: 'locked', connectors: 3, files: { perQuestion: 5, maxMb: 25 } },
     questionsPerDay: 300,
     questionsPerMonth: 1500,
     researchPerMonth: 40,
     buildsPerMonth: 0,
     ideaSetsPerMonth: 0,
+    browserActionsPerMonth: 0,
     tiers: ['quick', 'default', 'complex'],
     spaces: 25,
     blurb: 'The full identity graph, for people who research every day.',
@@ -94,16 +98,17 @@ export const PLANS: Record<PlanKey, Plan> = {
     paypalPlanEnv: 'PAYPAL_PLAN_PROFESSIONAL',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_PROFESSIONAL_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_TEAM',
-    caps: { graph: 'full', discover: 'full', connectors: 25, files: { perQuestion: 10, maxMb: 40 } },
+    caps: { graph: 'full', discover: 'full', browser: 'full', connectors: 25, files: { perQuestion: 10, maxMb: 40 } },
     questionsPerDay: 1000,
     questionsPerMonth: 5000,
     researchPerMonth: 150,
     buildsPerMonth: 30,
     ideaSetsPerMonth: 60,
+    browserActionsPerMonth: 300,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100,
     blurb: 'Everything in Essentials, plus Discover: turn your research into working tools.',
-    features: ['Everything in Essentials', 'Discover, fully unlocked: apps, agents, tools, datasets and credentials built from your own asset, each checked in a real browser and stamped with a provenance id', 'Build studio: 30 app versions a month, 60 idea sets a month', 'Up to 5,000 questions a month, 1,000 a day', '150 Research reports a month', 'Files: 10 per question, up to 40 MB each', '25 Connectors, each usable everywhere or kept to one Space', '100 Spaces', 'Priority support'],
+    features: ['Everything in Essentials', 'Discover, fully unlocked: apps, agents, tools, datasets and credentials built from your own asset, each checked in a real browser and stamped with a provenance id', 'Build studio: 30 app versions a month, 60 idea sets a month', 'Ricorsa can open a website and work it for you while you watch: 300 browser actions a month', 'Up to 5,000 questions a month, 1,000 a day', '150 Research reports a month', 'Files: 10 per question, up to 40 MB each', '25 Connectors, each usable everywhere or kept to one Space', '100 Spaces', 'Priority support'],
   },
   enterprise: {
     key: 'enterprise',
@@ -112,16 +117,17 @@ export const PLANS: Record<PlanKey, Plan> = {
     priceUsdYear: 1290,
     paypalPlanEnv: 'PAYPAL_PLAN_ENTERPRISE',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_ENTERPRISE_ANNUAL',
-    caps: { graph: 'full', discover: 'full', connectors: 100, files: { perQuestion: 20, maxMb: 60 } },
+    caps: { graph: 'full', discover: 'full', browser: 'full', connectors: 100, files: { perQuestion: 20, maxMb: 60 } },
     questionsPerDay: 3000,
     questionsPerMonth: 15000,
     researchPerMonth: 500,
     buildsPerMonth: 100,
     ideaSetsPerMonth: 200,
+    browserActionsPerMonth: 1000,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100000,
     blurb: 'The online plan for a firm that runs on research: the highest limits, every connector, and a direct line to us. Organizations license by the seat.',
-    features: ['Everything in Professional', 'Build studio: 100 app versions a month, 200 idea sets a month', 'Up to 15,000 questions a month, 3,000 a day', '500 Research reports a month', 'Files: 20 per question, up to 60 MB each', '100 Connectors', 'Unlimited Spaces', 'A direct line to us, with onboarding for your team', 'Seat and floating licenses for organizations, with deployment on your own data and geography (see below)'],
+    features: ['Everything in Professional', 'Build studio: 100 app versions a month, 200 idea sets a month', 'Browser: 1,000 actions a month', 'Up to 15,000 questions a month, 3,000 a day', '500 Research reports a month', 'Files: 20 per question, up to 60 MB each', '100 Connectors', 'Unlimited Spaces', 'A direct line to us, with onboarding for your team', 'Seat and floating licenses for organizations, with deployment on your own data and geography (see below)'],
     priceMarker: '***',
     licensing: 'Enterprise licensing for organizations: seat licenses, 60 seats or more at $85 per seat a month, or floating licenses shared across a team, with deployment on your own data and geography. Call for pricing.',
   },

@@ -33,7 +33,7 @@ export async function draftTrueup(userId: string, period: string, me: Staff): Pr
   }
   const customer = (await d.select().from(schema.customers).where(eq(schema.customers.id, customerId)).limit(1))[0];
   const [prices, inv] = await Promise.all([getSetting('trueup'), getSetting('invoice')]);
-  const unit: Record<TrueupCandidate['overage'][number]['key'], number> = { builds: prices.buildCents, ideas: prices.ideaSetCents, questions: prices.questionCents, research: prices.researchCents };
+  const unit: Record<TrueupCandidate['overage'][number]['key'], number> = { builds: prices.buildCents, ideas: prices.ideaSetCents, questions: prices.questionCents, research: prices.researchCents, browser: prices.browserActionCents ?? 10 };
   const monthName = new Date(period + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const items: InvoiceItem[] = c.overage.filter(o => unit[o.key] > 0).map(o => ({ description: `${planName(c.plan)} plan, ${monthName}: ${o.over.toLocaleString('en-US')} ${o.label} beyond the monthly allowance of ${o.allowance.toLocaleString('en-US')} (${o.used.toLocaleString('en-US')} used)`, qty: o.over, unitCents: unit[o.key], taxRate: inv.taxRate || undefined }));
   if (!items.length) throw new HttpError(409, 'Every unit price for true-ups is zero in Settings, so there is nothing to bill', 'no_prices');

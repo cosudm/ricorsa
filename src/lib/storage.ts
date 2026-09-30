@@ -45,3 +45,19 @@ export async function deleteFiles(keys: Array<string | null | undefined>): Promi
     catch (e) { console.error('[storage] delete failed', String((e as Error)?.message || e)); }
   }
 }
+
+/** Remove every object under a prefix (a turn's screenshots, an account's), best effort, page by page. */
+export async function deletePrefix(prefix: string): Promise<void> {
+  if (!prefix || prefix.length < 8) return;
+  const bucket = filesBucket();
+  if (!bucket) return;
+  try {
+    let cursor: string | undefined;
+    for (let i = 0; i < 50; i++) {
+      const page = await bucket.list({ prefix, cursor, limit: 1000 });
+      if (page.objects.length) await bucket.delete(page.objects.map(o => o.key));
+      if (!page.truncated) break;
+      cursor = page.cursor;
+    }
+  } catch (e) { console.error('[storage] delete prefix failed', prefix, String((e as Error)?.message || e)); }
+}

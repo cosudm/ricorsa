@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { fail, readJson, HttpError } from '@/lib/http';
-import { assertQuota, recordUsage } from '@/lib/usage';
+import { assertQuota, assertBrowseQuota, recordUsage } from '@/lib/usage';
 import { createThread, getThreadOwned, makeTurn, saveTurns } from '@/lib/threads';
 import { searchPlan, planQueries, retrieve, readPages, sourcesBlock, type Source } from '@/lib/search';
 import { loadGraph, saveGraph, mergeLearned, graphPromptBlock } from '@/lib/graph';
@@ -22,6 +22,7 @@ import { SITE_PRESET, numberSiteHits, numberSitePage } from '@/lib/sites';
 import { geocodePending } from '@/lib/geo';
 import { recall, remember, numberRecalled, backfillOnce, memoryEnabled } from '@/lib/memory';
 import { selectFilePassages, numberFilePassages, isLookup } from '@/lib/passages';
+import { BrowseSession, browserGuide, browserAvailable, MAX_ACTIONS_PER_ANSWER } from '@/lib/browse';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -37,7 +38,12 @@ const Body = z.object({
   rewrite: z.object({ turnId: z.string(), how: z.enum(['again', 'concise', 'detailed', 'complex', 'research']) }).optional(),
   /** Ids of files uploaded through /api/files for this question. */
   attachments: z.array(z.string().max(60)).max(20).optional(),
+  /** Open the site and work it in Ricorsa's browser while the person watches (Professional and Enterprise). */
+  browse: z.boolean().optional(),
 });
+
+/** Whether the question names a website to open, so the web need not be searched first. */
+const NAMES_A_SITE = /https?:\/\/\S+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|co|ai|app|dev|gov|edu|us|uk|ca|au|de|fr|es|it|nl|info|biz|me|tv|xyz|shop|store|online|site)\b(?:\/\S*)?/i;
 
 /**
  * POST /api/ask  — the answer pipeline, streamed as server-sent events:
@@ -51,6 +57,7 @@ export async function POST(req: Request) {
 
   // Resolve thread + turn
   let thread, turns: Turn[], turn: Turn, history: Turn[];
+  let browseCap = 0;
   try {
     if (body.rewrite) {
       if (!body.threadId) return fail(400, 'threadId required for a rewrite');
@@ -70,6 +77,7 @@ export async function POST(req: Request) {
       else { thread = await createThread(user.id, body.question, body.spaceId || null); }
       turns = [...thread.turns]; history = turns.slice();
       turn = makeTurn(body.question, body);
+      if (body.browse) { turn.browse = true; if (turn.tier === 'quick') turn.tier = 'default'; }
       if (body.attachments?.length) {
         // Files uploaded for this question: only the person's own, only pending or already on this thread, within the plan's count.
         const cap = user.admin ? 20 : planFor(user.plan).caps.files.perQuestion;
@@ -81,12 +89,17 @@ export async function POST(req: Request) {
       turns.push(turn);
     }
     await assertQuota(user, turn.mode, turn.tier);
+    if (turn.browse) {
+      const q = await assertBrowseQuota(user);
+      browseCap = Math.max(1, Math.min(MAX_ACTIONS_PER_ANSWER, Number.isFinite(q.remaining) ? q.remaining : MAX_ACTIONS_PER_ANSWER));
+      if (!browserAvailable()) return fail(503, "Ricorsa's browser is not available right now. Try again in a little while, or ask without opening the site.", 'browser_unavailable');
+    }
   } catch (e) {
     if (e instanceof HttpError) return fail(e.status, e.message, e.code);
     console.error(e); return fail(500, 'Could not start the answer');
   }
 
-  Object.assign(turn, { status: 'running', error: null, answer: '', related: [], sources: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null });
+  Object.assign(turn, { status: 'running', error: null, answer: '', related: [], sources: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, browser: undefined });
   await saveTurns(thread, turns);
 
   const ctl = new AbortController();
@@ -98,7 +111,8 @@ export async function POST(req: Request) {
     async start(controller) {
       const send = (event: string, data: unknown) => { try { controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch {} };
       let raw = '';
-      const finish = async () => { try { await saveTurns(th, turns); } catch (e) { console.error('save failed', e); } try { controller.close(); } catch {} };
+      let browse: BrowseSession | null = null;
+      const finish = async () => { if (browse) { try { await browse.close(); } catch {} } try { await saveTurns(th, turns); } catch (e) { console.error('save failed', e); } try { controller.close(); } catch {} };
       try {
         send('meta', { threadId: th.id, turnId: turn.id, title: th.title });
 
@@ -113,10 +127,11 @@ export async function POST(req: Request) {
         const filesFirst = !!(turn.attachments && turn.attachments.length) && turn.mode !== 'research' && !wantsWeb;
 
         // 1. Retrieval: Ricorsa searches the web itself and numbers what it finds; the model reads and cites it.
-        const search = filesFirst ? null : searchPlan(turn.mode, turn.focus);
+        //    When the person asked Ricorsa to open a site they named, the browser goes straight there instead.
+        const search = filesFirst || (turn.browse && NAMES_A_SITE.test(turn.q)) ? null : searchPlan(turn.mode, turn.focus);
         let sources: Source[] = [];
         let searches = 0;
-        send('status', { text: filesFirst ? `Reading ${attached.length === 1 ? attached[0].name : `${attached.length} files`}` : search ? 'Searching the web' : 'Writing' });
+        send('status', { text: filesFirst ? `Reading ${attached.length === 1 ? attached[0].name : `${attached.length} files`}` : search ? 'Searching the web' : turn.browse ? 'Opening the browser' : 'Writing' });
         send('sources', []);
         if (search) {
           try {
@@ -172,16 +187,35 @@ export async function POST(req: Request) {
         // Consoles ride along with Search answers: the guide plus what the person actually has, so buttons act on real things.
         let consoles = '';
         if (turn.mode !== 'research') { try { consoles = `${CONSOLE_GUIDE}\n\n${await consoleContext(user.id, { canBuild: user.admin || planFor(user.plan).caps.discover === 'full' })}`; } catch (e) { console.warn('console context unavailable', e); } }
-        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp, space ? { id: space.id, name: space.name } : null), files: attached.map(a => a.name), consoles }));
+        // The browser, when asked for: the model gets its tools, every page it shows becomes a numbered source, and each
+        // step reaches the person as it happens (the screenshot is stored before the event goes out).
+        if (turn.browse) {
+          browse = new BrowseSession({
+            userId: user.id, turnId: turn.id, maxActions: browseCap, signal: ctl.signal,
+            onStep: (step, rec) => { turn.browser = rec; send('browser', { step, actions: rec.actions, pages: rec.pages, stopped: rec.stopped || null }); },
+            onPage: ({ url, title }) => {
+              const had = sources.find(s => s.url === url); if (had) return had.n;
+              let domain = ''; try { domain = new URL(url).hostname.replace(/^www\./, ''); } catch { /* keep empty */ }
+              const src: Source = { n: sources.length + 1, title: title || url, domain, url };
+              sources = [...sources, src];
+              turn.sources = sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url }));
+              send('sources', turn.sources);
+              return src.n;
+            },
+          });
+        }
+        const system = systemBlocks(dynamicSystem({ mode: turn.mode, focus: turn.focus, length: turn.length, profile, space, connectors: connectorsPromptBlock(mcp, space ? { id: space.id, name: space.name } : null), files: attached.map(a => a.name), consoles, browser: browse ? browserGuide({ maxActions: browseCap }) : undefined }));
         const messages = buildMessages(history, turn.q, sourcesBlock(sources), fileText);
         turn.tools = [];
 
         // 3. Generation: the model reads the sources, calls connector tools when it needs them, and writes
         let wroteText = false;
-        send('status', { text: turn.mode === 'research' ? 'Working through the sources' : attached.length ? 'Reading the files and writing' : 'Writing' });
+        send('status', { text: browse ? 'Opening the browser' : turn.mode === 'research' ? 'Working through the sources' : attached.length ? 'Reading the files and writing' : 'Writing' });
         const result = await streamAnswer({
           tier: turn.tier, system, messages, signal: ctl.signal, search,
           mcp: mcp.map(m => ({ name: m.name, label: m.label, url: m.url, token: m.token, allowedTools: m.allowedTools, tools: m.tools })),
+          local: browse ? [browse.toolSet()] : null,
+          maxToolRounds: browse ? 64 : undefined,
           maxTokens: turn.mode === 'research' ? 9000 : (turn.length === 'detailed' || attached.length ? 6000 : 4000),
           onStatus: (text) => { if (!wroteText) send('status', { text }); },
           onToolResult: (call, r) => {
@@ -202,7 +236,7 @@ export async function POST(req: Request) {
             send('sources', turn.sources);
             return out.text;
           },
-          onTool: (call) => { const label = mcp.find(m => m.name === call.server)?.label || call.server; const i = (turn.tools || []).findIndex(t => t.server === label && t.name === call.name && t.error === undefined); const rec = { server: label, name: call.name, error: call.error }; if (i >= 0) turn.tools![i] = rec; else if (!(turn.tools || []).some(t => t.server === label && t.name === call.name && t.error === call.error)) turn.tools = [...(turn.tools || []), rec]; send('tools', turn.tools); },
+          onTool: (call) => { if (call.server === 'browser') return; const label = mcp.find(m => m.name === call.server)?.label || call.server; const i = (turn.tools || []).findIndex(t => t.server === label && t.name === call.name && t.error === undefined); const rec = { server: label, name: call.name, error: call.error }; if (i >= 0) turn.tools![i] = rec; else if (!(turn.tools || []).some(t => t.server === label && t.name === call.name && t.error === call.error)) turn.tools = [...(turn.tools || []), rec]; send('tools', turn.tools); },
           onText: (delta) => { if (!wroteText) { wroteText = true; send('status', { text: turn.mode === 'research' ? 'Writing the report' : 'Writing' }); } raw += delta; send('delta', { text: delta }); },
         });
         result.sources = sources; result.usage.searches = searches;
@@ -213,11 +247,12 @@ export async function POST(req: Request) {
         turn.answer = p.answer; turn.related = p.related; turn.learned = p.learned; turn.truncated = result.truncated; turn.tierApplied = turn.tier; turn.model = result.model;
         turn.usage = { in: result.usage.in, out: result.usage.out, cacheRead: result.usage.cacheRead, searches: result.usage.searches };
         turn.status = 'done';
+        if (browse) turn.browser = browse.record();
 
         // 4. The loop: learn, then meter
         let touched: ReturnType<typeof mergeLearned> = null;
         if (turn.learned) { try { touched = mergeLearned(graph, turn, th.id, { ideaId: th.origin?.ideaId }); if (touched) await saveGraph(user.id, graph); } catch (e) { console.warn('learn failed', e); } }
-        await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches, result.model, result.usage.cacheWrite) });
+        await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, browserActions: browse ? browse.actions : 0, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches, result.model, result.usage.cacheWrite) });
         send('done', { turn, graphEvents: graph.events });
         // 5. After the answer is on screen: put the places this turn named on the map (the geocoder is slow and polite).
         if (touched && touched.some(n => n.place && !n.geo)) { try { if (await geocodePending(graph)) await saveGraph(user.id, graph); } catch (e) { console.warn('[geo] failed', e); } }
@@ -231,15 +266,19 @@ export async function POST(req: Request) {
         }
       } catch (e) {
         const err = e as { name?: string };
+        // Whatever ended the answer, the actions the browser took were taken: they are kept on the turn and counted.
+        if (browse) { if (!browse.stopped && (err?.name === 'AbortError' || ctl.signal.aborted)) browse.stopped = 'aborted'; turn.browser = browse.record(); }
+        const browserActions = browse ? browse.actions : 0;
         if (err?.name === 'AbortError' || ctl.signal.aborted) {
           const p = parseStream(raw); turn.answer = p.answer; turn.related = p.related; turn.status = 'stopped';
-          if (raw.length > 200) await recordUsage(user.id, { questions: 1 });
+          if (raw.length > 200 || browserActions) await recordUsage(user.id, { questions: raw.length > 200 ? 1 : 0, browserActions });
           send('done', { turn });
         } else {
           const why = describeProviderError(e);
           console.error('ask failed', JSON.stringify({ code: why.code, status: why.status, type: why.type, message: why.message, user: user.id }));
           const p = parseStream(raw); turn.answer = p.answer; turn.status = 'error';
           turn.error = why.code;
+          if (browserActions) { try { await recordUsage(user.id, { browserActions }); } catch { /* counted next time */ } }
           send('error', { code: turn.error, message: user.admin ? why.forAdmin : why.forUser, turn });
         }
       } finally {

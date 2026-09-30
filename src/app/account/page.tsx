@@ -63,6 +63,7 @@ export default async function Account() {
                 <div className="stat"><b>{usage.month.research} / {lim.researchPerMonth}</b><span>Research reports</span></div>
                 {lim.buildsPerMonth > 0 && <div className="stat"><b>{usage.month.builds} / {lim.buildsPerMonth}</b><span>app versions built</span></div>}
                 {lim.ideaSetsPerMonth > 0 && <div className="stat"><b>{usage.month.ideas} / {lim.ideaSetsPerMonth}</b><span>Discover idea sets</span></div>}
+                {lim.browserActionsPerMonth > 0 && <div className="stat"><b>{usage.month.browserActions.toLocaleString('en-US')} / {lim.browserActionsPerMonth.toLocaleString('en-US')}</b><span>browser actions</span></div>}
               </div>
             </div>
             <div className="card">
