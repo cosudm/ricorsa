@@ -19,6 +19,7 @@ const ICONS = {
   arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   arrowLeft: '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>',
   pointer: '<path d="M6 3l12 8.5-5.5 1.2 3 5.8-2.4 1.2-3-5.8L6 18z"/>',
   hand: '<path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11.5V4.5a1.5 1.5 0 0 1 3 0v7M14 11.5V6.5a1.5 1.5 0 0 1 3 0V13"/><path d="M17 13v-1a1.5 1.5 0 0 1 3 0v3.5A5.5 5.5 0 0 1 14.5 21h-2a5.5 5.5 0 0 1-4.6-2.5L5 14.2a1.5 1.5 0 0 1 2.4-1.7L8 13.5"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>',
@@ -1337,11 +1338,12 @@ function confirmDelete(thread) {
 /** Delete several conversations at once (the Recent list). */
 function confirmDeleteMany(threads) {
   const list = (threads || []).filter(Boolean); if (!list.length) return;
-  openModal(`<h2>Delete ${list.length} recent conversation${list.length === 1 ? '' : 's'}?</h2><p class="sub">These will be removed from your library. Your identity graph keeps what it has already learned. This can\u2019t be undone.</p><ul class="del-list">${list.map(t => `<li>${esc(truncate(t.title, 70))}</li>`).join('')}</ul><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="delManyOk">Delete all</button></div>`, {
+  openModal(`<h2>Delete ${list.length} conversation${list.length === 1 ? '' : 's'}?</h2><p class="sub">${list.length === 1 ? 'It' : 'These'} will be removed from your library. Your identity graph keeps what it has already learned. This can\u2019t be undone.</p><ul class="del-list">${list.map(t => `<li>${esc(truncate(t.title, 70))}</li>`).join('')}</ul><div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="delManyOk">Delete all</button></div>`, {
     onMount: () => $('#delManyOk').addEventListener('click', async () => {
       closeModal();
       let n = 0, failed = 0; const open = state.route.name === 'thread' ? state.route.id : null;
-      for (const t of list) { stopRun(t.id); try { await deleteThreadRemote(t.id); n++; } catch { failed++; } }
+      for (const t of list) { stopRun(t.id); try { await deleteThreadRemote(t.id); n++; if (state.manage) state.manage.picked.delete(t.id); } catch { failed++; } }
+      if (state.manage && !state.threads.length) state.manage.library = false;
       renderSidebar(); if (open && !getThreadSummary(open)) go('#/home'); else render();
       toast(failed ? `Deleted ${n}, ${failed} could not be deleted` : `Deleted ${n} conversation${n === 1 ? '' : 's'}`, failed ? 'bad' : 'ok');
     })
@@ -2177,20 +2179,51 @@ async function showVersion(n) {
 
 // ---------- Spaces ----------
 const EMOJIS = ['🗂️', '🔬', '💼', '✈️', '📚', '🧪', '🏠', '💡', '🎨', '📈', '🩺', '⚙️'];
+state.manage = { spaces: false, library: false, picked: new Set() };
 function renderSpaces() {
   const main = $('#main');
   const counts = {}; for (const t of state.threads) if (t.spaceId) counts[t.spaceId] = (counts[t.spaceId] || 0) + 1;
   const limitNote = state.plan && state.spaces.length >= state.plan.spaces ? `<p class="page-sub">The ${esc(state.plan.name)} plan allows ${state.plan.spaces} Space${state.plan.spaces === 1 ? '' : 's'}. <a href="/pricing">See plans</a> for more.</p>` : '';
+  const managing = state.manage.spaces && state.spaces.length > 0; const picked = state.manage.picked;
   main.innerHTML = `<div class="view">${topbarHtml('Spaces')}<div class="scroll"><div class="col wide">
-    <div class="page-h"><h1>${icon('layers', 26)}Spaces</h1><button type="button" class="btn primary sm" data-new-space>${icon('plus', 15)}<span>Create a Space</span></button></div>
+    <div class="page-h"><h1>${icon('layers', 26)}Spaces</h1><div class="page-actions">${state.spaces.length ? `<button type="button" class="btn sm ${managing ? 'on' : 'ghost'}" data-manage aria-pressed="${managing}">${icon(managing ? 'check' : 'sliders', 15)}<span>${managing ? 'Done' : 'Manage'}</span></button>` : ''}<button type="button" class="btn primary sm" data-new-space>${icon('plus', 15)}<span>Create a Space</span></button></div></div>
     <p class="page-sub">A Space groups threads around a project and gives Ricorsa standing instructions: a persona, a house style, background it should assume.</p>${limitNote}
-    <div class="space-grid">
-      <button type="button" class="space-card new" data-new-space>${icon('folderPlus', 26)}<span>New Space</span></button>
-      ${state.spaces.map(s => `<a class="space-card" href="#/space/${s.id}"><span class="emo">${esc(s.emoji)}</span><span class="n">${esc(s.name)}</span><span class="d">${esc(s.description || (s.instructions ? truncate(s.instructions, 90) : 'No description yet'))}</span><span class="c">${counts[s.id] || 0} thread${counts[s.id] === 1 ? '' : 's'}</span></a>`).join('')}
+    ${managing ? `<div class="manage-bar"><label class="chk"><input type="checkbox" data-pick-all ${picked.size === state.spaces.length ? 'checked' : ''}> Select all</label><span class="grow">${picked.size ? `${picked.size} selected` : 'Pick the Spaces to delete. Their threads stay in your Library.'}</span><button type="button" class="btn sm danger" data-delete-picked ${picked.size ? '' : 'disabled'}>${icon('trash', 14)}<span>Delete${picked.size ? ` ${picked.size}` : ''}</span></button></div>` : ''}
+    <div class="space-grid ${managing ? 'managing' : ''}">
+      ${managing ? '' : `<button type="button" class="space-card new" data-new-space>${icon('folderPlus', 26)}<span>New Space</span></button>`}
+      ${state.spaces.map(s => managing
+        ? `<label class="space-card pick ${picked.has(s.id) ? 'on' : ''}"><input type="checkbox" data-pick="${esc(s.id)}" ${picked.has(s.id) ? 'checked' : ''}><span class="emo">${esc(s.emoji)}</span><span class="n">${esc(s.name)}</span><span class="d">${esc(s.description || (s.instructions ? truncate(s.instructions, 90) : 'No description yet'))}</span><span class="c">${counts[s.id] || 0} thread${counts[s.id] === 1 ? '' : 's'}</span></label>`
+        : `<a class="space-card" href="#/space/${s.id}"><span class="emo">${esc(s.emoji)}</span><span class="n">${esc(s.name)}</span><span class="d">${esc(s.description || (s.instructions ? truncate(s.instructions, 90) : 'No description yet'))}</span><span class="c">${counts[s.id] || 0} thread${counts[s.id] === 1 ? '' : 's'}</span><button type="button" class="card-del" data-del-space="${esc(s.id)}" aria-label="Delete ${esc(s.name)}" title="Delete this Space">${icon('trash', 14)}</button></a>`).join('')}
     </div>
   </div></div></div>`;
   $$('[data-new-space]', main).forEach(b => b.addEventListener('click', () => spaceModal()));
+  const mg = $('[data-manage]', main); if (mg) mg.addEventListener('click', () => { state.manage.spaces = !state.manage.spaces; state.manage.picked = new Set(); renderSpaces(); });
+  $$('[data-del-space]', main).forEach(b => b.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); const sp = getSpace(b.dataset.delSpace); if (sp) confirmDeleteSpaces([sp]); }));
+  $$('[data-pick]', main).forEach(c => c.addEventListener('change', () => { if (c.checked) picked.add(c.dataset.pick); else picked.delete(c.dataset.pick); renderSpaces(); }));
+  const all = $('[data-pick-all]', main); if (all) all.addEventListener('change', () => { state.manage.picked = new Set(all.checked ? state.spaces.map(x => x.id) : []); renderSpaces(); });
+  const del = $('[data-delete-picked]', main); if (del) del.addEventListener('click', () => confirmDeleteSpaces(state.spaces.filter(x => picked.has(x.id))));
   wireTopbar(main);
+}
+/** Delete one or several Spaces. Their threads stay in the Library, and connectors limited to them become available everywhere. */
+function confirmDeleteSpaces(spaces) {
+  const list = (spaces || []).filter(Boolean); if (!list.length) return;
+  const n = list.length; const threads = state.threads.filter(t => list.some(s => s.id === t.spaceId)).length;
+  openModal(`<h2>Delete ${n === 1 ? `the Space \u201c${esc(list[0].name)}\u201d` : `${n} Spaces`}?</h2><p class="sub">${threads ? `The ${threads} thread${threads === 1 ? '' : 's'} in ${n === 1 ? 'it' : 'them'} stay${threads === 1 ? 's' : ''} in your Library without a Space. ` : ''}The instructions and the grouping go. This can\u2019t be undone.</p>${n > 1 ? `<ul class="del-list">${list.map(s => `<li>${esc(s.emoji)} ${esc(truncate(s.name, 60))}</li>`).join('')}</ul>` : ''}<div class="modal-actions"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn danger" id="delSpOk">Delete${n > 1 ? ' all' : ''}</button></div>`, {
+    onMount: () => $('#delSpOk').addEventListener('click', async () => {
+      closeModal();
+      let ok = 0, failed = 0;
+      for (const sp of list) {
+        try { await api('/api/spaces/' + encodeURIComponent(sp.id), { method: 'DELETE' }); ok++; } catch { failed++; continue; }
+        state.spaces = state.spaces.filter(x => x.id !== sp.id);
+        for (const t of state.threads) if (t.spaceId === sp.id) t.spaceId = null;
+        for (const t of Object.values(state.threadCache)) if (t.spaceId === sp.id) t.spaceId = null;
+        state.manage.picked.delete(sp.id);
+      }
+      if (!state.spaces.length) state.manage.spaces = false;
+      if (state.route.name === 'space' && !getSpace(state.route.id)) go('#/spaces'); else render();
+      toast(failed ? `Deleted ${ok}, ${failed} could not be deleted` : `Deleted ${ok} Space${ok === 1 ? '' : 's'}. ${threads ? 'The threads stay in your Library.' : ''}`.trim(), failed ? 'bad' : 'ok');
+    })
+  });
 }
 function spaceModal(space) {
   const s = space || { emoji: '🗂️', name: '', description: '', instructions: '' };
@@ -2226,7 +2259,7 @@ function renderSpace(id) {
   const s = getSpace(id); const main = $('#main');
   if (!s) { main.innerHTML = `<div class="view">${topbarHtml('')}<div class="scroll"><div class="col"><div class="empty">${icon('layers', 28)}<div>That Space isn’t in this browser.</div><p><a href="#/spaces">All Spaces</a></p></div></div></div></div>`; wireTopbar(main); return; }
   const threads = state.threads.filter(t => t.spaceId === s.id);
-  main.innerHTML = `<div class="view">${topbarHtml(s.name, `<button type="button" class="btn sm ghost" data-edit>${icon('edit', 15)}<span>Edit</span></button>`)}<div class="scroll"><div class="col">
+  main.innerHTML = `<div class="view">${topbarHtml(s.name, `<button type="button" class="btn sm ghost" data-edit>${icon('edit', 15)}<span>Edit</span></button><button type="button" class="btn sm ghost" data-del-space-page>${icon('trash', 15)}<span>Delete</span></button>`)}<div class="scroll"><div class="col">
     <div class="space-hero"><span class="emo">${esc(s.emoji)}</span><div><h1>${esc(s.name)}</h1>${s.description ? `<p>${esc(s.description)}</p>` : ''}${s.instructions ? `<div class="instr">${esc(s.instructions)}</div>` : ''}</div></div>
     <div data-composer style="margin-bottom:24px"></div>
     <div class="sec-h" style="margin-bottom:6px">${icon('plug', 17)}Connectors in this Space<span class="spacer"></span><button type="button" class="btn sm" data-space-conn-add>${icon('plus', 14)}<span>Add to this Space</span></button></div>
@@ -2237,6 +2270,7 @@ function renderSpace(id) {
   const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, tier, focus, attachments, browse }) => startThread(text, { mode, tier, focus, attachments, browse, spaceId: s.id }) });
   $('[data-composer]', main).appendChild(comp);
   $('[data-edit]', main).addEventListener('click', () => spaceModal(s));
+  $('[data-del-space-page]', main).addEventListener('click', () => confirmDeleteSpaces([s]));
   const scope = { spaceId: s.id, spaceName: s.name, onAdded: () => paintSpaceConnectors(s) };
   $('[data-space-conn-add]', main).addEventListener('click', () => { if ((state.connLimit || 0) <= 0 && !isAdmin() && state.connectors) { toast('Connectors are part of the Essentials, Professional and Enterprise plans', 'bad'); return; } addConnectorModal(null, scope); });
   wireRows(main);
@@ -2284,14 +2318,21 @@ function renderLibrary() {
   const main = $('#main');
   const q = state.libQuery.trim().toLowerCase();
   const threads = state.threads.filter(t => !q || t.title.toLowerCase().includes(q) || (t.snippet || '').toLowerCase().includes(q));
+  const managing = state.manage.library && state.threads.length > 0; const picked = state.manage.picked;
+  const shownIds = threads.map(t => t.id); const allShownPicked = shownIds.length > 0 && shownIds.every(id => picked.has(id));
   main.innerHTML = `<div class="view">${topbarHtml('Library')}<div class="scroll"><div class="col wide">
-    <div class="page-h"><h1>${icon('library', 26)}Library</h1><span class="gen-tag">${state.threads.length} thread${state.threads.length === 1 ? '' : 's'}</span></div>
+    <div class="page-h"><h1>${icon('library', 26)}Library</h1><div class="page-actions"><span class="gen-tag">${state.threads.length} thread${state.threads.length === 1 ? '' : 's'}</span>${state.threads.length ? `<button type="button" class="btn sm ${managing ? 'on' : 'ghost'}" data-manage aria-pressed="${managing}">${icon(managing ? 'check' : 'sliders', 15)}<span>${managing ? 'Done' : 'Manage'}</span></button>` : ''}</div></div>
     <div class="search-in">${icon('search', 16)}<input type="search" placeholder="Search your threads" value="${esc(state.libQuery)}" aria-label="Search threads"></div>
-    ${threads.length ? `<div class="list">${threads.map(t => threadRow(t)).join('')}</div>` : `<div class="empty">${icon('library', 28)}<div>${q ? 'No threads match that search.' : 'No threads yet. Ask something on the home page.'}</div></div>`}
+    ${managing ? `<div class="manage-bar"><label class="chk"><input type="checkbox" data-pick-all ${allShownPicked ? 'checked' : ''}> Select ${q ? 'these' : 'all'}${shownIds.length ? ` (${shownIds.length})` : ''}</label><span class="grow">${picked.size ? `${picked.size} selected` : 'Pick the conversations to delete.'}</span><button type="button" class="btn sm danger" data-delete-picked ${picked.size ? '' : 'disabled'}>${icon('trash', 14)}<span>Delete${picked.size ? ` ${picked.size}` : ''}</span></button></div>` : ''}
+    ${threads.length ? `<div class="list ${managing ? 'managing' : ''}">${threads.map(t => managing ? `<label class="row pick ${picked.has(t.id) ? 'on' : ''}"><input type="checkbox" data-pick="${esc(t.id)}" ${picked.has(t.id) ? 'checked' : ''}><div class="main"><span class="t">${esc(t.title)}</span><span class="s">${esc(truncate(t.snippet || 'No answer yet', 140))}</span></div><div class="meta"><span>${t.turnCount != null ? t.turnCount : (t.turns || []).length} turn${(t.turnCount != null ? t.turnCount : (t.turns || []).length) === 1 ? '' : 's'}</span><span>${relTime(t.updatedAt || t.createdAt)}</span></div></label>` : threadRow(t)).join('')}</div>` : `<div class="empty">${icon('library', 28)}<div>${q ? 'No threads match that search.' : 'No threads yet. Ask something on the home page.'}</div></div>`}
     ${state.spaces.length ? `<div class="sec-h" style="margin-top:8px">${icon('layers', 17)}Spaces</div><div class="space-grid">${state.spaces.map(s => `<a class="space-card" href="#/space/${s.id}"><span class="emo">${esc(s.emoji)}</span><span class="n">${esc(s.name)}</span><span class="d">${esc(s.description || 'No description')}</span></a>`).join('')}</div>` : ''}
   </div></div></div>`;
   const inp = $('input[type=search]', main);
   inp.addEventListener('input', () => { state.libQuery = inp.value; const pos = inp.selectionStart; renderLibrary(); const i2 = $('#main input[type=search]'); i2.focus(); i2.setSelectionRange(pos, pos); });
+  const mg = $('[data-manage]', main); if (mg) mg.addEventListener('click', () => { state.manage.library = !state.manage.library; state.manage.picked = new Set(); renderLibrary(); });
+  $$('[data-pick]', main).forEach(c => c.addEventListener('change', () => { if (c.checked) picked.add(c.dataset.pick); else picked.delete(c.dataset.pick); renderLibrary(); }));
+  const all = $('[data-pick-all]', main); if (all) all.addEventListener('change', () => { for (const id of shownIds) { if (all.checked) picked.add(id); else picked.delete(id); } renderLibrary(); });
+  const del = $('[data-delete-picked]', main); if (del) del.addEventListener('click', () => confirmDeleteMany(state.threads.filter(t => picked.has(t.id))));
   wireRows(main);
   wireTopbar(main);
 }
@@ -3362,6 +3403,7 @@ function render() {
   state.route = parseRoute();
   const r = state.route;
   if (state.browsePane && !(r.name === 'thread' && r.id === state.browsePane.threadId)) closeBrowsePane();
+  if (state.manage && r.name !== 'spaces' && r.name !== 'library') { state.manage.picked = new Set(); }
   if (r.name === 'home') renderHome();
   else if (r.name === 'vault') { renderHome(); openVaultDoc(r.id, r.doc, r.query.p ? +r.query.p : null); }
   else if (r.name === 'thread') renderThread(r.id);
