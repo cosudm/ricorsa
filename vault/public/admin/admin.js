@@ -1,4 +1,4 @@
-/* VDRPros Vault staff screens. Talks to /api/admin/*; the session is a signed cookie set after the staff key. */
+/* VDRPros Vault staff screens. Talks to /api/admin/*; the session is a signed cookie set after signing in with an email and password (or the staff key, for the first account and recovery). */
 (() => {
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -6,13 +6,14 @@
   const fmtN = n => Number(n || 0).toLocaleString('en-US');
   const fmtB = n => { n = +n || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'; if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB'; return (n / 1073741824).toFixed(2) + ' GB'; };
   const fmtT = t => t ? new Date(+t).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : '';
-  const state = { signedIn: false, overview: null, tenants: [] };
+  const state = { signedIn: false, session: null, setupNeeded: false, keyConfigured: true, overview: null, tenants: [] };
 
   async function api(path, opts = {}) {
     const r = await fetch('/api/admin' + path, { method: opts.method || (opts.body !== undefined ? 'POST' : 'GET'), headers: opts.raw ? {} : { 'Content-Type': 'application/json' }, body: opts.raw ? opts.body : opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
     let j = null; try { j = await r.json(); } catch { j = null; }
-    if (r.status === 401) { state.signedIn = false; render(); throw new Error((j && j.error) || 'Sign in first'); }
-    if (!r.ok) { const e = new Error((j && j.error) || 'Request failed'); e.code = j && j.code; e.issues = j && j.issues; throw e; }
+    if (r.status === 401 && !opts.quiet) { if (state.signedIn) { state.signedIn = false; state.session = null; render(); } throw new Error((j && j.error) || 'Sign in first'); }
+    if (r.status === 403 && j && j.code === 'must_change') { if (state.session) state.session.mustChange = true; render(); throw new Error(j.error); }
+    if (!r.ok) { const e = new Error((j && j.error) || 'Request failed'); e.code = j && j.code; e.issues = j && j.issues; e.status = r.status; throw e; }
     return j;
   }
   function toast(msg, cls = '') { const t = document.createElement('div'); t.className = 'toast ' + cls; t.textContent = msg; $('#toasts').appendChild(t); setTimeout(() => t.remove(), 4200); }
@@ -31,17 +32,105 @@
   function render() {
     const app = $('#app');
     if (!state.signedIn) { app.innerHTML = signInHtml(); wireSignIn(); return; }
+    if (state.session && state.session.via === 'key' && state.setupNeeded) { app.innerHTML = setupHtml(); wireSetup(); return; }
+    if (state.session && state.session.staff && state.session.staff.mustChange) { app.innerHTML = changePasswordHtml(true); wireChangePassword(true); return; }
     const r = route();
     app.innerHTML = `<div class="shell"><aside class="side"><div class="brand"><span class="mark"></span><div><b>VDRPros Vault</b><span>Staff</span></div></div>
-      <nav class="nav">${[['', 'Overview'], ['tenants', 'Tenants and people'], ['workspaces', 'Workspaces'], ['connections', 'Connections'], ['dead-letters', 'Dead letters']].map(([k, l]) => `<a href="#/${k}" class="${(r.name === (k || 'overview')) ? 'on' : ''}">${l}</a>`).join('')}
+      <nav class="nav">${[['', 'Overview'], ['tenants', 'Tenants and people'], ['workspaces', 'Workspaces'], ['connections', 'Connections'], ['dead-letters', 'Dead letters'], ['staff', 'Staff']].map(([k, l]) => `<a href="#/${k}" class="${(r.name === (k || 'overview')) ? 'on' : ''}">${l}</a>`).join('')}
         <h4>Help</h4><a href="https://vault.vdrpros.com/api/health" target="_blank" rel="noopener">Health</a></nav>
-      <div class="side-foot"><button type="button" class="btn sm" id="signOut">Sign out</button></div></aside><main class="main" id="main"></main></div>`;
-    $('#signOut').addEventListener('click', async () => { await api('/session', { method: 'DELETE' }); state.signedIn = false; render(); });
+      <div class="side-foot"><div class="who">${state.session && state.session.staff ? `<b>${esc(state.session.staff.name || state.session.staff.email)}</b><span class="mono">${esc(state.session.staff.email)}</span><span class="muted">${esc(state.session.staff.role)}</span>` : '<b>Staff key</b><span class="muted">recovery session</span>'}</div><div class="row" style="gap:6px;margin-top:8px">${state.session && state.session.staff ? '<button type="button" class="btn sm" id="chPw">Change password</button>' : ''}<button type="button" class="btn sm" id="signOut">Sign out</button></div></div></aside><main class="main" id="main"></main></div>`;
+    $('#signOut').addEventListener('click', async () => { await api('/session', { method: 'DELETE' }); state.signedIn = false; state.session = null; render(); });
+    $('#chPw')?.addEventListener('click', () => modal(changePasswordHtml(false, true), root => wireChangePassword(false, root)));
     const main = $('#main');
-    ({ overview: viewOverview, tenants: viewTenants, tenant: viewTenant, workspaces: viewWorkspaces, workspace: viewWorkspace, batch: viewBatch, connections: viewConnections, 'dead-letters': viewDeadLetters, document: viewDocument }[r.name] || viewOverview)(main, r).catch(e => { main.innerHTML = `<div class="panel">${esc(e.message)}</div>`; });
+    ({ overview: viewOverview, tenants: viewTenants, tenant: viewTenant, workspaces: viewWorkspaces, workspace: viewWorkspace, batch: viewBatch, connections: viewConnections, 'dead-letters': viewDeadLetters, document: viewDocument, staff: viewStaff }[r.name] || viewOverview)(main, r).catch(e => { main.innerHTML = `<div class="panel">${esc(e.message)}</div>`; });
   }
-  function signInHtml() { return `<div class="signin panel"><div class="brand"><span class="mark"></span><div><b>VDRPros Vault</b><span>Staff sign-in</span></div></div><p class="muted small">Enter the staff key set on the Vault service. The session lasts twelve hours.</p><div class="field"><label for="key">Staff key</label><input type="password" id="key" autocomplete="off"></div><button class="btn primary" id="go">Sign in</button><div class="small muted" id="err" style="margin-top:8px"></div></div>`; }
-  function wireSignIn() { const go = async () => { try { await api('/session', { body: { key: $('#key').value } }); state.signedIn = true; render(); } catch (e) { $('#err').textContent = e.message; } }; $('#go').addEventListener('click', go); $('#key').addEventListener('keydown', e => { if (e.key === 'Enter') go(); }); $('#key').focus(); }
+  function signInHtml() {
+    const key = state.useKey;
+    return `<div class="signin panel"><div class="brand"><span class="mark"></span><div><b>VDRPros Vault</b><span>Staff sign-in</span></div></div>
+      ${key
+        ? `<p class="muted small">The staff key set on the Vault service creates the first owner account and gets you back in when nobody can sign in. The session lasts twelve hours.</p><div class="field"><label for="key">Staff key</label><input type="password" id="key" autocomplete="off"></div>`
+        : `<p class="muted small">Sign in with your staff email and password. The session lasts twelve hours.</p><div class="field"><label for="email">Email</label><input type="email" id="email" autocomplete="username"></div><div class="field"><label for="pw">Password</label><input type="password" id="pw" autocomplete="current-password"></div>`}
+      <button class="btn primary" id="go">Sign in</button>
+      <div class="small muted" id="err" style="margin-top:8px"></div>
+      <p class="small muted" style="margin-top:14px">${key ? '<a href="#" id="useEmail">Sign in with email and password instead</a>' : (state.keyConfigured ? '<a href="#" id="useKey">No account yet, or locked out? Use the staff key</a>' : 'No staff key is set on the service; an owner has to add you.')}</p></div>`;
+  }
+  function wireSignIn() {
+    const go = async () => {
+      $('#err').textContent = '';
+      try {
+        const r = state.useKey ? await api('/session', { body: { key: $('#key').value } }) : await api('/session', { body: { email: $('#email').value, password: $('#pw').value } });
+        await loadSession();
+        if (r.via === 'key' && !state.setupNeeded && r.staff === undefined) toast('Signed in with the staff key. Add your own account under Staff when you can.');
+        render();
+      } catch (e) { $('#err').textContent = e.message; }
+    };
+    $('#go').addEventListener('click', go);
+    $$('input', $('#app')).forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }));
+    $('#useKey')?.addEventListener('click', e => { e.preventDefault(); state.useKey = true; render(); });
+    $('#useEmail')?.addEventListener('click', e => { e.preventDefault(); state.useKey = false; render(); });
+    ($('#email') || $('#key')).focus();
+  }
+  function setupHtml() {
+    return `<div class="signin panel"><div class="brand"><span class="mark"></span><div><b>VDRPros Vault</b><span>Create the first staff account</span></div></div>
+      <p class="muted small">You are in with the staff key. Create your own account now: from then on you sign in with this email and password, and you can add the rest of the team under Staff. The key stays as the recovery path.</p>
+      <div class="field"><label for="suEmail">Your email</label><input type="email" id="suEmail" autocomplete="username"></div>
+      <div class="field"><label for="suName">Your name</label><input type="text" id="suName" maxlength="120"></div>
+      <div class="field"><label for="suPw">Password (at least 12 characters)</label><input type="password" id="suPw" autocomplete="new-password"></div>
+      <div class="field"><label for="suPw2">Password again</label><input type="password" id="suPw2" autocomplete="new-password"></div>
+      <div class="row" style="gap:8px"><button class="btn primary" id="suGo">Create my account</button><button class="btn" id="suLater">Later</button></div>
+      <div class="small muted" id="err" style="margin-top:8px"></div></div>`;
+  }
+  function wireSetup() {
+    const go = async () => {
+      $('#err').textContent = '';
+      if ($('#suPw').value !== $('#suPw2').value) { $('#err').textContent = 'The two passwords differ'; return; }
+      try { await api('/staff/setup', { body: { email: $('#suEmail').value, name: $('#suName').value, password: $('#suPw').value } }); await loadSession(); toast('Your account is ready'); render(); } catch (e) { $('#err').textContent = e.message; }
+    };
+    $('#suGo').addEventListener('click', go);
+    $('#suLater').addEventListener('click', () => { state.setupNeeded = false; render(); });
+    $$('input', $('#app')).forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }));
+    $('#suEmail').focus();
+  }
+  function changePasswordHtml(forced, inModal) {
+    const inner = `${forced ? '<p class="muted small">You signed in with a temporary password. Choose your own before going on.</p>' : '<p class="muted small">Every other session of yours is signed out when the password changes.</p>'}
+      <div class="field"><label for="cpCur">${forced ? 'Temporary password' : 'Current password'}</label><input type="password" id="cpCur" autocomplete="current-password"></div>
+      <div class="field"><label for="cpNew">New password (at least 12 characters)</label><input type="password" id="cpNew" autocomplete="new-password"></div>
+      <div class="field"><label for="cpNew2">New password again</label><input type="password" id="cpNew2" autocomplete="new-password"></div>
+      <div class="${inModal ? 'modal-actions' : 'row'}" style="gap:8px">${inModal ? '<button class="btn" data-close>Cancel</button>' : ''}<button class="btn primary" id="cpGo">Set password</button></div>
+      <div class="small muted" id="cpErr" style="margin-top:8px"></div>`;
+    return inModal ? `<h2>Change password</h2>${inner}` : `<div class="signin panel"><div class="brand"><span class="mark"></span><div><b>VDRPros Vault</b><span>Set a new password</span></div></div>${inner}</div>`;
+  }
+  function wireChangePassword(forced, root = document) {
+    const go = async () => {
+      $('#cpErr', root).textContent = '';
+      if ($('#cpNew', root).value !== $('#cpNew2', root).value) { $('#cpErr', root).textContent = 'The two passwords differ'; return; }
+      try { await api('/session/password', { body: { current: $('#cpCur', root).value, next: $('#cpNew', root).value } }); await loadSession(); if (!forced) closeModal(); toast('Password set'); render(); } catch (e) { $('#cpErr', root).textContent = e.message; }
+    };
+    $('#cpGo', root).addEventListener('click', go);
+    $$('input', root).forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') go(); }));
+    $('#cpCur', root).focus();
+  }
+  async function loadSession() {
+    try { const r = await api('/session', { quiet: true }); state.signedIn = !!r.signedIn; state.session = r.signedIn ? r : null; state.setupNeeded = !!r.setupNeeded; state.keyConfigured = !!r.keyConfigured; }
+    catch { state.signedIn = false; state.session = null; }
+  }
+
+  // ---------- staff ----------
+  async function viewStaff(main) {
+    const r = await api('/staff');
+    const roleTag = x => `<span class="tag ${x.role === 'owner' ? 'acc' : ''}">${esc(x.role)}</span>`;
+    main.innerHTML = `<div class="page-h"><div><h1>Staff</h1><p class="sub">SMEPro's own people, who sign in here with an email and password. Owners add people, reset passwords and change roles; the staff key on the service remains the recovery path.</p></div>${r.canManage ? '<button class="btn primary" id="newS">Add a person</button>' : ''}</div>
+      <div class="panel"><div class="tablewrap"><table><thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead><tbody>${r.items.map(x => `<tr><td class="mono">${esc(x.email)}${x.id === r.me ? ' <span class="tag">you</span>' : ''}</td><td>${esc(x.name || '')}</td><td>${roleTag(x)}</td><td><span class="tag ${x.status === 'active' ? (x.lockedUntil ? 'warn' : 'ok') : 'bad'}">${x.status === 'active' ? (x.lockedUntil ? 'locked' : (x.mustChange ? 'temporary password' : 'active')) : 'disabled'}</span></td><td class="muted">${x.lastSignInAt ? fmtT(x.lastSignInAt) : 'never'}</td><td><div class="actions">${r.canManage && x.id !== r.me ? `<button class="btn sm" data-reset="${esc(x.id)}">Reset password</button><button class="btn sm" data-role="${esc(x.id)}" data-to="${x.role === 'owner' ? 'staff' : 'owner'}">${x.role === 'owner' ? 'Make staff' : 'Make owner'}</button><button class="btn sm ${x.status === 'active' ? 'danger' : ''}" data-status="${esc(x.id)}" data-to="${x.status === 'active' ? 'disabled' : 'active'}">${x.status === 'active' ? 'Disable' : 'Enable'}</button>` : ''}</div></td></tr>`).join('') || `<tr><td colspan="6" class="empty">No staff accounts yet.${r.canManage ? ' Add the first person.' : ''}</td></tr>`}</tbody></table></div></div>
+      ${r.canManage ? '<div class="panel"><h2>Log</h2><div id="staffLog" class="small muted">Loading</div></div>' : ''}`;
+    const showTemp = (email, pw) => modal(`<h2>Temporary password</h2><p class="sub">Read this to ${esc(email)} or send it by a channel you trust. It works once: they choose their own password at their first sign-in. It is not shown again.</p><input type="text" readonly class="mono" value="${esc(pw)}" onclick="this.select()"><div class="modal-actions"><button class="btn primary" data-close>Done</button></div>`);
+    $('#newS')?.addEventListener('click', () => modal(`<h2>Add a person</h2><p class="sub">They get a temporary password to sign in with once, then set their own.</p><div class="field"><label for="sEmail">Email</label><input type="email" id="sEmail"></div><div class="field"><label for="sName">Name</label><input type="text" id="sName" maxlength="120"></div><div class="field"><label for="sRole">Role</label><select id="sRole"><option value="staff">Staff (operate the Vault)</option><option value="owner">Owner (also manages staff)</option></select></div><div class="modal-actions"><button class="btn" data-close>Cancel</button><button class="btn primary" id="ok">Add</button></div><div class="small muted" id="mErr"></div>`, root => $('#ok', root).addEventListener('click', async () => {
+      try { const x = await api('/staff', { body: { email: $('#sEmail', root).value, name: $('#sName', root).value, role: $('#sRole', root).value } }); closeModal(); showTemp(x.staff.email, x.tempPassword); viewStaff(main); } catch (e) { $('#mErr', root).textContent = e.message; }
+    })));
+    $$('[data-reset]', main).forEach(b => b.addEventListener('click', async () => { const row = r.items.find(x => x.id === b.dataset.reset); if (!confirm(`Reset the password of ${row.email}? Their sessions are signed out.`)) return; try { const x = await api('/staff/' + b.dataset.reset, { method: 'PATCH', body: { resetPassword: true } }); showTemp(x.staff.email, x.tempPassword); viewStaff(main); } catch (e) { toast(e.message, 'bad'); } }));
+    $$('[data-role]', main).forEach(b => b.addEventListener('click', async () => { try { await api('/staff/' + b.dataset.role, { method: 'PATCH', body: { role: b.dataset.to } }); toast('Role changed'); viewStaff(main); } catch (e) { toast(e.message, 'bad'); } }));
+    $$('[data-status]', main).forEach(b => b.addEventListener('click', async () => { try { await api('/staff/' + b.dataset.status, { method: 'PATCH', body: { status: b.dataset.to } }); toast(b.dataset.to === 'disabled' ? 'Disabled' : 'Enabled'); viewStaff(main); } catch (e) { toast(e.message, 'bad'); } }));
+    if (r.canManage) { try { const log = await api('/staff/log'); $('#staffLog').innerHTML = log.items.length ? `<div class="tablewrap"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Detail</th></tr></thead><tbody>${log.items.map(l => `<tr><td class="muted">${fmtT(l.at)}</td><td class="mono">${esc(l.email || (l.staff_id ? l.staff_id : 'staff key'))}</td><td>${esc(l.action)}</td><td class="mono small">${esc(l.detail || '')}</td></tr>`).join('')}</tbody></table></div>` : 'Nothing yet.'; } catch (e) { $('#staffLog').textContent = e.message; } }
+  }
 
   // ---------- overview ----------
   async function viewOverview(main) {
@@ -188,5 +277,5 @@
   function wireOpen(root) { $$('[data-open]', root).forEach(tr => tr.addEventListener('click', e => { if (e.target.closest('a, button, select, input')) return; location.hash = tr.dataset.open; })); }
 
   window.addEventListener('hashchange', render);
-  (async () => { try { await api('/overview'); state.signedIn = true; } catch { state.signedIn = false; } render(); })();
+  (async () => { await loadSession(); render(); })();
 })();

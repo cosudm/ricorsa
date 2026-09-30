@@ -12,13 +12,15 @@ It lives at https://vault.vdrpros.com, in the same Cloudflare account as VDRPros
 ## Setup
 
 1. Cloudflare: create the D1 database `vault` (id in `wrangler.jsonc`), the R2 bucket `vault-files` (United States jurisdiction), and the queues `vault-intake` and `vault-intake-dlq`. Create a Worker named `vault` from the `cosudm/ricorsa` repository with the root directory `vault`, build command `npm run cf:migrate` and deploy command `npx wrangler deploy`. Attach the custom domain `vault.vdrpros.com`.
-2. Secrets on the Worker (Settings, Variables and Secrets): `ADMIN_KEY` (the staff sign-in), `RICORSA_CLIENT_SECRET` (shared with Ricorsa, where it is `VAULT_CLIENT_SECRET`), `LINK_SECRET` (any 32 random bytes as hex), `RESEND_API_KEY` (codes are emailed from `MAIL_FROM`; the domain in it must be verified in Resend), and for OCR `OCR_PROVIDER` (`azure` with `AZURE_DI_ENDPOINT` and `AZURE_DI_KEY`, or `moonshot` with `MOONSHOT_API_KEY`; `none` keeps scans as awaiting OCR).
+2. Secrets on the Worker (Settings, Variables and Secrets): `ADMIN_KEY` (the staff key: it creates the first owner account and is the recovery path; day to day, staff sign in with their own email and password), `RICORSA_CLIENT_SECRET` (shared with Ricorsa, where it is `VAULT_CLIENT_SECRET`), `LINK_SECRET` (any 32 random bytes as hex), `RESEND_API_KEY` (codes are emailed from `MAIL_FROM`; the domain in it must be verified in Resend), and for OCR `OCR_PROVIDER` (`azure` with `AZURE_DI_ENDPOINT` and `AZURE_DI_KEY`, or `moonshot` with `MOONSHOT_API_KEY`; `none` keeps scans as awaiting OCR).
 3. Ricorsa: `VAULT_URL` in its `wrangler.jsonc` and the `VAULT_CLIENT_SECRET` secret. The VDRPros Vault card then appears in Connectors.
 4. Push to `main`. Migrations for the control plane are applied on every deploy.
 
 ## Operating it
 
-Staff sign in at `/admin/` with the staff key. Create the tenant (the customer), add the people who may connect Ricorsa (their Vault email, with owner or admin for everything or a workspace membership for less), create workspaces and matters, then open a batch. A batch can be filled from the browser or with the uploader:
+Staff sign in at `/admin/` with their email and password. The first time, sign in with the staff key (`ADMIN_KEY`) and the screen asks you to create your own owner account; after that, owners add people under Staff (each gets a temporary password to sign in with once and then chooses their own), reset passwords, change roles (owner or staff) and disable accounts. Passwords are stored as PBKDF2-SHA256 hashes, five wrong tries lock an account for fifteen minutes, a password change signs the account's other sessions out, and every staff action is in the staff log. If nobody can sign in, the staff key still works ("Use the staff key" under the sign-in form); if the key itself is lost, set a new value for `ADMIN_KEY` on the Worker in the Cloudflare dashboard.
+
+Create the tenant (the customer), add the people who may connect Ricorsa (their Vault email, with owner or admin for everything or a workspace membership for less), create workspaces and matters, then open a batch. A batch can be filled from the browser or with the uploader:
 
 ```
 node scripts/upload.mjs --url https://vault.vdrpros.com --batch <batch id> --key <batch key> [--matter <id>] [--seal] ./folder
