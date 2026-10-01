@@ -225,14 +225,29 @@ export function recommendedModel(p: Provider, ids: string[] = p.models): string 
 }
 
 /** Which configured provider serves a model id. An explicit provider wins; then the one whose list has it; then the catalog's patterns; then the first usable OpenAI-compatible provider. */
+/** The catalog provider a model id belongs to by its family (claude- is Anthropic's, kimi- is Moonshot's); null for an id with no telling prefix. */
+export function providerFamily(model: string): ProviderDef | null { return PROVIDER_CATALOG.find(d => !d.aggregator && d.match.test(model)) || null; }
+/** Whether a provider is the home of a model's family: its own model, served whether or not its list has caught up with it. */
+export function isHomeOf(p: Provider, model: string): boolean { return providerFamily(model)?.id === p.id; }
+
+/**
+ * The provider that serves a model: the one an admin chose for the tier, else the model's own family (a Claude id
+ * goes to Anthropic, a Kimi id to Moonshot), else an endpoint the admin added that lists it (a gateway or an
+ * aggregator), else any provider listing it, else the plain OpenAI-compatible one. A model of a known family is never
+ * sent to another catalog provider that happens to list its name: Moonshot lists Claude ids as aliases for its own
+ * coding plans and answers "not found or permission denied" to an ordinary key.
+ */
 export function providerForModel(model: string, hint?: string | null): Provider | null {
   const list = providersNow().filter(p => p.key);
   if (hint) { const h = list.find(p => p.id === hint); if (h) return h; }
+  const family = providerFamily(model);
+  if (family) {
+    const home = list.find(p => p.id === family.id);
+    if (home) return home;
+    return list.find(p => (p.custom || p.aggregator) && p.models.includes(model)) || null;   // the family's provider has no key: reachable only through an endpoint the admin pointed at it
+  }
   const listed = list.filter(p => p.models.includes(model));
   if (listed.length) return listed.find(p => !p.aggregator) || listed[0];
-  for (const def of PROVIDER_CATALOG) { if (def.match.test(model)) { const p = list.find(x => x.id === def.id); if (p) return p; } }
-  const def = PROVIDER_CATALOG.find(d => d.match.test(model));
-  if (def) return null;   // a known family whose provider has no key: not reachable
   return list.find(p => p.kind === 'openai' && !p.aggregator) || list.find(p => p.kind === 'openai') || null;
 }
 

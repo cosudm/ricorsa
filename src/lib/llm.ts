@@ -13,7 +13,7 @@
  */
 import type { Source } from './search';
 import { callMcpTool } from './mcp';
-import { loadProviders, providersNow, providerForModel, providerUsable, markProviderDown, providerSetAside, listProviderModels, probeProvider, modelSettings, modelSettingsNow, type Provider } from './providers';
+import { loadProviders, providersNow, providerForModel, providerUsable, markProviderDown, providerSetAside, listProviderModels, probeProvider, modelSettings, modelSettingsNow, isHomeOf, type Provider } from './providers';
 
 /**
  * quick: planning and small structured calls · default: answers · complex: Reasoning answers ·
@@ -55,9 +55,9 @@ function envFor(prefix: string, tier: Tier): string | undefined {
   const key = `${prefix}_${tier.toUpperCase()}`;
   return process.env[key];
 }
-/** Thinking models (Kimi K3, K2.6, K2.7 code and the K2 thinking variants) accept only the default temperature; leave it out for them. Claude with thinking takes none either. */
+/** Thinking models (Kimi K3, K2.5 and later, K2.7 code and the K2 thinking variants) accept only their fixed temperature; leave it out for them. Claude with thinking takes none either. */
 function temperatureFor(model: string, wanted: number | undefined): number | undefined {
-  if (isClaude(model) || /k3|k2\.[6-9]|k2-?thinking|thinking|reason/i.test(model)) return undefined;
+  if (isClaude(model) || /k3|k2\.[5-9]|k2-?thinking|thinking|reason/i.test(model)) return undefined;
   return wanted ?? 0.6;
 }
 function reasoningFor(tier: Tier, model: string): string | null {
@@ -66,10 +66,18 @@ function reasoningFor(tier: Tier, model: string): string | null {
   if (v === 'off' || v === 'none') return null;
   const takes = /k3|thinking|reason|^o[1-9](-|$)|^gpt-5|^gemini-(2\.5|3)|^grok-.*mini|magistral/i.test(model) || process.env.REASONING_ALWAYS === '1';
   if (!takes) return null;
-  // Only Moonshot takes "max"; everyone else tops out at "high".
+  // Kimi K3 takes low, high or max and nothing between (a value it does not know is refused, and the retry without
+  // one thinks at max); everyone else tops out at "high".
+  if (/k3/i.test(model)) return v === 'medium' ? 'low' : v;
   const p = providerFor(model);
   return v === 'max' && p && p.id !== 'moonshot' ? 'high' : v;
 }
+/**
+ * Kimi K2.5 and K2.6 think by default and take no effort level; `thinking: {type: 'disabled'}` turns it off
+ * (K2.7 code and K3 cannot turn it off). Sent on structured calls, where an answer is a few hundred tokens of JSON
+ * and the thinking was what ran the budget and the clock out.
+ */
+function canDisableThinking(model: string): boolean { return /k2\.[56](?!\d)/i.test(model) && !/code/i.test(model); }
 function effortFor(tier: Tier, model: string): string | null {
   if (!isClaude(model)) return null;
   const v = (envFor('EFFORT', tier) || DEFAULT_EFFORT[tier]).toLowerCase();
@@ -125,22 +133,58 @@ export async function resolveModel(tier: Tier, exclude: string[] = []): Promise<
   await loadProviders(); await modelSettings();
   const first = configured(tier);
   const want = [first, ...CANDIDATES[tier]].filter((v, i, a) => a.indexOf(v) === i && !exclude.includes(v));
+  // First the candidates known to answer: listed by their provider, or the provider's own model that an admin
+  // configured for some tier or that has answered here before (Moonshot's list lagged K3 by weeks). Then the
+  // provider's other own models, unlisted, in order: the request itself tells whether the id is served, and one
+  // that is not is set aside for an hour.
+  const open: Array<[string, Provider]> = [];
   for (const w of want) {
     const p = providerFor(w, w === first ? tier : undefined);
-    if (!p || !providerUsable(p)) continue;
+    if (!p || !providerUsable(p) || modelAsideFor(p, w)) continue;
     const ids = p.models.length ? p.models : await listProviderModels(p);
     if (!ids.length || ids.includes(w)) return w;
+    if (!isHomeOf(p, w)) continue;
+    if (configuredAnywhere(w) || modelSeen.has(`${p.id}:${w}`)) return w;
+    open.push([w, p]);
   }
+  if (open[0]) return open[0][0];
   const chat = (id: string) => !exclude.includes(id) && !/embed|whisper|tts|image|dall|moderation|audio|realtime|rerank|vision-only/i.test(id);
   // Nothing from the wanted list: the tier's chosen provider first, then Moonshot's newest Kimi, then any chat model from a usable provider.
   const hint = configuredProvider(tier);
   const usable = providersNow().filter(p => providerUsable(p) && !p.aggregator).sort((a, b) => (a.id === hint ? -1 : b.id === hint ? 1 : a.id === 'moonshot' ? -1 : b.id === 'moonshot' ? 1 : 0));
   for (const p of usable) {
-    const ids = (p.models.length ? p.models : await listProviderModels(p)).filter(chat);
-    if (p.id === 'moonshot') { const kimi = ids.filter(id => /^kimi-k\d/i.test(id)).sort().reverse(); if (kimi[0]) return kimi[0]; }
+    const ids = (p.models.length ? p.models : await listProviderModels(p)).filter(chat).filter(id => !modelAsideFor(p, id) && (p.custom || p.aggregator || isHomeOf(p, id)));
+    if (p.id === 'moonshot') { const kimi = ids.filter(id => /^kimi-k\d/i.test(id) && !/code/i.test(id)).sort().reverse(); if (kimi[0]) return kimi[0]; }
     const pick = ids.sort().reverse()[0]; if (pick) return pick;
   }
   return want.find(w => !isClaude(w)) || want[0];
+}
+
+/**
+ * A (provider, model) pair set aside: the provider answered 404 for the model (an hour: the id is not this account's
+ * to use, whatever the list says) or the model ran past the time limit (ten minutes). Resolution skips the pair
+ * so the next request goes straight to a model that answers.
+ */
+const modelAside = new Map<string, { until: number; why: string }>();
+/** (provider, model) pairs that have answered in this process: known to be served whatever the provider's list says. */
+const modelSeen = new Set<string>();
+function markModelSeen(p: Provider, model: string): void { modelSeen.add(`${p.id}:${model}`); modelAside.delete(`${p.id}:${model}`); }
+/** Whether an admin configured this model id for any tier (so it is known to exist, listed or not). */
+function configuredAnywhere(model: string): boolean { return (['quick', 'default', 'complex', 'build', 'ideas'] as Tier[]).some(t => configured(t) === model); }
+export function setModelAside(p: Provider, model: string, why: string, ms: number): void {
+  modelAside.set(`${p.id}:${model}`, { until: Date.now() + ms, why });
+  console.warn('[provider]', p.id, 'sets aside', model, `for ${Math.round(ms / 60000)} min:`, why.slice(0, 160));
+}
+function modelAsideFor(p: Provider, model: string): { until: number; why: string } | null {
+  const a = modelAside.get(`${p.id}:${model}`);
+  return a && Date.now() < a.until ? a : null;
+}
+const ASIDE_NOT_FOUND_MS = 60 * 60_000;
+const ASIDE_SLOW_MS = 10 * 60_000;
+/** Whether an error is the request running past its time limit (AbortSignal.timeout) rather than the provider refusing. */
+function isTimeout(e: unknown): boolean {
+  const err = e as { name?: string; message?: string };
+  return err?.name === 'TimeoutError' || /aborted due to timeout|timed out|timeout/i.test(String(err?.message || ''));
 }
 
 export function mockMode(): boolean {
@@ -177,7 +221,7 @@ export function describeProviderError(e: unknown): ProviderError {
   const m = message.toLowerCase();
   let code: ProviderErrorCode = 'upstream_error';
   if (status === 402 || /balance|insufficient|quota|billing|recharge|top up|credit/.test(m) || (status === 403 && /quota|balance/.test(type))) code = 'provider_billing';
-  else if (status === 401 || status === 403 || /invalid api key|authentication|unauthorized|invalid x-api-key/.test(m)) code = 'provider_auth';
+  else if (status === 401 || status === 403 || /invalid api key|authentication|unauthorized|invalid x-api-key|workspace-id|not scoped to a workspace/.test(m)) code = 'provider_auth';
   else if (status === 429 || /rate limit|too many requests|concurrency/.test(m)) code = 'rate_limited';
   else if (status === 503 || status === 502 || status === 529 || /overloaded|server busy|engine overloaded/.test(m)) code = 'overloaded';
   else if (status === 400 && /context length|too long|maximum context|max_tokens|token limit|prompt is too long/.test(m)) code = 'prompt_too_large';
@@ -235,7 +279,8 @@ function whyNot(model: string, tier: Tier): string {
   const p = providerFor(model, tier);
   if (!p || !p.key) return `No API key for a provider that serves ${model}`;
   const aside = providerSetAside(p); if (aside) return aside.why;
-  if (p.models.length && !p.models.includes(model)) return `${p.name} does not list ${model} for this account`;
+  const pair = modelAsideFor(p, model); if (pair) return pair.why;
+  if (p.models.length && !p.models.includes(model) && !isHomeOf(p, model)) return `${p.name} does not list ${model} for this account`;
   return `${p.name} could not be used`;
 }
 
@@ -352,8 +397,8 @@ export async function streamAnswer(opts: {
       if ((e.status === 429 || e.status === 529 || e.status === 503 || e.status === 502) && overloadRetries < 1) { overloadRetries++; await new Promise(r => setTimeout(r, 2000)); continue; }
       // The account refused (bad key, no credit): set the provider aside so nothing else waits on it for a while.
       if (e.status === 401 || e.status === 402 || e.status === 403 || (e.status === 400 && /credit|billing|balance|quota/i.test(msg))) markProviderDown(provider, `HTTP ${e.status}: ${msg.slice(0, 120)}`);
-      // An id this account cannot use: refresh the provider's list once so the next pick is a listed model.
-      if (e.status === 404 && !retriedModel) { retriedModel = true; await listProviderModels(provider, true); }
+      // An id this account cannot use: set the pair aside for a while and refresh the provider's list once so the next pick is a listed model.
+      if (e.status === 404) { setModelAside(provider, model, msg, ASIDE_NOT_FOUND_MS); if (!retriedModel) { retriedModel = true; await listProviderModels(provider, true); } }
       // Anything the provider refuses before a word is written: hand the tier to the next candidate so the person still gets a result.
       if (out.length === 0 && tried.length <= MAX_SWITCHES) {
         const next = await resolveModel(opts.tier, tried); const np = providerFor(next, opts.tier);
@@ -366,6 +411,7 @@ export async function streamAnswer(opts: {
       throw e;
     }
     usage.in += res.usage.in; usage.out += res.usage.out; usage.cacheRead += res.usage.cacheRead; usage.cacheWrite += res.usage.cacheWrite || 0;
+    markModelSeen(provider, model);
     console.log('[answer]', JSON.stringify({ model, finish: res.finish, tools: res.toolCalls.length, chars: out.length, in: res.usage.in, out: res.usage.out, cacheRead: res.usage.cacheRead }));
 
     if (res.finish === 'tool_calls' && res.toolCalls.length && (rounds < maxRounds || !budgetClosed)) {
@@ -589,31 +635,48 @@ async function providerError(res: Response): Promise<ProviderRequestError> {
 const THINKING_ROOM: Record<string, number> = { low: 4000, medium: 8000, high: 16000, xhigh: 24000, max: 32000 };
 /** Models that think before they answer whether or not an effort parameter is sent (Kimi K3 and K2.6 and later, the thinking variants, the reasoning families). */
 function thinkingModel(model: string): boolean { return /k3|k2\.[6-9]|k2-?thinking|thinking|reason|^o[1-9](-|$)|^gpt-5|^gemini-(2\.5|3)|^grok-.*mini|magistral/i.test(model); }
-/** Thinking effort for a structured call: the tier's, capped at medium, since a JSON answer gains little from long deliberation. */
-function jsonEffort(effort: string | null): string | null {
+/**
+ * Thinking effort for a structured call: the tier's, capped at medium (low on Kimi K3, which has no medium), since a
+ * JSON answer gains little from long deliberation.
+ */
+function jsonEffort(effort: string | null, model = ''): string | null {
   if (!effort) return null;
-  return effort === 'high' || effort === 'xhigh' || effort === 'max' ? 'medium' : effort;
+  const capped = effort === 'high' || effort === 'xhigh' || effort === 'max' ? 'medium' : effort;
+  return capped === 'medium' && /k3/i.test(model) ? 'low' : capped;
+}
+/** How long one structured call may take: planning before an answer cannot hold the person for minutes; an idea set may take longer. */
+const JSON_TIMEOUT_MS: Record<Tier, number> = { quick: 60_000, default: 60_000, complex: 90_000, build: 120_000, ideas: 120_000 };
+function jsonTimeout(tier: Tier): number {
+  const override = process.env.NODE_ENV !== 'production' ? Number(process.env.JSON_TIMEOUT_MS || 0) : 0;   // tests shorten the wait
+  return override > 0 ? override : JSON_TIMEOUT_MS[tier];
 }
 
 /**
  * Small structured call (query planning, rewrites, Home suggestions, Discover ideas). Returns parsed JSON or null.
  * The tier picks the model: `quick` by default; `ideas` for Discover, which goes to the build model. `maxTokens` is
- * the room the answer itself needs; thinking gets its own room on top. A reply cut off by its budget is tried once
- * more on the same model with twice the room and the least thinking, before the next candidate model is tried.
+ * the room the answer itself needs; thinking gets its own room on top, or is turned off where the model allows it
+ * (Kimi K2.5 and K2.6). A reply cut off by its budget is tried once more on the same model with twice the room and
+ * the least thinking. A model the provider does not know, or one that runs past the time limit, is set aside; it and
+ * a reply with no JSON in it hand the call to the next candidate, up to three models in all. A prompt no model can
+ * take is final.
  */
 export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, tier: Tier = 'quick'): Promise<T | null> {
   if (mockMode()) return null;
   const system = 'Reply with valid JSON only: no prose, no markdown fences.';
-  const tried: string[] = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const model = await resolveModel(tier, tried); tried.push(model);
+  const tried: string[] = []; let answers = 0;
+  while (answers < 3 && tried.length < 8) {
+    const model = await resolveModel(tier, tried);
+    if (!model || tried.includes(model)) break;
+    tried.push(model);
     let provider: Provider;
     try { provider = requireProvider(model, tier); } catch { return null; }
+    answers++;
     try {
-      // The effort parameter this model takes (none for a model that thinks on its own terms), and the room its thinking needs either way.
-      let effort = jsonEffort(provider.kind === 'anthropic' ? effortFor(tier, model) : reasoningFor(tier, model));
-      const thinks = !!effort || provider.kind === 'anthropic' || thinkingModel(model);
-      let room = maxTokens + (thinks ? THINKING_ROOM[effort || jsonEffort(DEFAULT_REASONING[tier]) || 'medium'] || 8000 : 0);
+      // The thinking control this model takes: an effort level, an off switch, or nothing (it thinks on its own terms); and the room its thinking needs.
+      const noThinking = provider.kind !== 'anthropic' && canDisableThinking(model);
+      let effort = noThinking ? null : jsonEffort(provider.kind === 'anthropic' ? effortFor(tier, model) : reasoningFor(tier, model), model);
+      const thinks = !noThinking && (!!effort || provider.kind === 'anthropic' || thinkingModel(model));
+      let room = maxTokens + (thinks ? THINKING_ROOM[effort || jsonEffort(DEFAULT_REASONING[tier], model) || 'medium'] || 8000 : 0);
       for (let pass = 0; pass < 2; pass++) {
         let text = ''; let finish = 'stop'; let out = 0;
         if (provider.kind === 'anthropic') {
@@ -624,10 +687,13 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, ti
           const body: Record<string, unknown> = { model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
           const temp = temperatureFor(model, 0.4); if (temp !== undefined) body.temperature = temp;
           if (effort) body.reasoning_effort = effort;
-          const j = await chatOnce(provider, body, room);
+          if (noThinking) body.thinking = { type: 'disabled' };
+          if (provider.id === 'moonshot') body.response_format = { type: 'json_object' };
+          const j = await chatOnce(provider, body, room, jsonTimeout(tier));
           text = j.choices?.[0]?.message?.content || ''; finish = j.choices?.[0]?.finish_reason || 'stop'; out = j.usage?.completion_tokens || 0;
-          console.log('[json]', JSON.stringify({ model, tier, in: j.usage?.prompt_tokens, out, finish, effort, room }));
+          console.log('[json]', JSON.stringify({ model, tier, in: j.usage?.prompt_tokens, out, finish, effort, thinking: noThinking ? 'off' : 'on', room }));
         }
+        markModelSeen(provider, model);
         const parsed = parseJsonLoosely<T>(text);
         if (parsed !== null) return parsed;
         // Cut off by the budget (or thought the whole budget away): once more with twice the room and the least thinking.
@@ -639,8 +705,13 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, ti
       const p = describeProviderError(e);
       console.warn('[provider] quickJson failed', JSON.stringify({ model, provider: provider.id, tier, code: p.code, status: p.status, type: p.type, message: p.message }));
       if (p.code === 'provider_auth' || p.code === 'provider_billing') markProviderDown(provider, p.message);
-      // A refusal hands the call to the next candidate once; a bad answer is final.
-      if (p.code === 'prompt_too_large' || p.code === 'invalid_request') return null;
+      // A model the provider does not know, or one that will not answer in time, is set aside; the next candidate takes the call (an unknown id costs no attempt).
+      if (p.status === 404) { answers--; setModelAside(provider, model, p.message, ASIDE_NOT_FOUND_MS); continue; }
+      if (isTimeout(e)) { setModelAside(provider, model, 'ran past the time limit on a structured call', ASIDE_SLOW_MS); continue; }
+      // A prompt no model can take is final. Any other refusal of the request (a key the account cannot use for
+      // this model, a parameter it will not take) sets the pair aside for a while and hands the call on.
+      if (p.code === 'prompt_too_large') return null;
+      if (p.code === 'invalid_request') setModelAside(provider, model, p.message, ASIDE_SLOW_MS);
     }
   }
   return null;
@@ -650,11 +721,11 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, ti
  * One unstreamed chat completion, with the parameter names this model takes: newer OpenAI models want
  * `max_completion_tokens` and no temperature; older ones and most other providers want `max_tokens`.
  */
-async function chatOnce(provider: Provider, body: Record<string, unknown>, maxTokens: number): Promise<{ choices?: Array<{ message?: { content?: string }; finish_reason?: string }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
+async function chatOnce(provider: Provider, body: Record<string, unknown>, maxTokens: number, timeoutMs = 120_000): Promise<{ choices?: Array<{ message?: { content?: string }; finish_reason?: string }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
   let tokensParam = 'max_tokens';
   let budget = maxTokens;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` }, body: JSON.stringify({ ...body, [tokensParam]: budget }), signal: AbortSignal.timeout(120_000) });
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` }, body: JSON.stringify({ ...body, [tokensParam]: budget }), signal: AbortSignal.timeout(timeoutMs) });
     if (res.ok) return await res.json();
     const err = await providerError(res);
     if (err.status === 400 && tokensParam === 'max_tokens' && /max_completion_tokens/i.test(err.message)) { tokensParam = 'max_completion_tokens'; continue; }
@@ -662,6 +733,8 @@ async function chatOnce(provider: Provider, body: Record<string, unknown>, maxTo
     if (err.status === 400 && budget > 2048 && /max_tokens|max_completion_tokens|maximum.{0,40}tokens|too (?:large|long|many)/i.test(err.message)) { budget = Math.floor(budget / 2); continue; }
     if (err.status === 400 && body.temperature !== undefined && /temperature/i.test(err.message)) { delete body.temperature; continue; }
     if (err.status === 400 && body.reasoning_effort && /reasoning/i.test(err.message)) { delete body.reasoning_effort; continue; }
+    if (err.status === 400 && body.thinking && /thinking/i.test(err.message)) { delete body.thinking; continue; }
+    if (err.status === 400 && body.response_format && /response_format|json_object|json/i.test(err.message)) { delete body.response_format; continue; }
     throw err;
   }
   throw new ProviderRequestError(400, 'The request could not be shaped for this model');

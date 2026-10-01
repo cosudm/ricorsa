@@ -93,7 +93,8 @@ export async function remember(userId: string, m: { kind: MemoryKind; threadId?:
   if (!parts.length) return 0;
   const at = m.at ? new Date(m.at) : new Date();
   const rows = parts.map((text, i) => ({ id: uid(), userId, kind: m.kind, threadId: m.threadId || null, turnId: m.turnId || null, fileId: m.fileId || null, title: String(m.title || '').slice(0, 200), text: text.slice(0, 2000), terms: ' ' + terms(m.title + ' ' + text).join(' ') + ' ', ordinal: i, embedded: false, createdAt: at }));
-  for (let i = 0; i < rows.length; i += 20) await d.insert(schema.memories).values(rows.slice(i, i + 20));
+  // D1 binds at most 100 parameters to one statement; twelve columns a row keeps a batch at eight rows.
+  for (let i = 0; i < rows.length; i += 8) await d.insert(schema.memories).values(rows.slice(i, i + 8));
   if (vectorsEnabled()) {
     const vecs = await embed(rows.map(r => r.title + '\n' + r.text));
     if (vecs && vecs.length === rows.length) {
