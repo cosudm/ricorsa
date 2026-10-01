@@ -55,8 +55,15 @@ export async function createPlan(productId: string, name: string, description: s
   const cycles: Array<Record<string, unknown>> = [];
   if (trialDays > 0) cycles.push({ frequency: { interval_unit: 'DAY', interval_count: trialDays }, tenure_type: 'TRIAL', sequence: 1, total_cycles: 1 });
   cycles.push({ frequency: { interval_unit: interval, interval_count: 1 }, tenure_type: 'REGULAR', sequence: cycles.length + 1, total_cycles: 0, pricing_scheme: { fixed_price: { value: priceUsd.toFixed(2), currency_code: 'USD' } } });
+  // PayPal caps a plan's name and description at 127 characters; a longer blurb is cut at the last clause that fits, so the plan is created rather than refused.
+  const cut = (v: string, n: number) => {
+    if (v.length <= n) return v;
+    const head = v.slice(0, n - 1);
+    const at = Math.max(head.lastIndexOf('. '), head.lastIndexOf(': '), head.lastIndexOf('; '), head.lastIndexOf(', '));
+    return (at > n / 2 ? head.slice(0, at) : head.replace(/\s+\S*$/, '')).replace(/[\s,;:]+$/, '') + '.';
+  };
   return api<{ id: string }>('/v1/billing/plans', { method: 'POST', body: JSON.stringify({
-    product_id: productId, name, description, status: 'ACTIVE',
+    product_id: productId, name: cut(name, 127), description: cut(description, 127), status: 'ACTIVE',
     billing_cycles: cycles,
     payment_preferences: { auto_bill_outstanding: true, setup_fee_failure_action: 'CONTINUE', payment_failure_threshold: 2 },
   }) });
