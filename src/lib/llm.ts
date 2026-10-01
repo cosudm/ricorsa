@@ -652,11 +652,14 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, ti
  */
 async function chatOnce(provider: Provider, body: Record<string, unknown>, maxTokens: number): Promise<{ choices?: Array<{ message?: { content?: string }; finish_reason?: string }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
   let tokensParam = 'max_tokens';
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` }, body: JSON.stringify({ ...body, [tokensParam]: maxTokens }), signal: AbortSignal.timeout(120_000) });
+  let budget = maxTokens;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` }, body: JSON.stringify({ ...body, [tokensParam]: budget }), signal: AbortSignal.timeout(120_000) });
     if (res.ok) return await res.json();
     const err = await providerError(res);
     if (err.status === 400 && tokensParam === 'max_tokens' && /max_completion_tokens/i.test(err.message)) { tokensParam = 'max_completion_tokens'; continue; }
+    // A budget past what the model allows (a thinking model given room for its reasoning): try again with half.
+    if (err.status === 400 && budget > 2048 && /max_tokens|max_completion_tokens|maximum.{0,40}tokens|too (?:large|long|many)/i.test(err.message)) { budget = Math.floor(budget / 2); continue; }
     if (err.status === 400 && body.temperature !== undefined && /temperature/i.test(err.message)) { delete body.temperature; continue; }
     if (err.status === 400 && body.reasoning_effort && /reasoning/i.test(err.message)) { delete body.reasoning_effort; continue; }
     throw err;
