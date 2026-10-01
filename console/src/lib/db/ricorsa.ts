@@ -13,7 +13,10 @@ export const rUsers = sqliteTable('users', {
   name: text('name'),
   picture: text('picture'),
   plan: text('plan').notNull().default('free'),
+  /** The current subscription's id, PayPal's or the card processor's. */
   paypalSubscriptionId: text('paypal_subscription_id'),
+  /** Who bills it: 'paypal' or 'finix' (card); null before October 2026 means PayPal. */
+  subscriptionProvider: text('subscription_provider').$type<'paypal' | 'finix'>(),
   subscriptionStatus: text('subscription_status'),
   planRenewsAt: ts('plan_renews_at'),
   /** How the current subscription bills: monthly or annual; null for the free state and for grants that did not say. */
@@ -33,6 +36,7 @@ export const rSubscriptions = sqliteTable('subscriptions', {
   userId: text('user_id').notNull(),
   planKey: text('plan_key').notNull(),
   paypalPlanId: text('paypal_plan_id').notNull(),
+  provider: text('provider').$type<'paypal' | 'finix'>().notNull().default('paypal'),
   billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
   status: text('status').notNull(),
   startedAt: ts('started_at'),
@@ -57,11 +61,13 @@ export const rUsage = sqliteTable('usage', {
   gas: integer('gas').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.userId, t.period] })]);
 
-/** Pay-As-You-Go purchases, one row per captured PayPal order. */
+/** Pay-As-You-Go purchases, one row per captured PayPal order or succeeded card payment. */
 export const rGasPurchases = sqliteTable('gas_purchases', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),
+  /** PayPal's order id, or `finix:<transfer id>` for a card payment. */
   orderId: text('order_id').notNull(),
+  provider: text('provider').$type<'paypal' | 'finix'>().notNull().default('paypal'),
   usdCents: integer('usd_cents').notNull(),
   gas: integer('gas').notNull(),
   status: text('status').notNull().default('completed'),

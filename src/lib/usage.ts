@@ -154,12 +154,15 @@ export async function chargeGas(user: CurrentUser, cost: number): Promise<GasRec
   return { cost: c, remaining, fromPlan, fromBalance, unlimited: st.unlimited };
 }
 
-/** Credit bought gas to the account (a captured PayPal order), once per order. Returns the new balance, or null when the order was already credited. */
-export async function creditGas(userId: string, orderId: string, usdCents: number, amount: number): Promise<number | null> {
+/**
+ * Credit bought gas to the account (a captured PayPal order or a succeeded card payment), once per order. Returns the
+ * new balance, or null when the order was already credited.
+ */
+export async function creditGas(userId: string, orderId: string, usdCents: number, amount: number, provider: 'paypal' | 'finix' = 'paypal'): Promise<number | null> {
   const d = db();
   const dup = await d.select({ id: schema.gasPurchases.id }).from(schema.gasPurchases).where(eq(schema.gasPurchases.orderId, orderId)).limit(1);
   if (dup[0]) return null;
-  await d.insert(schema.gasPurchases).values({ id: crypto.randomUUID().replace(/-/g, '').slice(0, 20), userId, orderId, usdCents, gas: amount, status: 'completed' });
+  await d.insert(schema.gasPurchases).values({ id: crypto.randomUUID().replace(/-/g, '').slice(0, 20), userId, orderId, usdCents, gas: amount, status: 'completed', provider });
   const rows = await d.update(schema.users).set({ gasBalance: sql`${schema.users.gasBalance} + ${amount}` }).where(eq(schema.users.id, userId)).returning({ gasBalance: schema.users.gasBalance });
   return rows[0]?.gasBalance ?? amount;
 }

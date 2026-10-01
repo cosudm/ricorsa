@@ -127,6 +127,13 @@
       "when": 1790811454081,
       "tag": "0017_gas",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1790866824202,
+      "tag": "0018_finix",
+      "breakpoints": true
     }
   ]
 }

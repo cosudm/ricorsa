@@ -138,11 +138,14 @@ export async function probeProvider(p: Provider, model?: string): Promise<ProbeR
   const send = (body: Record<string, unknown>) => p.kind === 'anthropic'
     ? fetch(`${p.baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) })
     : fetch(`${p.baseUrl}/chat/completions`, { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
-  // One tiny message; OpenAI's reasoning models take max_completion_tokens instead of max_tokens, so a 400 that says so is sent once more their way.
+  // One tiny message. OpenAI's reasoning models take max_completion_tokens instead of max_tokens and spend tokens
+  // thinking before they write, so a 400 that says so is sent once more their way with room to think (a budget of
+  // one comes back as "could not finish the message"); the room is doubled once more if that is still too little.
   const attempt = async (id: string) => {
     const messages = [{ role: 'user', content: 'ok' }];
     let res = await send({ model: id, max_tokens: 1, messages }); let text = await res.text();
-    if (res.status === 400 && p.kind === 'openai' && /max_completion_tokens/i.test(text)) { res = await send({ model: id, max_completion_tokens: 1, messages }); text = await res.text(); }
+    if (res.status === 400 && p.kind === 'openai' && /max_completion_tokens/i.test(text)) { res = await send({ model: id, max_completion_tokens: 1024, messages }); text = await res.text(); }
+    if (res.status === 400 && p.kind === 'openai' && /output limit was reached|higher max_tokens|max_completion_tokens/i.test(text)) { res = await send({ model: id, max_completion_tokens: 4096, messages }); text = await res.text(); }
     return { res, text };
   };
   const unknownModel = (status: number, text: string) => status === 404 || (status === 400 && /no longer available|not found|does not exist|unknown model|invalid model/i.test(text));

@@ -26,6 +26,9 @@ export default async function Account() {
   const paying = !!user.paypalSubscriptionId && active && !granted && plan.key !== 'free';
   const cycle = paying ? (user.billingCycle || sub?.billingCycle || 'monthly') : null;
   const startedAt = sub?.startedAt ? new Date(sub.startedAt) : null;
+  // Who bills the subscription: a card through our card processor, or PayPal (every subscription from before October 2026).
+  const provider: 'paypal' | 'finix' = user.subscriptionProvider || sub?.provider || 'paypal';
+  const billedBy = provider === 'finix' ? 'to your card' : 'through PayPal';
   const pct = gas.allowance > 0 ? Math.min(100, Math.round((gas.used / gas.allowance) * 100)) : 100;
   const resets = new Date(gas.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
   return (
@@ -39,14 +42,14 @@ export default async function Account() {
             <div className="card">
               <h3>Plan</h3>
               <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}{user.admin ? ' · admin, all access' : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>{granted ? (user.subscriptionStatus === 'TRIAL' ? 'Trial ends' : 'Licensed until') : 'Renews'} {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
-              {cycle && <p className="note">Billed {cycle === 'annual' ? `yearly at the price you subscribed at, ${ANNUAL_MONTHS_FREE} months free against monthly` : plan.contactSales ? 'under your organization\u2019s agreement' : `monthly: ${usd(plan.priceUsd)} a month`}{startedAt ? `, since ${startedAt.toLocaleDateString()}` : ''}.</p>}
+              {cycle && <p className="note">Billed {cycle === 'annual' ? `yearly at the price you subscribed at, ${ANNUAL_MONTHS_FREE} months free against monthly` : plan.contactSales ? 'under your organization\u2019s agreement' : `monthly: ${usd(plan.priceUsd)} a month`}{plan.contactSales ? '' : ` ${billedBy}`}{startedAt ? `, since ${startedAt.toLocaleDateString()}` : ''}.</p>}
               {capPlan.key !== plan.key && !user.admin && <p className="note">While your bought gas lasts you have the {capPlan.name} features: Discover, the Build studio and the Ricorsa Browser.</p>}
               {granted && !user.planRenewsAt && <p className="note">Your {plan.name} plan is licensed with no end date.</p>}
               {ended && <div className="notice" style={{ marginBottom: 12 }}>Your {user.subscriptionStatus === 'TRIAL_ENDED' ? 'trial' : 'license'} has ended, so the account has the free limits. Choose a plan on the pricing page to keep going; every plan starts with a free trial.</div>}
-              {!active && !ended && <div className="notice" style={{ marginBottom: 12 }}>Your PayPal subscription is {user.subscriptionStatus?.toLowerCase()}. Update the payment method in PayPal, or subscribe again on the pricing page, to restore {plan.name} limits.</div>}
+              {!active && !ended && <div className="notice" style={{ marginBottom: 12 }}>Your subscription is {user.subscriptionStatus?.toLowerCase()}. {provider === 'finix' ? 'The last payment on your card did not go through; subscribe again on the pricing page with a card that works' : 'Update the payment method in PayPal, or subscribe again on the pricing page,'} to restore {plan.name} limits.</div>}
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {plan.key === 'free' ? <a className="btn primary" href="/pricing">Start a free trial</a> : <a className="btn" href="/pricing">Change plan</a>}
-                <CancelButton hasSubscription={!!user.paypalSubscriptionId && active} />
+                <CancelButton hasSubscription={!!user.paypalSubscriptionId && active} provider={provider} />
               </div>
             </div>
             <div className="card">

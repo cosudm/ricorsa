@@ -28,6 +28,8 @@ export type BuyGasProps = {
   maxBlocks?: number;
   /** Where to send the person afterwards. */
   afterHref?: string;
+  /** How many blocks to buy, when the picker lives outside this component (the card checkout shares it). */
+  blocks?: number;
 };
 
 const money = (n: number) => '$' + n.toLocaleString('en-US');
@@ -37,10 +39,11 @@ const gasWord = (n: number) => `${n.toLocaleString('en-US')} gas`;
  * Pay-As-You-Go gas: pick how many blocks, approve in PayPal, and the gas is on the account the moment PayPal confirms the
  * capture. The order is created and captured on our server, so the amount and the account it credits are never the browser's word.
  */
-export function PayPalBuyGas({ clientId, blockUsd, blockGas, maxBlocks = 10, afterHref = '/app' }: BuyGasProps) {
+export function PayPalBuyGas({ clientId, blockUsd, blockGas, maxBlocks = 10, afterHref = '/app', blocks: outside }: BuyGasProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [blocks, setBlocks] = useState(1);
-  const blocksRef = useRef(1);
+  const [own, setBlocks] = useState(1);
+  const blocks = outside ?? own;
+  const blocksRef = useRef(blocks);
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'approving' | 'done' | 'error'>('idle');
   const [msg, setMsg] = useState('');
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
@@ -80,11 +83,13 @@ export function PayPalBuyGas({ clientId, blockUsd, blockGas, maxBlocks = 10, aft
   const total = blockUsd * blocks;
   return (
     <div className="buy-gas">
-      <div className="blocks" role="group" aria-label="How much gas">
-        <button type="button" className="btn sm" onClick={() => setBlocks(b => Math.max(1, b - 1))} disabled={blocks <= 1 || state === 'approving'} aria-label="Less">&minus;</button>
-        <div className="amount"><b>{gasWord(blockGas * blocks)}</b><span>{money(total)}</span></div>
-        <button type="button" className="btn sm" onClick={() => setBlocks(b => Math.min(maxBlocks, b + 1))} disabled={blocks >= maxBlocks || state === 'approving'} aria-label="More">+</button>
-      </div>
+      {outside === undefined && (
+        <div className="blocks" role="group" aria-label="How much gas">
+          <button type="button" className="btn sm" onClick={() => setBlocks(b => Math.max(1, b - 1))} disabled={blocks <= 1 || state === 'approving'} aria-label="Less">&minus;</button>
+          <div className="amount"><b>{gasWord(blockGas * blocks)}</b><span>{money(total)}</span></div>
+          <button type="button" className="btn sm" onClick={() => setBlocks(b => Math.min(maxBlocks, b + 1))} disabled={blocks >= maxBlocks || state === 'approving'} aria-label="More">+</button>
+        </div>
+      )}
       <div ref={ref} className="paypal-slot" aria-busy={state === 'loading' || state === 'approving'} />
       {state === 'loading' && <div className="note">Loading PayPal</div>}
       {msg && <div className={'notice ' + (state === 'error' ? '' : state === 'done' ? 'good' : 'info')} style={{ marginTop: 8 }}>{msg}</div>}

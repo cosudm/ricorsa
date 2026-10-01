@@ -20,7 +20,12 @@ export const users = sqliteTable('users', {
   name: text('name'),
   picture: text('picture'),
   plan: text('plan').notNull().default('free'), // free | essentials | professional | enterprise (pro | team on rows from before September 2026)
+  /** The current subscription's id at its provider (PayPal's I-XXXX, or Finix's subscription id since October 2026). */
   paypalSubscriptionId: text('paypal_subscription_id'),
+  /** Which provider bills the current subscription: paypal (the default, and every row from before October 2026) or finix (cards). */
+  subscriptionProvider: text('subscription_provider').$type<'paypal' | 'finix'>(),
+  /** The buyer identity Finix holds for this person, reused for every card payment they make. */
+  finixIdentityId: text('finix_identity_id'),
   subscriptionStatus: text('subscription_status'), // ACTIVE | SUSPENDED | CANCELLED | EXPIRED | APPROVAL_PENDING
   planRenewsAt: ts('plan_renews_at'),
   /** How the current subscription bills: monthly or annual (null for the free state and for console grants that did not say). */
@@ -37,24 +42,29 @@ export const users = sqliteTable('users', {
   lastSeenAt: tsNow('last_seen_at'),
 });
 
-/** Gas bought outright through PayPal (one order each), for the receipts on the Account page and the console. */
+/** Gas bought outright (one PayPal order or one Finix card payment each), for the receipts on the Account page and the console. */
 export const gasPurchases = sqliteTable('gas_purchases', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  /** PayPal's order id; one credit per order however many times the capture is reported. */
+  /** The payment's id at its provider (PayPal's order id, or `finix:` and the transfer id); one credit per payment however many times it is reported. */
   orderId: text('order_id').notNull().unique(),
+  /** Who took the payment: paypal or finix. */
+  provider: text('provider').$type<'paypal' | 'finix'>().notNull().default('paypal'),
   usdCents: integer('usd_cents').notNull(),
   gas: integer('gas').notNull(),
   status: text('status').notNull().default('completed'),
   createdAt: tsNow('created_at'),
 }, (t) => [index('gas_purchases_user_idx').on(t.userId, t.createdAt)]);
 
-/** PayPal subscriptions we have seen, keyed by PayPal's subscription id (I-XXXX). */
+/** Subscriptions we have seen, keyed by the provider's subscription id (PayPal's I-XXXX, or Finix's). */
 export const subscriptions = sqliteTable('subscriptions', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   planKey: text('plan_key').notNull(), // essentials | professional | enterprise (pro | team on rows from before September 2026)
+  /** The provider's plan id (PayPal's P-XXXX, Finix's subscription_plan_..., or `finix:direct` for a Finix subscription priced directly). */
   paypalPlanId: text('paypal_plan_id').notNull(),
+  /** Who bills it: paypal or finix. */
+  provider: text('provider').$type<'paypal' | 'finix'>().notNull().default('paypal'),
   /** How the subscription bills: monthly, or annual (one payment a year, two months free). */
   billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
   status: text('status').notNull(),

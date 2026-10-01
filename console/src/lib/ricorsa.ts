@@ -11,7 +11,7 @@ import { HttpError } from './http';
  */
 export type AccountRow = {
   id: string; email: string | null; name: string | null; picture: string | null; plan: string; subscriptionStatus: string | null; planRenewsAt: number | null;
-  paypalSubscriptionId: string | null; billingCycle: BillingCycle | null; createdAt: number; lastSeenAt: number;
+  paypalSubscriptionId: string | null; subscriptionProvider: 'paypal' | 'finix' | null; billingCycle: BillingCycle | null; createdAt: number; lastSeenAt: number;
   questionsMonth: number; researchMonth: number; buildsMonth: number; ideasMonth: number; costMonthMicros: number;
   /** Gas spent this month, the plan's monthly allowance (raised where the console said so) and bought gas still unspent. */
   gasMonth: number; gasPerMonth: number; gasBalance: number;
@@ -63,7 +63,7 @@ export async function listAccounts(opts: { q?: string; limit?: number; offset?: 
     const c30 = cost30.get(x.id) || 0;
     return {
       id: x.id, email: x.email, name: x.name, picture: x.picture, plan: normalizePlanKey(x.plan), subscriptionStatus: x.subscriptionStatus, planRenewsAt: x.planRenewsAt ? x.planRenewsAt.getTime() : null,
-      paypalSubscriptionId: x.paypalSubscriptionId, billingCycle: cycle, createdAt: x.createdAt.getTime(), lastSeenAt: x.lastSeenAt.getTime(),
+      paypalSubscriptionId: x.paypalSubscriptionId, subscriptionProvider: x.paypalSubscriptionId ? x.subscriptionProvider || 'paypal' : null, billingCycle: cycle, createdAt: x.createdAt.getTime(), lastSeenAt: x.lastSeenAt.getTime(),
       questionsMonth: us?.questions || 0, researchMonth: us?.research || 0, buildsMonth: us?.builds || 0, ideasMonth: us?.ideas || 0, costMonthMicros: us?.costMicros || 0,
       gasMonth: us?.gas || 0, gasPerMonth: effectiveLimits(normalizePlanKey(x.plan), x.allowance).gasPerMonth, gasBalance: x.gasBalance || 0,
       cost30Micros: c30, mrrCents, marginCents: paying ? mrrCents - Math.round(c30 / 10000) : null,
@@ -100,17 +100,17 @@ export async function accountDetail(userId: string) {
   const c30 = cost30.get(userId) || 0;
   return {
     id: user.id, email: user.email, name: user.name, picture: user.picture, plan: plan.key, subscriptionStatus: user.subscriptionStatus,
-    planRenewsAt: user.planRenewsAt ? user.planRenewsAt.getTime() : null, paypalSubscriptionId: user.paypalSubscriptionId, billingCycle: cycle,
+    planRenewsAt: user.planRenewsAt ? user.planRenewsAt.getTime() : null, paypalSubscriptionId: user.paypalSubscriptionId, subscriptionProvider: user.paypalSubscriptionId ? user.subscriptionProvider || 'paypal' : null, billingCycle: cycle,
     createdAt: user.createdAt.getTime(), lastSeenAt: user.lastSeenAt.getTime(),
     usage: { today: pick(dayPeriod()), month: pick(monthPeriod()) },
     /** The plan's monthly gas and the account's effective allowance (raised where the console said so). */
     limits: { plan: { gasPerMonth: plan.gasPerMonth }, effective: effectiveLimits(plan.key, user.allowance) },
     allowance: user.allowance || null,
     /** Where the gauge stands for this account: spent this month, left of the allowance, bought and unspent, and the purchases behind it. */
-    gas: { used: pick(monthPeriod()).gas || 0, allowance: effectiveLimits(plan.key, user.allowance).gasPerMonth, left: Math.max(0, effectiveLimits(plan.key, user.allowance).gasPerMonth - (pick(monthPeriod()).gas || 0)), balance: user.gasBalance || 0, purchases: purchases.map(g => ({ id: g.id, orderId: g.orderId, usdCents: g.usdCents, gas: g.gas, status: g.status, createdAt: g.createdAt.getTime() })) },
+    gas: { used: pick(monthPeriod()).gas || 0, allowance: effectiveLimits(plan.key, user.allowance).gasPerMonth, left: Math.max(0, effectiveLimits(plan.key, user.allowance).gasPerMonth - (pick(monthPeriod()).gas || 0)), balance: user.gasBalance || 0, purchases: purchases.map(g => ({ id: g.id, orderId: g.orderId, provider: g.provider || 'paypal', usdCents: g.usdCents, gas: g.gas, status: g.status, createdAt: g.createdAt.getTime() })) },
     money: { mrrCents, cost30Micros: c30, marginCents: paying ? mrrCents - Math.round(c30 / 10000) : null },
     counts: { threads: threads[0]?.n || 0, builds: builds[0]?.n || 0, spaces: spaces[0]?.n || 0 },
-    subscriptions: subs.map(s => ({ id: s.id, plan: normalizePlanKey(s.planKey), billingCycle: s.billingCycle || 'monthly', status: s.status, startedAt: s.startedAt?.getTime() ?? null, nextBillingAt: s.nextBillingAt?.getTime() ?? null, cancelledAt: s.cancelledAt?.getTime() ?? null, updatedAt: s.updatedAt.getTime() })),
+    subscriptions: subs.map(s => ({ id: s.id, plan: normalizePlanKey(s.planKey), provider: s.provider || 'paypal', billingCycle: s.billingCycle || 'monthly', status: s.status, startedAt: s.startedAt?.getTime() ?? null, nextBillingAt: s.nextBillingAt?.getTime() ?? null, cancelledAt: s.cancelledAt?.getTime() ?? null, updatedAt: s.updatedAt.getTime() })),
   };
 }
 
@@ -123,14 +123,14 @@ export function effectiveLimits(plan: PlanKey, allowance: RAllowance | null | un
 /**
  * Grant a plan on the product: `kind` 'license' marks the account LICENSED (until `until`, or open-ended), 'trial'
  * marks it TRIAL until `until`. Granting Free, or `kind` 'clear', returns the account to Free with no status.
- * An account with a live PayPal subscription keeps it: the subscription already grants a paid plan.
+ * An account with a live subscription (PayPal or card) keeps it: the subscription already grants a paid plan.
  */
 export async function grantPlan(userId: string, plan: PlanKey, kind: 'license' | 'trial' | 'clear', until: Date | null): Promise<{ plan: string; subscriptionStatus: string | null; planRenewsAt: number | null }> {
   const r = rdb();
   const user = (await r.select().from(ricorsa.rUsers).where(eq(ricorsa.rUsers.id, userId)).limit(1))[0];
   if (!user) throw new HttpError(404, 'That Ricorsa account no longer exists', 'not_found');
   if (user.paypalSubscriptionId && PAYING.includes(user.subscriptionStatus || '')) {
-    throw new HttpError(409, 'This account pays through PayPal; its plan follows the subscription. Cancel the subscription in PayPal first if you want to grant a plan by hand.', 'has_subscription');
+    throw new HttpError(409, user.subscriptionProvider === 'finix' ? 'This account pays by card; its plan follows the subscription. Cancel the subscription first if you want to grant a plan by hand.' : 'This account pays through PayPal; its plan follows the subscription. Cancel the subscription in PayPal first if you want to grant a plan by hand.', 'has_subscription');
   }
   const set = plan === 'free' || kind === 'clear'
     ? { plan: 'free', subscriptionStatus: null as string | null, planRenewsAt: null as Date | null, billingCycle: null as null }

@@ -12,8 +12,10 @@ export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
 export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', team: 'professional' };
 /** The plans in order of what they include, for "upgrade to" prompts. */
 export const PLAN_ORDER: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
-/** Every paid plan starts with a free trial of this many days through PayPal; billing begins when it ends. */
+/** A first paid subscription starts with a free trial; billing begins when it ends. The default; a plan may carry its own `trialDays`. */
 export const TRIAL_DAYS = 14;
+/** The free trial a plan starts with, in days (one trial per account, whichever plan it starts on). */
+export function trialDaysFor(plan: Pick<Plan, 'trialDays'>): number { return typeof plan.trialDays === 'number' ? plan.trialDays : TRIAL_DAYS; }
 /** How a subscription bills. New plans bill monthly; annual subscriptions from before October 2026 keep billing yearly. */
 export type BillingCycle = 'monthly' | 'annual';
 export const BILLING_CYCLES: BillingCycle[] = ['monthly', 'annual'];
@@ -73,6 +75,8 @@ export type Plan = {
   gasPerMonth: number;
   /** Priced per organization: no online price, no PayPal plan; the card says Call for pricing. */
   contactSales?: boolean;
+  /** The free trial this plan starts with, in days, when it differs from TRIAL_DAYS (Professional: 30). */
+  trialDays?: number;
   tiers: Array<'quick' | 'default' | 'complex'>; // model tiers this plan may use
   spaces: number;              // max Spaces
   blurb: string;
@@ -113,6 +117,7 @@ export const PLANS: Record<PlanKey, Plan> = {
     key: 'professional',
     name: 'Professional',
     priceUsd: 150,
+    trialDays: 30,
     paypalPlanEnv: 'PAYPAL_PLAN_PROFESSIONAL',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_PROFESSIONAL_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_TEAM',

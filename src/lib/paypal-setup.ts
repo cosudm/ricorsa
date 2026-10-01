@@ -12,7 +12,7 @@
  */
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db';
-import { PLANS, LEGACY_PLAN_KEYS, TRIAL_DAYS, provisionKey, type PlanKey, type ProvisionedPlans } from './plans';
+import { PLANS, LEGACY_PLAN_KEYS, TRIAL_DAYS, trialDaysFor, provisionKey, type PlanKey, type ProvisionedPlans } from './plans';
 import { createPlan, createProduct, createWebhook, paypalConfigured } from './paypal';
 
 export type PaypalProvisioned = ProvisionedPlans & { env: 'live' | 'sandbox'; productId: string; /** The price each current plan id was created at (older rows), so a price change is noticed. */ prices?: Partial<Record<PlanKey, number>>; /** What each current plan id was created with, `price|trialDays` (annual: `price|trialDays|YEAR`, keyed `<plan>:annual`), so a change to either makes a new plan. */ specs?: Partial<Record<string, string>>; webhookId?: string; webhookUrl?: string; createdAt: number };
@@ -50,7 +50,7 @@ async function provision(): Promise<PaypalProvisioned | null> {
 
   let changed = false;
   cfg.prices = cfg.prices || {}; cfg.specs = cfg.specs || {}; cfg.retired = cfg.retired || {};
-  const specOf = (plan: { priceUsd: number }) => `${plan.priceUsd}|${TRIAL_DAYS}`;
+  const specOf = (plan: { priceUsd: number; trialDays?: number }) => `${plan.priceUsd}|${trialDaysFor(plan)}`;
   // Ids stored under a plan's previous name become retired ids for the plan that replaced it.
   for (const [legacy, current] of Object.entries(LEGACY_PLAN_KEYS)) {
     const id = cfg.plans[legacy];
@@ -65,7 +65,7 @@ async function provision(): Promise<PaypalProvisioned | null> {
     // Plans priced per organization (Enterprise) have no online price and no PayPal plan; their ids from before stay retired.
     if (!plan.paypalPlanEnv || plan.contactSales || !plan.priceUsd) continue;
     const variants: Variant[] = [
-      { key: plan.key, env: plan.paypalPlanEnv, price: plan.priceUsd, trial: TRIAL_DAYS, spec: specOf(plan), interval: 'MONTH', label: `Ricorsa ${plan.name}`, description: `${plan.name} plan: ${plan.blurb}` },
+      { key: plan.key, env: plan.paypalPlanEnv, price: plan.priceUsd, trial: trialDaysFor(plan), spec: specOf(plan), interval: 'MONTH', label: `Ricorsa ${plan.name}`, description: `${plan.name} plan: ${plan.blurb}` },
       { key: provisionKey(plan.key, 'monthly', false), price: plan.priceUsd, trial: 0, spec: `${plan.priceUsd}|0`, interval: 'MONTH', label: `Ricorsa ${plan.name} (no trial)`, description: `${plan.name} plan, billed from the first day: ${plan.blurb}` },
     ];
     if (plan.priceUsdYear && plan.paypalPlanEnvAnnual) {
