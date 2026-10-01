@@ -3,14 +3,13 @@ import type { Metadata } from 'next';
 import { SiteNav, SiteFooter } from '@/components/SiteNav';
 import { CancelButton, DeleteAccountButton, SignedInSites } from '@/components/AccountActions';
 import { currentUser } from '@/lib/session';
-import { planFor, statusGrants, annualSaving, ANNUAL_MONTHS_FREE, usd } from '@/lib/plans';
-import { readUsage, limitsFor } from '@/lib/usage';
+import { planFor, statusGrants, ANNUAL_MONTHS_FREE, usd, GAS, PAYG, gas as gasWord } from '@/lib/plans';
+import { readUsage, gasState, capabilityPlan } from '@/lib/usage';
+import { db, schema } from '@/lib/db';
+import { desc, eq } from 'drizzle-orm';
 import { loadGraph } from '@/lib/graph';
 import { currentSubscription } from '@/lib/billing';
 import { rememberedSites } from '@/lib/browse-live';
-
-/** Months on a monthly plan before the Account page suggests paying yearly instead. */
-const SWITCH_NUDGE_MONTHS = 3;
 
 export const metadata: Metadata = { title: 'Account' };
 export const dynamic = 'force-dynamic';
@@ -18,7 +17,8 @@ export const dynamic = 'force-dynamic';
 export default async function Account() {
   const user = await currentUser();
   const plan = planFor(user.plan);
-  const [usage, graph, sub, sites] = await Promise.all([readUsage(user.id), loadGraph(user.id), currentSubscription(user), rememberedSites(user.id).catch(() => [])]);
+  const [usage, graph, sub, sites, gas, purchases] = await Promise.all([readUsage(user.id), loadGraph(user.id), currentSubscription(user), rememberedSites(user.id).catch(() => []), gasState(user), db().select().from(schema.gasPurchases).where(eq(schema.gasPurchases.userId, user.id)).orderBy(desc(schema.gasPurchases.createdAt)).limit(12)]);
+  const capPlan = capabilityPlan(user);
   const active = statusGrants(user.subscriptionStatus);
   const granted = user.subscriptionStatus === 'TRIAL' || user.subscriptionStatus === 'LICENSED';
   const ended = user.subscriptionStatus === 'TRIAL_ENDED' || user.subscriptionStatus === 'LICENSE_ENDED';
@@ -26,10 +26,8 @@ export default async function Account() {
   const paying = !!user.paypalSubscriptionId && active && !granted && plan.key !== 'free';
   const cycle = paying ? (user.billingCycle || sub?.billingCycle || 'monthly') : null;
   const startedAt = sub?.startedAt ? new Date(sub.startedAt) : null;
-  const monthsOn = startedAt ? Math.floor((Date.now() - startedAt.getTime()) / (30.4 * 86400e3)) : 0;
-  const saving = annualSaving(plan);
-  const nudge = cycle === 'monthly' && !!plan.priceUsdYear && monthsOn >= SWITCH_NUDGE_MONTHS;
-  const lim = limitsFor(plan, user.allowance);
+  const pct = gas.allowance > 0 ? Math.min(100, Math.round((gas.used / gas.allowance) * 100)) : 100;
+  const resets = new Date(gas.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
   return (
     <>
       <SiteNav signedIn />
@@ -41,12 +39,8 @@ export default async function Account() {
             <div className="card">
               <h3>Plan</h3>
               <p><span className={'pill ' + (active ? 'on' : 'off')}>{plan.name}{user.subscriptionStatus ? ` · ${user.subscriptionStatus.toLowerCase()}` : ''}{user.admin ? ' · admin, all access' : ''}</span>{user.planRenewsAt && active ? <span className="note" style={{ marginLeft: 10 }}>{granted ? (user.subscriptionStatus === 'TRIAL' ? 'Trial ends' : 'Licensed until') : 'Renews'} {new Date(user.planRenewsAt).toLocaleDateString()}</span> : null}</p>
-              {cycle && <p className="note">Billed {cycle === 'annual' ? `yearly: ${usd(plan.priceUsdYear || 0)} a year, ${ANNUAL_MONTHS_FREE} months free against monthly` : `monthly: ${usd(plan.priceUsd)} a month`}{startedAt ? `, since ${startedAt.toLocaleDateString()}` : ''}.</p>}
-              {nudge && (
-                <div className="notice info" style={{ marginBottom: 12 }}>
-                  <span>You have been on {plan.name} for {monthsOn} months. Paying yearly costs {usd(plan.priceUsdYear || 0)} instead of {usd(plan.priceUsd * 12)}, so you keep {usd(saving)} a year. Your monthly subscription ends when the annual one starts, so the best moment to switch is just before your renewal{user.planRenewsAt ? ` on ${new Date(user.planRenewsAt).toLocaleDateString()}` : ''}. <a href="/pricing?cycle=annual">See annual pricing</a></span>
-                </div>
-              )}
+              {cycle && <p className="note">Billed {cycle === 'annual' ? `yearly at the price you subscribed at, ${ANNUAL_MONTHS_FREE} months free against monthly` : plan.contactSales ? 'under your organization\u2019s agreement' : `monthly: ${usd(plan.priceUsd)} a month`}{startedAt ? `, since ${startedAt.toLocaleDateString()}` : ''}.</p>}
+              {capPlan.key !== plan.key && !user.admin && <p className="note">While your bought gas lasts you have the {capPlan.name} features: Discover, the Build studio and the Ricorsa Browser.</p>}
               {granted && !user.planRenewsAt && <p className="note">Your {plan.name} plan is licensed with no end date.</p>}
               {ended && <div className="notice" style={{ marginBottom: 12 }}>Your {user.subscriptionStatus === 'TRIAL_ENDED' ? 'trial' : 'license'} has ended, so the account has the free limits. Choose a plan on the pricing page to keep going; every plan starts with a free trial.</div>}
               {!active && !ended && <div className="notice" style={{ marginBottom: 12 }}>Your PayPal subscription is {user.subscriptionStatus?.toLowerCase()}. Update the payment method in PayPal, or subscribe again on the pricing page, to restore {plan.name} limits.</div>}
@@ -56,23 +50,26 @@ export default async function Account() {
               </div>
             </div>
             <div className="card">
-              <h3>Usage</h3>
-              <p>Counters reset daily at midnight UTC and monthly on the first.{lim.raised ? ' Your allowances have been raised above the plan.' : ''}</p>
-              <div className="stats">
-                <div className="stat"><b>{usage.day.questions} / {lim.questionsPerDay}</b><span>questions today</span></div>
-                <div className="stat"><b>{usage.month.questions} / {lim.questionsPerMonth}</b><span>this month</span></div>
-                <div className="stat"><b>{usage.month.research} / {lim.researchPerMonth}</b><span>Research reports</span></div>
-                {lim.buildsPerMonth > 0 && <div className="stat"><b>{usage.month.builds} / {lim.buildsPerMonth}</b><span>app versions built</span></div>}
-                {lim.ideaSetsPerMonth > 0 && <div className="stat"><b>{usage.month.ideas} / {lim.ideaSetsPerMonth}</b><span>Discover idea sets</span></div>}
-                {lim.browserActionsPerMonth > 0 && <div className="stat"><b>{usage.month.browserActions.toLocaleString('en-US')} / {lim.browserActionsPerMonth.toLocaleString('en-US')}</b><span>browser actions</span></div>}
-              </div>
+              <h3>Gas</h3>
+              {user.admin ? <p>Admin accounts are not metered. This month: {usage.month.questions} questions, {usage.month.research} Research reports, {usage.month.builds} app versions, {usage.month.ideas} idea sets, {usage.month.browserActions} browser actions.</p> : <>
+                <p>{gasWord(gas.planLeft)} of this month&apos;s {gasWord(gas.allowance)} left; refills {resets}.{gas.balance > 0 ? ` Plus ${gasWord(gas.balance)} bought, which never expires and is used after the month\u2019s allowance.` : ''}</p>
+                <div className="gauge" aria-label={`${gasWord(gas.planLeft)} of ${gasWord(gas.allowance)} left`}><span style={{ width: `${100 - pct}%` }} /></div>
+                <div className="stats">
+                  <div className="stat"><b>{gas.remaining.toLocaleString('en-US')}</b><span>gas left in all</span></div>
+                  <div className="stat"><b>{gas.used.toLocaleString('en-US')}</b><span>spent this month</span></div>
+                  <div className="stat"><b>{gas.balance.toLocaleString('en-US')}</b><span>bought and unspent</span></div>
+                </div>
+                <p style={{ marginTop: 12 }}>What things cost: a question {GAS.question}, on the Reasoning model {GAS.reasoning}; a Research report {GAS.research}; a browser action or a minute in control {GAS.browserAction}; a Discover idea set {GAS.ideaSet}; an app version {GAS.build}. This month: {usage.month.questions} questions, {usage.month.research} reports, {usage.month.builds} versions, {usage.month.ideas} idea sets, {usage.month.browserActions} browser actions.</p>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><a className="btn primary" href="/pricing#gas">Buy gas: {gasWord(PAYG.gas)} for ${PAYG.usd}</a></div>
+                {purchases.length > 0 && <ul style={{ listStyle: 'none', padding: 0, margin: '12px 0 0', display: 'grid', gap: 4, fontSize: 13 }}>{purchases.map(pu => <li key={pu.id}>{new Date(pu.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}: {gasWord(pu.gas)} for {usd(pu.usdCents / 100)}</li>)}</ul>}
+              </>}
             </div>
             <div className="card">
               <h3>Your identity graph</h3>
               <p>{Object.keys(graph.nodes).length} nodes from {graph.events} conversations. Learning is {graph.paused ? 'paused' : 'on'}.</p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><a className="btn" href="/app#/graph">Open the graph</a><a className="btn" href="/api/account/export">Export everything</a></div>
             </div>
-            {(plan.caps.browser === 'full' || sites.length > 0) && <div className="card">
+            {(capPlan.caps.browser === 'full' || sites.length > 0) && <div className="card">
               <h3>Sites Ricorsa stays signed in to</h3>
               <p>Sign-ins you chose to keep after taking over Ricorsa&apos;s browser. Each is sealed in your account and used only when you send Ricorsa to that site. Signing out here deletes it; the site itself is untouched.</p>
               <SignedInSites sites={sites} />

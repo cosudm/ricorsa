@@ -10,7 +10,8 @@ const ts = (name: string) => integer(name, { mode: 'timestamp_ms' });
 const tsNow = (name: string) => ts(name).notNull().default(sql`(strftime('%s','now') * 1000)`).$defaultFn(now);
 
 /** Per-account allowances the console may set above the plan's, with who set them and why (operator information). */
-export type Allowance = { buildsPerMonth?: number; ideaSetsPerMonth?: number; questionsPerMonth?: number; questionsPerDay?: number; researchPerMonth?: number; browserActionsPerMonth?: number; note?: string; setBy?: string; setAt?: number };
+/** A gas allowance the Manager Console set above the plan's own (an Enterprise contract, a pilot); the older per-kind keys are ignored. */
+export type Allowance = { gasPerMonth?: number; note?: string; setBy?: string; setAt?: number };
 
 /** One row per signed-in person. `id` is the Auth0 subject (`sub`). */
 export const users = sqliteTable('users', {
@@ -29,10 +30,24 @@ export const users = sqliteTable('users', {
    * more app versions mid-year, a pilot). Only the keys given are overridden; null means the plan's numbers apply.
    */
   allowance: text('allowance', { mode: 'json' }).$type<Allowance | null>(),
+  /** Pay-As-You-Go gas bought and not yet spent; it never expires and is burned after the plan's monthly allowance. */
+  gasBalance: integer('gas_balance').notNull().default(0),
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull().$defaultFn(() => ({})).default(sql`'{}'`),
   createdAt: tsNow('created_at'),
   lastSeenAt: tsNow('last_seen_at'),
 });
+
+/** Gas bought outright through PayPal (one order each), for the receipts on the Account page and the console. */
+export const gasPurchases = sqliteTable('gas_purchases', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  /** PayPal's order id; one credit per order however many times the capture is reported. */
+  orderId: text('order_id').notNull().unique(),
+  usdCents: integer('usd_cents').notNull(),
+  gas: integer('gas').notNull(),
+  status: text('status').notNull().default('completed'),
+  createdAt: tsNow('created_at'),
+}, (t) => [index('gas_purchases_user_idx').on(t.userId, t.createdAt)]);
 
 /** PayPal subscriptions we have seen, keyed by PayPal's subscription id (I-XXXX). */
 export const subscriptions = sqliteTable('subscriptions', {
@@ -82,6 +97,8 @@ export type Turn = {
   vote?: 'up' | 'down' | null;
   model?: string;
   usage?: { in: number; out: number; cacheRead?: number; searches?: number };
+  /** What this answer cost in gas (the question plus any browser actions), as the gauge showed it. */
+  gas?: number;
   /** Connector tools the model called while answering (server name, tool name, whether the call failed). */
   tools?: { server: string; name: string; error?: boolean }[];
   /** Whether the person asked Ricorsa to open the site and work it in its browser for this question. */
@@ -169,6 +186,8 @@ export const usage = sqliteTable('usage', {
   ideas: integer('ideas').notNull().default(0),
   /** Actions Ricorsa's browser took on websites for the person (open, click, type, and so on). */
   browserActions: integer('browser_actions').notNull().default(0),
+  /** Gas spent in the period, every kind together: the number the gauge counts down. */
+  gas: integer('gas').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.userId, t.period] })]);
 
 /** Discover picks are generated once per category per day (per person when drawn from their graph). */

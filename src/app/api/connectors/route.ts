@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { currentUser } from '@/lib/session';
+import { capabilityPlan } from '@/lib/usage';
 import { handle, json, readJson, fail, uid } from '@/lib/http';
 import { db, schema } from '@/lib/db';
-import { planFor } from '@/lib/plans';
 import { catalogForClient, checkConnector, listConnectors, ownSpaceIds, presetFor, serverNameFor, toClient, validateUrl } from '@/lib/connectors';
 import { sealJson } from '@/lib/secretbox';
 
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 /** GET /api/connectors — the person's connectors (credentials masked), the catalog, and what the plan allows. */
 export const GET = handle(async () => {
   const user = await currentUser();
-  const plan = planFor(user.plan);
+  const plan = capabilityPlan(user);
   const rows = await listConnectors(user.id);
   const items = await Promise.all(rows.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map(toClient));
   return json({ items, catalog: catalogForClient(), limit: user.admin ? 100 : plan.caps.connectors, callback: `${process.env.APP_BASE_URL || ''}/api/connectors/oauth/callback` });
@@ -30,7 +30,7 @@ const Body = z.object({
 /** POST /api/connectors — add one. Bearer and open connectors are checked right away; OAuth ones wait for sign-in. */
 export const POST = handle(async (req: Request) => {
   const user = await currentUser();
-  const plan = planFor(user.plan);
+  const plan = capabilityPlan(user);
   const limit = user.admin ? 100 : plan.caps.connectors;
   const existing = await listConnectors(user.id);
   if (limit <= 0) return fail(402, 'Connectors are part of the Essentials, Professional and Enterprise plans.', 'upgrade_required');

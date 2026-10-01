@@ -1,19 +1,18 @@
 'use client';
-import { useState } from 'react';
 import { PayPalSubscribe } from './PayPalSubscribe';
 
 export type Cycle = 'monthly' | 'annual';
 
-/** One plan as the pricing page shows it: prices for both cycles and the PayPal plan id for each. */
+/** One plan as the pricing page shows it: its monthly price (or none, for a plan priced per organization) and its PayPal plan id. */
 export type PlanCard = {
   key: string; name: string; blurb: string; features: string[]; hot: boolean;
-  priceUsd: number; priceUsdYear: number | null;
-  /** The annual price spread over twelve months, in whole dollars (rounded up). */
-  monthlyEquivalent: number | null;
-  /** What twelve monthly payments would cost beyond the annual price. */
-  saving: number;
-  priceMarker?: string; licensing?: string;
-  planIds: Record<Cycle, string | null>;
+  priceUsd: number;
+  /** Gas included every month. */
+  gasPerMonth: number;
+  /** Priced per organization: the card says Call for pricing and leads to a conversation instead of a checkout. */
+  contactSales: boolean;
+  licensing?: string;
+  planId: string | null;
 };
 
 export type PricingPlansProps = {
@@ -26,71 +25,57 @@ export type PricingPlansProps = {
   clientId: string; userId: string;
   /** Days of free trial a new subscription starts with; 0 once the account's one trial is used. */
   trialDays: number;
-  initialCycle: Cycle;
   signupHref: string;
+  contactHref: string;
 };
 
 const money = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const gasWord = (n: number) => `${n.toLocaleString('en-US')} gas`;
 
 /**
- * The plan cards with the billing toggle. Annual is the default: the card shows what the year costs per month
- * with an asterisk, and the footnote says what is billed and when. Monthly and annual are the same product.
+ * The plan cards. Plans bill monthly; a person already on an annual plan from before October 2026 keeps it, and their
+ * card says so. Enterprise has no checkout: its price is set per organization, so the card opens a conversation.
  */
-export function PricingPlans({ plans, signedIn, current, currentCycle, currentName, hasSubscription, clientId, userId, trialDays, initialCycle, signupHref }: PricingPlansProps) {
-  const [cycle, setCycle] = useState<Cycle>(initialCycle);
-  const annual = cycle === 'annual';
+export function PricingPlans({ plans, signedIn, current, currentCycle, currentName, hasSubscription, clientId, userId, trialDays, signupHref, contactHref }: PricingPlansProps) {
   const heldCycle: Cycle = currentCycle || 'monthly';
-  const signup = signupHref + (annual ? '' : (signupHref.includes('?') ? '&' : '?') + 'cycle=monthly');
-  const per = annual ? 'a year' : 'a month';
   return (
-    <>
-      <div className="cycle-row">
-        <div className="cycle-toggle" role="radiogroup" aria-label="Billing cycle">
-          <button type="button" role="radio" aria-checked={annual} className={annual ? 'on' : ''} onClick={() => setCycle('annual')}>Annual <span className="save">2 months free</span></button>
-          <button type="button" role="radio" aria-checked={!annual} className={!annual ? 'on' : ''} onClick={() => setCycle('monthly')}>Monthly</button>
-        </div>
-        <span className="note">{annual ? 'Billed once a year. Same features and limits as monthly.' : 'Billed every month. Switch to annual any time for two months free.'}</span>
-      </div>
-      <div className="plans" data-cycle={cycle}>
-        {plans.map(p => {
-          const pid = p.planIds[cycle];
-          const price = annual ? p.priceUsdYear : p.priceUsd;
-          const onThisPlan = signedIn && current === p.key;
-          const isCurrent = onThisPlan && heldCycle === cycle;
-          const yearlyElsewhere = onThisPlan && heldCycle === 'annual' && !annual;
-          const switching = onThisPlan && heldCycle === 'monthly' && annual;
-          const replaces = hasSubscription && current !== 'free' ? `${currentName} (${heldCycle})` : null;
-          const shown = annual && p.monthlyEquivalent != null ? p.monthlyEquivalent : p.priceUsd;
-          return (
-            <div key={p.key} className={'plan' + (p.hot ? ' hot' : '')}>
-              <div className="name">{p.name}{p.hot && <span className="tag">Most popular</span>}{onThisPlan && <span className="tag current">Current{currentCycle ? `, ${currentCycle}` : ''}</span>}</div>
-              <div className="price">{money(shown)}{p.priceMarker && <sup className="mark" title={p.licensing}>{p.priceMarker}</sup>}<small>/ month{annual ? '*' : ''}</small></div>
-              {price != null && (
-                <div className="trial">{trialDays > 0 ? `${trialDays}-day free trial, then ${money(price)} ${per}` : `${money(price)} ${per}, billed from today`}</div>
+    <div className="plans" data-cycle="monthly">
+      {plans.map(p => {
+        const onThisPlan = signedIn && current === p.key;
+        const replaces = hasSubscription && current !== 'free' ? `${currentName} (${heldCycle})` : null;
+        return (
+          <div key={p.key} className={'plan' + (p.hot ? ' hot' : '') + (p.contactSales ? ' contact' : '')}>
+            <div className="name">{p.name}{p.hot && <span className="tag">Most popular</span>}{onThisPlan && <span className="tag current">Current{currentCycle === 'annual' ? ', annual' : ''}</span>}</div>
+            {p.contactSales ? (
+              <div className="price contact-price">Call for pricing<small>priced for your organization</small></div>
+            ) : (
+              <div className="price">{money(p.priceUsd)}<small>/ month</small></div>
+            )}
+            <div className="gas-line"><b>{gasWord(p.gasPerMonth)}</b> a month{p.contactSales ? ', set with you' : ''}</div>
+            {!p.contactSales && (
+              <div className="trial">{trialDays > 0 ? `${trialDays}-day free trial, then ${money(p.priceUsd)} a month` : `${money(p.priceUsd)} a month, billed from today`}</div>
+            )}
+            <p className="blurb">{p.blurb}</p>
+            <ul>{p.features.map(f => <li key={f}>{f}</li>)}</ul>
+            <div className="buy">
+              {p.contactSales ? (
+                <>
+                  <a className="btn primary" href={contactHref}>Talk to us</a>
+                  <div className="note" style={{ marginTop: 8 }}>{p.licensing || 'Seat and floating licenses for organizations, with deployment on your own data and geography.'}</div>
+                </>
+              ) : !signedIn ? (
+                <a className="btn primary" href={signupHref}>{trialDays > 0 ? 'Start free trial' : 'Subscribe'}</a>
+              ) : onThisPlan ? (
+                <a className="btn" href="/account">Manage on Account</a>
+              ) : !p.planId || !clientId ? (
+                <div className="notice">Checkout is being set up. Please check back in a moment.</div>
+              ) : (
+                <PayPalSubscribe key={p.key} planId={p.planId} planKey={p.key} planName={p.name} clientId={clientId} userId={userId} trialDays={trialDays} cycle="monthly" priceUsd={p.priceUsd} replaces={replaces} />
               )}
-              {annual && p.priceUsdYear != null && <div className="note">* Billed {money(p.priceUsdYear)} a year, {money(p.saving)} less than paying monthly.</div>}
-              <p className="blurb">{p.blurb}</p>
-              <ul>{p.features.map(f => <li key={f}>{f}</li>)}</ul>
-              <div className="buy">
-                {!signedIn ? (
-                  <a className="btn primary" href={signup}>{trialDays > 0 ? 'Start free trial' : 'Subscribe'}</a>
-                ) : isCurrent ? (
-                  <a className="btn" href="/account">Manage on Account</a>
-                ) : yearlyElsewhere ? (
-                  <div className="notice info"><span>Your {p.name} plan bills yearly. Manage it on your <a href="/account">Account page</a>.</span></div>
-                ) : !pid || !clientId ? (
-                  <div className="notice">Checkout is being set up. Please check back in a moment.</div>
-                ) : (
-                  <>
-                    {switching && <div className="note" style={{ marginBottom: 8 }}>Switch to annual and pay {money(p.priceUsdYear || 0)} a year instead of {money(p.priceUsd * 12)}.</div>}
-                    <PayPalSubscribe key={`${p.key}:${cycle}`} planId={pid} planKey={p.key} planName={p.name} clientId={clientId} userId={userId} trialDays={trialDays} cycle={cycle} priceUsd={price || undefined} replaces={replaces} />
-                  </>
-                )}
-              </div>
             </div>
-          );
-        })}
-      </div>
-    </>
+          </div>
+        );
+      })}
+    </div>
   );
 }

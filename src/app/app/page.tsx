@@ -24,6 +24,7 @@ const SHELL = `
     </div>
     <div class="recent" id="recent"></div>
     <div class="side-bottom">
+      <button class="gas-row tip" id="gasRow" data-tip="Gas" title="Gas: what you have left this month and what each thing costs" hidden><span class="gas-top"><span class="ico" data-icon="gauge"></span><span class="lbl gas-lbl">Gas</span><span class="lbl gas-n" data-gas-n></span></span><span class="gas-bar lbl" aria-hidden="true"><i data-gas-fill></i></span></button>
       <a class="upgrade-row tip" id="upgradeRow" href="/pricing" data-tip="Upgrade" title="Higher limits, Research mode, the Reasoning model and Discover" hidden><span data-icon="sparkles"></span><span>Upgrade to Pro</span></a>
       <button class="nav-item tip" id="settingsBtn" data-tip="Settings" title="Settings: default mode, model, focus and answer length"><span class="ico" data-icon="settings"></span><span class="lbl">Settings</span></button>
       <button class="nav-item tip" id="acctRow" data-tip="Account" title="Account: plan, billing, export and sign out"><span class="avatar">Y</span><span class="lbl">Account</span></button>

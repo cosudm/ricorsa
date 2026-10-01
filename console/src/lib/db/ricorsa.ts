@@ -18,13 +18,15 @@ export const rUsers = sqliteTable('users', {
   planRenewsAt: ts('plan_renews_at'),
   /** How the current subscription bills: monthly or annual; null for the free state and for grants that did not say. */
   billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
-  /** Monthly allowances the console set above the plan's own (only the keys given override); null means the plan's numbers. */
+  /** A monthly gas allowance the console set above the plan's own; null means the plan's number. */
   allowance: text('allowance', { mode: 'json' }).$type<RAllowance | null>(),
+  /** Pay-As-You-Go gas bought and not yet spent; it never expires and is used after the month's allowance. */
+  gasBalance: integer('gas_balance').notNull().default(0),
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default(sql`'{}'`),
   createdAt: ts('created_at').notNull(),
   lastSeenAt: ts('last_seen_at').notNull(),
 });
-export type RAllowance = { buildsPerMonth?: number; ideaSetsPerMonth?: number; questionsPerMonth?: number; questionsPerDay?: number; researchPerMonth?: number; browserActionsPerMonth?: number; note?: string; setBy?: string; setAt?: number };
+export type RAllowance = { gasPerMonth?: number; note?: string; setBy?: string; setAt?: number };
 
 export const rSubscriptions = sqliteTable('subscriptions', {
   id: text('id').primaryKey(),
@@ -51,7 +53,20 @@ export const rUsage = sqliteTable('usage', {
   builds: integer('builds').notNull().default(0),
   ideas: integer('ideas').notNull().default(0),
   browserActions: integer('browser_actions').notNull().default(0),
+  /** Gas spent in the period: the one figure the plan's allowance is measured against. */
+  gas: integer('gas').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.userId, t.period] })]);
+
+/** Pay-As-You-Go purchases, one row per captured PayPal order. */
+export const rGasPurchases = sqliteTable('gas_purchases', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  orderId: text('order_id').notNull(),
+  usdCents: integer('usd_cents').notNull(),
+  gas: integer('gas').notNull(),
+  status: text('status').notNull().default('completed'),
+  createdAt: ts('created_at').notNull(),
+});
 
 export const rThreads = sqliteTable('threads', {
   id: text('id').primaryKey(),

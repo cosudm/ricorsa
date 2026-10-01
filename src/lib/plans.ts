@@ -1,9 +1,11 @@
 /**
- * Plans, prices and quotas. Free, then Essentials, Professional and Enterprise. Prices here are what the app
- * creates on PayPal for itself (src/lib/paypal-setup.ts): PayPal plans are immutable once created, so a price
- * change makes a new PayPal plan and the old one is kept as retired, so people already subscribed keep their
- * price and their access. Prices moved from $25 / $55 / $85 to $45 / $79 / $129 a month in September 2026, so
- * that a heavy user at the metered ceilings still runs at a margin; annual is ten months' price.
+ * Plans, prices and gas. Free, then Essentials ($60), Professional ($150) and Enterprise (priced per organization),
+ * plus Pay-As-You-Go gas bought in $100 blocks. Everything metered runs on one unit, gas: a question costs 1, a
+ * Research report 10, a Discover idea set 25, an app version 250, a browser action 1 (see GAS). Each plan carries
+ * a monthly gas allowance; bought gas never expires and is burned after the allowance. Prices here are what the
+ * app creates on PayPal for itself (src/lib/paypal-setup.ts): PayPal plans are immutable once created, so a price
+ * change makes a new PayPal plan and the old one is kept as retired, so people already subscribed keep their price
+ * and their access. Plans bill monthly; the annual plans sold before October 2026 stay valid for those who have them.
  */
 export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
 /** The keys in use before September 2026. Rows and PayPal ids stored under them resolve to the plans that replaced them. */
@@ -12,12 +14,45 @@ export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', te
 export const PLAN_ORDER: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
 /** Every paid plan starts with a free trial of this many days through PayPal; billing begins when it ends. */
 export const TRIAL_DAYS = 14;
-/** How a subscription bills. Monthly and annual plans are feature-identical; annual is ten months' price, two months free. */
+/** How a subscription bills. New plans bill monthly; annual subscriptions from before October 2026 keep billing yearly. */
 export type BillingCycle = 'monthly' | 'annual';
 export const BILLING_CYCLES: BillingCycle[] = ['monthly', 'annual'];
 export const ANNUAL_MONTHS_FREE = 2;
 /** The plans shown on the pricing page: the paid ones. Free is the state of an account with no subscription, not an offer. */
 export const OFFERED_PLANS: PlanKey[] = ['essentials', 'professional', 'enterprise'];
+
+/**
+ * Gas: the one unit everything metered is priced in, so one gauge tells the person what they have left and what
+ * each thing costs. The numbers follow what each thing costs to run (a Research report reads several pages and
+ * writes a long report; an app version is written by the build model and checked in a real browser).
+ */
+export const GAS = {
+  /** A Search-mode question on the Fast or Best model. */
+  question: 1,
+  /** A question on the Reasoning model. */
+  reasoning: 3,
+  /** A Research report. */
+  research: 10,
+  /** One action of Ricorsa's browser: an open, a click, a typed field, a chosen option, a scroll or a back. */
+  browserAction: 1,
+  /** A minute of the person's own control of the browser after a take-over. */
+  takeoverMinute: 1,
+  /** A Discover idea set generated from the graph (a cached set served again is free). */
+  ideaSet: 25,
+  /** An app version written by the Build studio. */
+  build: 250,
+  /** A question a built app asks through its live line. */
+  appQuestion: 1,
+} as const;
+export type GasKind = keyof typeof GAS;
+/** What each kind is called on the gauge and in the receipts under an answer. */
+export const GAS_LABELS: Record<GasKind, string> = {
+  question: 'Question (Fast or Best)', reasoning: 'Question on the Reasoning model', research: 'Research report', browserAction: 'Browser action', takeoverMinute: 'Minute in control of the browser', ideaSet: 'Discover idea set', build: 'App version (Build studio)', appQuestion: 'Question from a built app',
+};
+/** Pay-As-You-Go: gas bought outright, in blocks of this size, never expiring, burned after the plan's monthly allowance. */
+export const PAYG = { usd: 100, gas: 4000 } as const;
+/** A gas amount for copy: "1 gas", "2,500 gas". */
+export function gas(n: number): string { return `${Math.round(n).toLocaleString('en-US')} gas`; }
 
 /** `files`: how many files a question can carry and how large each may be. `browser`: whether Ricorsa may open sites and work them for the person. */
 export type Caps = { graph: 'preview' | 'full'; discover: 'locked' | 'full'; browser: 'locked' | 'full'; connectors: number; files: { perQuestion: number; maxMb: number } };
@@ -34,15 +69,10 @@ export type Plan = {
   paypalPlanEnvAnnual?: string;
   /** The env var the plan's PayPal id lived in under its previous name and price, for subscriptions taken out then. */
   legacyPaypalPlanEnv?: string;
-  questionsPerDay: number;     // Search-mode answers per day
-  questionsPerMonth: number;   // hard monthly ceiling on all answers
-  researchPerMonth: number;    // Research-mode answers per month
-  /** App versions the Build studio may write in a month (0 where Discover is locked). A version costs far more than an answer, so it has its own ceiling. */
-  buildsPerMonth: number;
-  /** Discover idea sets generated from the graph in a month (a set served from the cache is free; Generate again writes a new one). */
-  ideaSetsPerMonth: number;
-  /** Actions Ricorsa's browser may take on websites in a month (an open, a click, a typed field each count as one). */
-  browserActionsPerMonth: number;
+  /** Gas included every month; the one ceiling on questions, reports, idea sets, app versions and browser actions together. */
+  gasPerMonth: number;
+  /** Priced per organization: no online price, no PayPal plan; the card says Call for pricing. */
+  contactSales?: boolean;
   tiers: Array<'quick' | 'default' | 'complex'>; // model tiers this plan may use
   spaces: number;              // max Spaces
   blurb: string;
@@ -59,77 +89,54 @@ export const PLANS: Record<PlanKey, Plan> = {
     name: 'Free',
     priceUsd: 0,
     caps: { graph: 'preview', discover: 'locked', browser: 'locked', connectors: 0, files: { perQuestion: 2, maxMb: 10 } },
-    questionsPerDay: 10,
-    questionsPerMonth: 150,
-    researchPerMonth: 0,
-    buildsPerMonth: 0,
-    ideaSetsPerMonth: 0,
-    browserActionsPerMonth: 0,
+    gasPerMonth: 150,
     tiers: ['quick', 'default'],
     spaces: 1,
     blurb: 'Try it and let the graph start learning you.',
-    features: ['10 questions a day, 150 a month', 'Live web citations', 'Attach files to a question, 2 at a time up to 10 MB each: ask anything about a PDF, document or spreadsheet and see the passage highlighted', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
+    features: ['150 gas a month: about 150 questions', 'Live web citations', 'Attach files to a question, 2 at a time up to 10 MB each: ask anything about a PDF, document or spreadsheet and see the passage highlighted', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
   },
   essentials: {
     key: 'essentials',
     name: 'Essentials',
-    priceUsd: 45,
-    priceUsdYear: 450,
+    priceUsd: 60,
     paypalPlanEnv: 'PAYPAL_PLAN_ESSENTIALS',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_ESSENTIALS_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_PRO',
     caps: { graph: 'full', discover: 'locked', browser: 'locked', connectors: 3, files: { perQuestion: 5, maxMb: 25 } },
-    questionsPerDay: 300,
-    questionsPerMonth: 1500,
-    researchPerMonth: 40,
-    buildsPerMonth: 0,
-    ideaSetsPerMonth: 0,
-    browserActionsPerMonth: 0,
+    gasPerMonth: 2500,
     tiers: ['quick', 'default', 'complex'],
     spaces: 25,
     blurb: 'The full identity graph, for people who research every day.',
-    features: ['Full Identity Graph: the living map, intents, connections and provenance of every node', 'Up to 1,500 questions a month, 300 a day', '40 Research reports a month', 'Reasoning model', 'Memory: answers recall and cite your earlier answers and files', 'Files: 5 per question, up to 25 MB each', '3 Connectors: apps, MCP servers, websites and document vaults your answers can use', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
+    features: ['2,500 gas a month: about 2,500 questions, or 250 Research reports, or any mix', 'Full Identity Graph: the living map, intents, connections and provenance of every node', 'Research reports and the Reasoning model', 'Memory: answers recall and cite your earlier answers and files', 'Files: 5 per question, up to 25 MB each', '3 Connectors: apps, MCP servers, websites and document vaults your answers can use', 'Unlimited Library, 25 Spaces', 'Export everything, any time'],
   },
   professional: {
     key: 'professional',
     name: 'Professional',
-    priceUsd: 79,
-    priceUsdYear: 790,
+    priceUsd: 150,
     paypalPlanEnv: 'PAYPAL_PLAN_PROFESSIONAL',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_PROFESSIONAL_ANNUAL',
     legacyPaypalPlanEnv: 'PAYPAL_PLAN_TEAM',
     caps: { graph: 'full', discover: 'full', browser: 'full', connectors: 25, files: { perQuestion: 10, maxMb: 40 } },
-    questionsPerDay: 1000,
-    questionsPerMonth: 5000,
-    researchPerMonth: 150,
-    buildsPerMonth: 30,
-    ideaSetsPerMonth: 60,
-    browserActionsPerMonth: 300,
+    gasPerMonth: 8000,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100,
-    blurb: 'Everything in Essentials, plus Discover: turn your research into working tools.',
-    features: ['Everything in Essentials', 'Discover, fully unlocked: apps, agents, tools, datasets and credentials built from your own asset, each checked in a real browser and stamped with a provenance id', 'Build studio: 30 app versions a month, 60 idea sets a month', 'Ricorsa can open a website and work it for you while you watch: 300 browser actions a month', 'Up to 5,000 questions a month, 1,000 a day', '150 Research reports a month', 'Files: 10 per question, up to 40 MB each', '25 Connectors, each usable everywhere or kept to one Space', '100 Spaces', 'Priority support'],
+    blurb: 'Everything in Essentials, plus Discover and the Ricorsa Browser: turn your research into working tools.',
+    features: ['8,000 gas a month, spent any way you like: questions, Research reports, Discover idea sets, app versions, browser actions', 'Everything in Essentials', 'Discover, fully unlocked: apps, agents, tools, datasets and credentials built from your own asset, each checked in a real browser and stamped with a provenance id', 'Build studio: app versions written, tested and repaired for you', 'Ricorsa Browser: Ricorsa opens a website and works it for you while you watch; take the page over when you need to', 'Files: 10 per question, up to 40 MB each', '25 Connectors, each usable everywhere or kept to one Space', '100 Spaces', 'Priority support'],
   },
   enterprise: {
     key: 'enterprise',
     name: 'Enterprise',
-    priceUsd: 129,
-    priceUsdYear: 1290,
+    priceUsd: 0,
+    contactSales: true,
     paypalPlanEnv: 'PAYPAL_PLAN_ENTERPRISE',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_ENTERPRISE_ANNUAL',
     caps: { graph: 'full', discover: 'full', browser: 'full', connectors: 100, files: { perQuestion: 20, maxMb: 60 } },
-    questionsPerDay: 3000,
-    questionsPerMonth: 15000,
-    researchPerMonth: 500,
-    buildsPerMonth: 100,
-    ideaSetsPerMonth: 200,
-    browserActionsPerMonth: 1000,
+    gasPerMonth: 30000,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100000,
-    blurb: 'The online plan for a firm that runs on research: the highest limits, every connector, and a direct line to us. Organizations license by the seat.',
-    features: ['Everything in Professional', 'Build studio: 100 app versions a month, 200 idea sets a month', 'Browser: 1,000 actions a month', 'Up to 15,000 questions a month, 3,000 a day', '500 Research reports a month', 'Files: 20 per question, up to 60 MB each', '100 Connectors', 'Unlimited Spaces', 'A direct line to us, with onboarding for your team', 'Seat and floating licenses for organizations, with deployment on your own data and geography (see below)'],
-    priceMarker: '***',
-    licensing: 'Enterprise licensing for organizations: seat licenses, 60 seats or more at $85 per seat a month, or floating licenses shared across a team, with deployment on your own data and geography. Call for pricing.',
+    blurb: 'Everything in Essentials and Professional, for a firm that runs on research: a gas allowance set for your organization, every connector, and a direct line to us.',
+    features: ['Everything in Essentials and Professional', 'A gas allowance set for your organization, raised as you grow', 'Files: 20 per question, up to 60 MB each', '100 Connectors', 'Unlimited Spaces', 'A direct line to us, with onboarding for your team', 'Seat and floating licenses for organizations, with deployment on your own data and geography'],
+    licensing: 'Enterprise licensing for organizations: seat licenses or floating licenses shared across a team, with deployment on your own data and geography. Call for pricing: enterprise@ricorsa.com.',
   },
 };
 
@@ -153,6 +160,15 @@ export function normalizePlanKey(key: string | null | undefined): PlanKey {
   return 'free';
 }
 export function planFor(key: string | null | undefined): Plan { return PLANS[normalizePlanKey(key)]; }
+/**
+ * The plan whose capabilities apply to an account: its subscription's, or Professional while Pay-As-You-Go gas
+ * remains on an account below Professional (bought gas comes with the Professional feature set).
+ */
+export function capabilityPlanKey(subscriptionPlan: string | null | undefined, gasBalance: number | null | undefined): PlanKey {
+  const key = normalizePlanKey(subscriptionPlan);
+  if ((gasBalance || 0) > 0 && PLAN_ORDER.indexOf(key) < PLAN_ORDER.indexOf('professional')) return 'professional';
+  return key;
+}
 /** The plan above this one, or null at the top. */
 export function nextPlan(key: string | null | undefined): Plan | null {
   const i = PLAN_ORDER.indexOf(normalizePlanKey(key));
@@ -204,7 +220,7 @@ export function annualSaving(plan: Plan): number {
 export function paypalPlanId(key: PlanKey, provisioned?: ProvisionedPlans | null, cycle: BillingCycle = 'monthly', trial = true): string | null {
   const plan = PLANS[key];
   const env = cycle === 'annual' ? plan.paypalPlanEnvAnnual : plan.paypalPlanEnv;
-  if (!env) return null;
+  if (!env || plan.contactSales || !plan.priceUsd) return null;
   if (cycle === 'annual' && !plan.priceUsdYear) return null;
   const standard = process.env[env] || provisioned?.plans?.[provisionKey(key, cycle)] || null;
   if (trial) return standard;

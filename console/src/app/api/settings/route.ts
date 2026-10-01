@@ -13,7 +13,7 @@ const Patch = z.object({
   invoice: z.object({ prefix: zText(12), nextNumber: z.number().int().min(1).max(1e9), dueDays: z.number().int().min(0).max(365), taxRate: z.number().min(0).max(100), currency: zText(3), terms: zText(5000), footer: zText(500) }).partial().optional(),
   email: z.object({ from: zText(200), replyTo: zOptText(200), signature: zText(2000) }).partial().optional(),
   trial: z.object({ days: z.number().int().min(1).max(365), plan: z.enum(['essentials', 'professional', 'enterprise', 'pro', 'team']).transform(v => normalizePlanKey(v) as 'essentials' | 'professional' | 'enterprise') }).partial().optional(),
-  trueup: z.object({ buildCents: z.number().int().min(0).max(1e7), ideaSetCents: z.number().int().min(0).max(1e7), questionCents: z.number().int().min(0).max(1e7), researchCents: z.number().int().min(0).max(1e7), browserActionCents: z.number().int().min(0).max(1e7), dueDays: z.number().int().min(0).max(365) }).partial().optional(),
+  trueup: z.object({ gasBlockCents: z.number().int().min(0).max(1e7), dueDays: z.number().int().min(0).max(365) }).partial().optional(),
 });
 
 export const GET = handle(async () => { await currentStaff(); return json({ settings: await getSettings() }); });

@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { currentUser } from '@/lib/session';
+import { capabilityPlan } from '@/lib/usage';
 import { handle, json, readJson, fail, uid } from '@/lib/http';
 import { db, schema } from '@/lib/db';
-import { planFor } from '@/lib/plans';
 import { checkConnector, listConnectors, ownSpaceIds, serverNameFor, toClient } from '@/lib/connectors';
 import { sealJson } from '@/lib/secretbox';
 import { VAULT_LABEL, VAULT_PRESET, vaultClient, vaultMcpUrl } from '@/lib/vault';
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 /** POST /api/connectors/vault/approve { challengeId, workspaceIds } — the Vault issues a token for those workspaces; Ricorsa keeps it as a connector. */
 export const POST = handle(async (req: Request) => {
   const user = await currentUser();
-  const plan = planFor(user.plan); const limit = user.admin ? 100 : plan.caps.connectors;
+  const plan = capabilityPlan(user); const limit = user.admin ? 100 : plan.caps.connectors;
   const existing = await listConnectors(user.id);
   if (existing.length >= limit) return fail(402, `The ${plan.name} plan allows ${limit} connector${limit === 1 ? '' : 's'}. Upgrade for more.`, 'upgrade_required');
   const b = z.object({ challengeId: z.string().max(60), workspaceIds: z.array(z.string().max(60)).min(1).max(50), name: z.string().trim().max(60).optional(), spaceIds: z.array(z.string().max(60)).max(50).optional().nullable() }).safeParse(await readJson(req));

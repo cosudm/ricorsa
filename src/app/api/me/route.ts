@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
-import { planFor, normalizePlanKey } from '@/lib/plans';
-import { readUsage, limitsFor } from '@/lib/usage';
+import { planFor, normalizePlanKey, GAS, GAS_LABELS, PAYG } from '@/lib/plans';
+import { readUsage, gasState, capabilityPlan, subscriptionActive } from '@/lib/usage';
 import { listThreads } from '@/lib/threads';
 import { loadGraph, graphView } from '@/lib/graph';
 import { geocodingEnabled, geocoderIsOsm } from '@/lib/geo';
@@ -14,19 +14,23 @@ export const dynamic = 'force-dynamic';
 /** Everything the app needs on load: who you are, your plan and usage, thread list, spaces, graph. */
 export const GET = handle(async () => {
   const user = await currentUser();
-  const [threads, spaces, graph, usage, connectors] = await Promise.all([
+  const [threads, spaces, graph, usage, connectors, gas] = await Promise.all([
     listThreads(user.id),
     db().select().from(schema.spaces).where(eq(schema.spaces.userId, user.id)),
     loadGraph(user.id),
     readUsage(user.id),
     db().select({ id: schema.connectors.id, name: schema.connectors.name, enabled: schema.connectors.enabled, status: schema.connectors.status }).from(schema.connectors).where(eq(schema.connectors.userId, user.id)),
+    gasState(user),
   ]);
-  const plan = planFor(user.plan);
-  const lim = limitsFor(plan, user.allowance);
+  // The subscription's plan is what bills; the capability plan is what the person can do (Professional while bought gas remains).
+  const sub = planFor(user.plan);
+  const plan = capabilityPlan(user);
   return json({
     user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings, admin: !!user.admin },
-    plan: { key: plan.key, name: plan.name, caps: plan.caps, tiers: plan.tiers, questionsPerDay: lim.questionsPerDay, questionsPerMonth: lim.questionsPerMonth, researchPerMonth: lim.researchPerMonth, buildsPerMonth: lim.buildsPerMonth, ideaSetsPerMonth: lim.ideaSetsPerMonth, browserActionsPerMonth: lim.browserActionsPerMonth, spaces: plan.spaces, status: user.subscriptionStatus, cycle: user.billingCycle || null, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null },
-    usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research, builds: usage.month.builds, ideas: usage.month.ideas, browserActions: usage.month.browserActions },
+    plan: { key: plan.key, name: sub.name, subscription: sub.key, capabilities: plan.key, caps: plan.caps, tiers: plan.tiers, gasPerMonth: gas.allowance, spaces: plan.spaces, status: user.subscriptionStatus, active: subscriptionActive(user), cycle: user.billingCycle || null, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null, contactSales: !!sub.contactSales },
+    usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research, builds: usage.month.builds, ideas: usage.month.ideas, browserActions: usage.month.browserActions, gas: usage.month.gas },
+    /** The gauge: what is left this month and in the bought balance, what each thing costs, and where more comes from. */
+    gas: { ...gas, remaining: gas.unlimited ? null : gas.remaining, costs: GAS, labels: GAS_LABELS, payg: PAYG },
     connectors: { total: connectors.length, active: connectors.filter(c => c.enabled && c.status === 'ok').length, limit: user.admin ? 100 : plan.caps.connectors },
     threads,
     spaces: spaces.map(s => ({ ...s, createdAt: new Date(s.createdAt).getTime() })),

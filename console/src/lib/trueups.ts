@@ -13,8 +13,8 @@ import type { InvoiceItem } from './db/schema';
 export function trueupMarker(period: string): string { return `True-up ${period}`; }
 
 /**
- * Draft a true-up invoice for one annual account's overage in a month: one line per unit kind used beyond the
- * plan's monthly allowance, at the unit prices in Settings. The customer record is created from the account when
+ * Draft a true-up invoice for one annual account's overage in a month: the gas spent beyond the plan's monthly
+ * allowance, in blocks of 100 at the block price in Settings. The customer record is created from the account when
  * there is none yet. The draft is then sent like any other invoice (PayPal Invoicing, email, or both).
  */
 export async function draftTrueup(userId: string, period: string, me: Staff): Promise<{ invoiceId: string; number: string; customerId: string; totalCents: number; candidate: TrueupCandidate }> {
@@ -33,10 +33,10 @@ export async function draftTrueup(userId: string, period: string, me: Staff): Pr
   }
   const customer = (await d.select().from(schema.customers).where(eq(schema.customers.id, customerId)).limit(1))[0];
   const [prices, inv] = await Promise.all([getSetting('trueup'), getSetting('invoice')]);
-  const unit: Record<TrueupCandidate['overage'][number]['key'], number> = { builds: prices.buildCents, ideas: prices.ideaSetCents, questions: prices.questionCents, research: prices.researchCents, browser: prices.browserActionCents ?? 10 };
+  const blockCents = prices.gasBlockCents ?? 250;
   const monthName = new Date(period + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  const items: InvoiceItem[] = c.overage.filter(o => unit[o.key] > 0).map(o => ({ description: `${planName(c.plan)} plan, ${monthName}: ${o.over.toLocaleString('en-US')} ${o.label} beyond the monthly allowance of ${o.allowance.toLocaleString('en-US')} (${o.used.toLocaleString('en-US')} used)`, qty: o.over, unitCents: unit[o.key], taxRate: inv.taxRate || undefined }));
-  if (!items.length) throw new HttpError(409, 'Every unit price for true-ups is zero in Settings, so there is nothing to bill', 'no_prices');
+  const items: InvoiceItem[] = blockCents > 0 ? c.overage.map(o => ({ description: `${planName(c.plan)} plan, ${monthName}: ${o.over.toLocaleString('en-US')} gas beyond the monthly allowance of ${o.allowance.toLocaleString('en-US')} (${o.used.toLocaleString('en-US')} spent), in blocks of 100`, qty: Math.ceil(o.over / 100), unitCents: blockCents, taxRate: inv.taxRate || undefined })) : [];
+  if (!items.length) throw new HttpError(409, 'The gas block price for true-ups is zero in Settings, so there is nothing to bill', 'no_prices');
   const totals = computeTotals(items);
   const issuedAt = new Date(); const dueAt = new Date(issuedAt.getTime() + (prices.dueDays ?? inv.dueDays) * 86400e3);
   const id = uid(), number = await nextInvoiceNumber();

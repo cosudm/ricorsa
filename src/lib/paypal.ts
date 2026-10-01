@@ -5,6 +5,8 @@
 export function paypalConfigured(): boolean { return Boolean(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET); }
 
 export function paypalBase(): string {
+  // PAYPAL_BASE_URL points the app at a stand-in during tests; otherwise live or sandbox by PAYPAL_ENV.
+  if (process.env.PAYPAL_BASE_URL && process.env.NODE_ENV !== 'production') return process.env.PAYPAL_BASE_URL.replace(/\/+$/, '');
   return process.env.PAYPAL_ENV === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com';
 }
 
@@ -58,6 +60,28 @@ export async function createPlan(productId: string, name: string, description: s
     billing_cycles: cycles,
     payment_preferences: { auto_bill_outstanding: true, setup_fee_failure_action: 'CONTINUE', payment_failure_threshold: 2 },
   }) });
+}
+
+/** A one-time order (PayPal Orders v2): what Pay-As-You-Go gas is bought with. */
+export type PaypalOrder = {
+  id: string; status: string; create_time?: string; update_time?: string;
+  purchase_units?: Array<{ reference_id?: string; custom_id?: string; description?: string; amount?: { value: string; currency_code: string }; payments?: { captures?: Array<{ id: string; status: string; amount?: { value: string; currency_code: string }; custom_id?: string }> } }>;
+  payer?: { email_address?: string };
+};
+
+/** Create an order for a fixed amount; the browser only ever learns its id, and the amount is confirmed again at capture. */
+export async function createOrder(amountUsd: number, customId: string, description: string, referenceId = 'gas'): Promise<PaypalOrder> {
+  return api<PaypalOrder>('/v2/checkout/orders', { method: 'POST', body: JSON.stringify({
+    intent: 'CAPTURE',
+    purchase_units: [{ reference_id: referenceId, custom_id: customId, description: description.slice(0, 127), amount: { currency_code: 'USD', value: amountUsd.toFixed(2) } }],
+    payment_source: { paypal: { experience_context: { shipping_preference: 'NO_SHIPPING', user_action: 'PAY_NOW', brand_name: 'Ricorsa' } } },
+  }) });
+}
+export function getOrder(id: string) { return api<PaypalOrder>(`/v2/checkout/orders/${encodeURIComponent(id)}`); }
+/** Capture an approved order. PayPal answers 422 ORDER_ALREADY_CAPTURED on a second try; the caller reads the order then. */
+export async function captureOrder(id: string): Promise<PaypalOrder> {
+  try { return await api<PaypalOrder>(`/v2/checkout/orders/${encodeURIComponent(id)}/capture`, { method: 'POST', body: '{}' }); }
+  catch (e) { if (/ORDER_ALREADY_CAPTURED/.test(String((e as Error)?.message || e))) return getOrder(id); throw e; }
 }
 
 export async function createWebhook(url: string) {

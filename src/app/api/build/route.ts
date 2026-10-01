@@ -5,14 +5,14 @@ import { fail, readJson, HttpError, uid, truncate } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import type { BuildMessage } from '@/lib/db/schema';
 import { loadGraph } from '@/lib/graph';
-import { planFor } from '@/lib/plans';
+import { GAS } from '@/lib/plans';
 import { chain, graphFingerprint } from '@/lib/hash';
 import { buildSystem, buildMessages, parseBuild, applyEdits, stampHtml, streamAnswer, isLiveBuild, nextStepsFallback, repairRequestFor, type BuildSpec, type BuildCheck } from '@/lib/build';
 import { auditApp } from '@/lib/build-audit';
 import { withKit, stripKit } from '@/lib/app-kit';
 import { runApp, runFindings, seriousFindings, browserRunAvailable } from '@/lib/build-run';
 import { describeProviderError } from '@/lib/llm';
-import { recordUsage, assertBuildQuota } from '@/lib/usage';
+import { recordUsage, assertBuildQuota, chargeGas, type GasReceipt } from '@/lib/usage';
 import { estimateCostMicros } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
@@ -52,8 +52,7 @@ type Review = { findings: string[]; serious: number; ran: boolean; check: BuildC
  */
 export async function POST(req: Request) {
   let user; try { user = await currentUser(); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Sign-in check failed'); }
-  const plan = planFor(user.plan);
-  // The plan must include the studio, the subscription must be current, and this month's ceiling on versions must not be reached.
+  // The plan (or bought gas) must include the studio, the subscription must be current, and there must be gas for a version.
   try { await assertBuildQuota(user); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Could not start the build'); }
   const parsed = Body.safeParse(await readJson(req).catch(() => ({})));
   if (!parsed.success) return fail(400, 'Invalid request', 'invalid_request');
@@ -117,6 +116,11 @@ export async function POST(req: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: string, data: unknown) => { try { controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch {} };
+      // The gauge: what this turn of the studio cost and what is left afterwards (null when the charge could not be made).
+      const charge = async (cost: number): Promise<{ cost: number; remaining: number | null; unlimited: boolean } | null> => {
+        try { const r: GasReceipt = await chargeGas(user, cost); return { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited }; }
+        catch (e) { console.warn('[gas] build not charged', String((e as Error)?.message || e).slice(0, 160)); return null; }
+      };
       let raw = ''; let planSent = false; let rowMade = !root || restart; let lastSave = Date.now();
       const sessionId = root ? root.id : id;
       const startedAt = Date.now();
@@ -205,10 +209,10 @@ export async function POST(req: Request) {
         modelUsed = result.model;
         console.log('[build]', JSON.stringify({ model: result.model, chars: result.text.length, seconds: Math.round((Date.now() - startedAt) / 1000), thinkingChars, restart, version, truncated: result.truncated }));
         if (p.reply && !p.html && !p.edits) {
-          // A question: answer in the chat, no new version.
+          // A question: answer in the chat, no new version. It costs what a question costs.
           await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
           const m = await addMessage({ role: 'assistant', text: truncate(p.reply, 4000), kind: 'reply', buildId: null, version: null, model: modelUsed });
-          send('done', { reply: m, build: null, sessionId });
+          send('done', { reply: m, build: null, sessionId, gas: await charge(GAS.question) });
           return;
         }
         if (!p.html && p.edits && latest?.html) {
@@ -278,12 +282,14 @@ export async function POST(req: Request) {
         console.log('[build] checked', JSON.stringify({ ...check, model: modelUsed, usage }));
         send('phase', { text: 'final', check, left: rev.findings.slice(0, 8) });
         await recordUsage(user.id, { questions: 1, builds: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
+        // A finished version is the expensive act: 250 gas, checked and repaired included.
+        const paid = await charge(GAS.build);
         const html = stampHtml(p.html, { buildId: id, ideaId, graphHash, lineage });
         const summary = p.plan.split('\n').map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean)[0] || spec.what;
         const next = p.next.length ? p.next : nextStepsFallback(spec.kind);
         await save({ status: 'done', plan: p.plan, html, summary });
         const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next, model: modelUsed, fallback: user.admin && fallback ? fallback : undefined, check, left: rev.findings.slice(0, 8) });
-        send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId, check, model: modelUsed });
+        send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId, check, model: modelUsed, gas: paid });
       } catch (e) {
         const err = e as { name?: string; message?: string };
         const p = parseBuild(raw);

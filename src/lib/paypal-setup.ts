@@ -1,12 +1,14 @@
 /**
  * PayPal self-provisioning. The first time billing is needed the app creates its catalog product, the billing
- * plans for each paid tier (monthly and yearly, each with and without the free trial) and the webhook on PayPal,
+ * plans for each paid tier sold online (monthly, with and without the free trial) and the webhook on PayPal,
  * and keeps the ids in the `config` table. Nothing needs to be copied around by hand: the credentials are the
  * only configuration. Explicit PAYPAL_PLAN_* / PAYPAL_WEBHOOK_ID env vars still win when set.
  *
  * Plans are reconciled against src/lib/plans.ts on every cold start: a tier with no PayPal plan yet gets one,
  * and a tier whose price or trial changed gets a new one (PayPal plans are immutable) while the old id is kept
- * as retired, so subscriptions taken out at the old price keep granting the tier they paid for.
+ * as retired, so subscriptions taken out at the old price keep granting the tier they paid for. The annual plans
+ * sold before October 2026 are no longer created; their ids stay in the record so those subscriptions still resolve.
+ * Enterprise is priced per organization and has no PayPal plan. Pay-As-You-Go gas is a one-time order (src/lib/paypal.ts).
  */
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db';
@@ -60,7 +62,8 @@ async function provision(): Promise<PaypalProvisioned | null> {
   // already live are recognized and left alone.
   type Variant = { key: string; env?: string; price: number; trial: number; spec: string; interval: 'MONTH' | 'YEAR'; label: string; description: string };
   for (const plan of Object.values(PLANS)) {
-    if (!plan.paypalPlanEnv) continue;
+    // Plans priced per organization (Enterprise) have no online price and no PayPal plan; their ids from before stay retired.
+    if (!plan.paypalPlanEnv || plan.contactSales || !plan.priceUsd) continue;
     const variants: Variant[] = [
       { key: plan.key, env: plan.paypalPlanEnv, price: plan.priceUsd, trial: TRIAL_DAYS, spec: specOf(plan), interval: 'MONTH', label: `Ricorsa ${plan.name}`, description: `${plan.name} plan: ${plan.blurb}` },
       { key: provisionKey(plan.key, 'monthly', false), price: plan.priceUsd, trial: 0, spec: `${plan.priceUsd}|0`, interval: 'MONTH', label: `Ricorsa ${plan.name} (no trial)`, description: `${plan.name} plan, billed from the first day: ${plan.blurb}` },

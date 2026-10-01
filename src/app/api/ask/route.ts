@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { fail, readJson, HttpError } from '@/lib/http';
-import { assertQuota, assertBrowseQuota, recordUsage } from '@/lib/usage';
+import { assertQuota, assertBrowseQuota, recordUsage, chargeGas, questionCost, type GasReceipt, capabilityPlan } from '@/lib/usage';
+import { GAS } from '@/lib/plans';
 import { createThread, getThreadOwned, makeTurn, saveTurns } from '@/lib/threads';
 import { searchPlan, planQueries, retrieve, readPages, sourcesBlock, type Source } from '@/lib/search';
 import { loadGraph, saveGraph, mergeLearned, graphPromptBlock } from '@/lib/graph';
@@ -14,7 +15,6 @@ import { db, schema } from '@/lib/db';
 import type { Turn } from '@/lib/db/schema';
 import { chain } from '@/lib/hash';
 import { connectorsForModel, connectorsPromptBlock } from '@/lib/connectors';
-import { planFor } from '@/lib/plans';
 import { loadAttachments, claimAttachments, filesBlock, metaOf } from '@/lib/files';
 import { isVaultConnector, numberVaultHits, numberVaultPages } from '@/lib/vault';
 import { CONSOLE_GUIDE, consoleContext } from '@/lib/console';
@@ -83,7 +83,7 @@ export async function POST(req: Request) {
       if (body.browse) { turn.browse = true; if (turn.tier === 'quick') turn.tier = 'default'; }
       if (body.attachments?.length) {
         // Files uploaded for this question: only the person's own, only pending or already on this thread, within the plan's count.
-        const cap = user.admin ? 20 : planFor(user.plan).caps.files.perQuestion;
+        const cap = user.admin ? 20 : capabilityPlan(user).caps.files.perQuestion;
         const rows = (await loadAttachments(user.id, body.attachments, thread.id)).slice(0, cap);
         if (rows.length) { await claimAttachments(rows.map(r => r.id), thread.id); turn.attachments = rows.map(metaOf); }
       }
@@ -125,6 +125,13 @@ export async function POST(req: Request) {
         } catch (e) { console.warn('[browse] could not leave the page open', String((e as Error)?.message || e).slice(0, 160)); try { await b.close(); } catch {} }
       };
       const finish = async () => { await leavePage(); try { await saveTurns(th, turns); } catch (e) { console.error('save failed', e); } try { controller.close(); } catch {} };
+      // The gauge: what this answer cost (the question, plus one gas per browser action) and what is left afterwards.
+      const charge = async (browserActions: number, counted: boolean): Promise<GasReceipt | null> => {
+        const cost = (counted ? questionCost(turn.mode, turn.tier) : 0) + GAS.browserAction * browserActions;
+        if (!cost) return null;
+        try { const r = await chargeGas(user, cost); turn.gas = (turn.gas || 0) + r.cost; return r; } catch (e) { console.warn('[gas] not charged', String((e as Error)?.message || e).slice(0, 160)); return null; }
+      };
+      const receipt = (r: GasReceipt | null) => r ? { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited } : null;
       try {
         send('meta', { threadId: th.id, turnId: turn.id, title: th.title });
 
@@ -190,7 +197,7 @@ export async function POST(req: Request) {
         let space = null;
         if (th.spaceId) { const rows = await db().select().from(schema.spaces).where(and(eq(schema.spaces.id, th.spaceId), eq(schema.spaces.userId, user.id))).limit(1); space = rows[0] || null; }
         let mcp: Awaited<ReturnType<typeof connectorsForModel>> = [];
-        try { mcp = await connectorsForModel(user.id, user.admin ? 100 : planFor(user.plan).caps.connectors, th.spaceId || null); } catch (e) { console.warn('connectors unavailable', e); }
+        try { mcp = await connectorsForModel(user.id, user.admin ? 100 : capabilityPlan(user).caps.connectors, th.spaceId || null); } catch (e) { console.warn('connectors unavailable', e); }
         if (mcp.length) console.log('[ask] connectors', JSON.stringify({ space: th.spaceId || null, connectors: mcp.map(m => m.label) }));
         // Vault connectors: their search hits and read pages become numbered sources the answer can cite and the reader can open.
         const vaultByServer = new Map(mcp.filter(m => isVaultConnector({ preset: m.preset, url: m.url })).map(m => [m.name, m.id]));
@@ -198,7 +205,7 @@ export async function POST(req: Request) {
         const siteByServer = new Map(mcp.filter(m => m.preset === SITE_PRESET).map(m => [m.name, m.label]));
         // Consoles ride along with Search answers: the guide plus what the person actually has, so buttons act on real things.
         let consoles = '';
-        if (turn.mode !== 'research') { try { consoles = `${CONSOLE_GUIDE}\n\n${await consoleContext(user.id, { canBuild: user.admin || planFor(user.plan).caps.discover === 'full' })}`; } catch (e) { console.warn('console context unavailable', e); } }
+        if (turn.mode !== 'research') { try { consoles = `${CONSOLE_GUIDE}\n\n${await consoleContext(user.id, { canBuild: user.admin || capabilityPlan(user).caps.discover === 'full' })}`; } catch (e) { console.warn('console context unavailable', e); } }
         // The browser, when asked for: the model gets its tools, every page it shows becomes a numbered source, and each
         // step reaches the person as it happens (the screenshot is stored before the event goes out).
         let resumeInfo: { url: string; title: string } | null = null;
@@ -275,7 +282,8 @@ export async function POST(req: Request) {
         let touched: ReturnType<typeof mergeLearned> = null;
         if (turn.learned) { try { touched = mergeLearned(graph, turn, th.id, { ideaId: th.origin?.ideaId }); if (touched) await saveGraph(user.id, graph); } catch (e) { console.warn('learn failed', e); } }
         await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, browserActions, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches, result.model, result.usage.cacheWrite) });
-        send('done', { turn, graphEvents: graph.events });
+        const paid = await charge(browserActions, true);
+        send('done', { turn, graphEvents: graph.events, gas: receipt(paid) });
         // 5. After the answer is on screen: put the places this turn named on the map (the geocoder is slow and polite).
         if (touched && touched.some(n => n.place && !n.geo)) { try { if (await geocodePending(graph)) await saveGraph(user.id, graph); } catch (e) { console.warn('[geo] failed', e); } }
         // 6. Remember: this answer and the files that came with the question become passages a later answer can recall.
@@ -293,15 +301,20 @@ export async function POST(req: Request) {
         if (browse) { if (!browse.stopped && (err?.name === 'AbortError' || ctl.signal.aborted)) browse.stopped = 'aborted'; turn.browser = browse.record(); await leavePage(); }
         if (err?.name === 'AbortError' || ctl.signal.aborted) {
           const p = parseStream(raw); turn.answer = p.answer; turn.related = p.related; turn.status = 'stopped';
-          if (raw.length > 200 || browserActions) await recordUsage(user.id, { questions: raw.length > 200 ? 1 : 0, browserActions });
-          send('done', { turn });
+          // A stopped answer that had already written something is a question; one stopped in its first lines is free.
+          const counted = raw.length > 200;
+          if (counted || browserActions) await recordUsage(user.id, { questions: counted ? 1 : 0, browserActions });
+          const paid = await charge(browserActions, counted);
+          send('done', { turn, gas: receipt(paid) });
         } else {
           const why = describeProviderError(e);
           console.error('ask failed', JSON.stringify({ code: why.code, status: why.status, type: why.type, message: why.message, user: user.id }));
           const p = parseStream(raw); turn.answer = p.answer; turn.status = 'error';
           turn.error = why.code;
-          if (browserActions) { try { await recordUsage(user.id, { browserActions }); } catch { /* counted next time */ } }
-          send('error', { code: turn.error, message: user.admin ? why.forAdmin : why.forUser, turn });
+          // A failed answer costs nothing; the browser actions it took were taken, and cost theirs.
+          let paid: GasReceipt | null = null;
+          if (browserActions) { try { await recordUsage(user.id, { browserActions }); } catch { /* counted next time */ } paid = await charge(browserActions, false); }
+          send('error', { code: turn.error, message: user.admin ? why.forAdmin : why.forUser, turn, gas: receipt(paid) });
         }
       } finally {
         await finish();

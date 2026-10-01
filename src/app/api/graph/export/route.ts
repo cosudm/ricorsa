@@ -1,5 +1,6 @@
 import { desc, eq } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
+import { capabilityPlan } from '@/lib/usage';
 import { handle, json } from '@/lib/http';
 import { db, schema } from '@/lib/db';
 import { loadGraph, graphView } from '@/lib/graph';
@@ -18,7 +19,7 @@ export const dynamic = 'force-dynamic';
 export const GET = handle(async (req: Request) => {
   const user = await currentUser();
   const url = new URL(req.url);
-  const caps = planFor(user.plan).caps;
+  const caps = capabilityPlan(user).caps;
   const full = await loadGraph(user.id);
   const view = graphView(full, caps);
   const [fingerprint, subject] = await Promise.all([graphFingerprint(full), subjectId(user.id)]);

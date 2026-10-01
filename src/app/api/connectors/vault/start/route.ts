@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { currentUser } from '@/lib/session';
+import { capabilityPlan } from '@/lib/usage';
 import { handle, json, readJson, fail } from '@/lib/http';
-import { planFor } from '@/lib/plans';
 import { listConnectors } from '@/lib/connectors';
 import { vaultClient, vaultConfigured } from '@/lib/vault';
 
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export const POST = handle(async (req: Request) => {
   const user = await currentUser();
   if (!vaultConfigured()) return fail(503, 'The VDRPros Vault connection is not set up on this server yet', 'vault_unconfigured');
-  const plan = planFor(user.plan); const limit = user.admin ? 100 : plan.caps.connectors;
+  const plan = capabilityPlan(user); const limit = user.admin ? 100 : plan.caps.connectors;
   if (limit <= 0) return fail(402, 'Connectors are part of the Essentials, Professional and Enterprise plans.', 'upgrade_required');
   if ((await listConnectors(user.id)).length >= limit) return fail(402, `The ${plan.name} plan allows ${limit} connector${limit === 1 ? '' : 's'}. Upgrade for more.`, 'upgrade_required');
   const b = z.object({ email: z.string().trim().toLowerCase().email().max(200) }).safeParse(await readJson(req));

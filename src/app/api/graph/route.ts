@@ -1,13 +1,13 @@
 import { currentUser } from '@/lib/session';
+import { capabilityPlan } from '@/lib/usage';
 import { handle, json } from '@/lib/http';
 import { emptyGraph, loadGraph, saveGraph, graphView } from '@/lib/graph';
-import { planFor } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 
 export const GET = handle(async () => {
   const user = await currentUser();
-  return json({ graph: graphView(await loadGraph(user.id), planFor(user.plan).caps) });
+  return json({ graph: graphView(await loadGraph(user.id), capabilityPlan(user).caps) });
 });
 
 /** Reset: erase everything learned, keep the pause setting. */

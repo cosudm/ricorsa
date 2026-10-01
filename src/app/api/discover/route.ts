@@ -2,12 +2,12 @@ import { z } from 'zod';
 import { and, eq, ne, desc } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, truncate, plain, HttpError } from '@/lib/http';
-import { assertIdeaQuota, recordUsage } from '@/lib/usage';
+import { assertIdeaQuota, recordUsage, chargeGas, capabilityPlan } from '@/lib/usage';
 import { db, schema } from '@/lib/db';
 import { quickJson } from '@/lib/llm';
 import { loadGraph, topNodes } from '@/lib/graph';
 import { graphFingerprint, sha256Hex, canonical, subjectId } from '@/lib/hash';
-import { planFor } from '@/lib/plans';
+import { GAS } from '@/lib/plans';
 import type { GraphData } from '@/lib/db/schema';
 
 export const dynamic = 'force-dynamic';
@@ -56,8 +56,8 @@ export const POST = handle(async (req: Request) => {
   const cat = b.data.category as Cat;
   const graph = await loadGraph(user.id);
   const nodeCount = Object.keys(graph.nodes).length;
-  const caps = planFor(user.plan).caps;
-  // Discover is generated from the graph on the Professional and Enterprise plans; other plans see the curated examples of what it does.
+  // Professional and Enterprise, or bought gas on a lower plan, generate ideas from the graph; other plans see the curated examples of what it does.
+  const caps = capabilityPlan(user).caps;
   if (caps.discover !== 'full') return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, locked: true, graphHash: await graphFingerprint(graph) });
   if (nodeCount < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, graphHash: await graphFingerprint(graph) });
 
@@ -108,11 +108,14 @@ ${brief}${anchorLine}${avoid.length ? `\n\nShown before (propose different ideas
   if (items.length < 3) return json({ items: await stamp(CURATED[cat], user.id, graph, cat, true), personal: false, fallback: true, graphHash: hash });
   const stamped = await stamp(items, user.id, graph, cat, false);
   await recordUsage(user.id, { ideas: 1, tokensIn: 0, tokensOut: 0 });
+  // The set is written: 25 gas, and the gauge hears what it cost and what is left.
+  let gas: { cost: number; remaining: number | null; unlimited: boolean } | null = null;
+  try { const r = await chargeGas(user, GAS.ideaSet); gas = { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited }; } catch (e) { console.warn('[gas] idea set not charged', String((e as Error)?.message || e).slice(0, 160)); }
   await db().insert(schema.discoverCache).values({ category: key, day, items: stamped })
     .onConflictDoUpdate({ target: [schema.discoverCache.category, schema.discoverCache.day], set: { items: stamped } });
   // Older sets for this category (earlier graph states) are no longer needed.
   await db().delete(schema.discoverCache).where(and(eq(schema.discoverCache.category, key), ne(schema.discoverCache.day, day)));
-  return json({ items: stamped, personal: true, graphHash: hash, anchor: anchorNode ? { id: anchorNode.id, label: anchorNode.label, type: anchorNode.type } : null });
+  return json({ items: stamped, personal: true, graphHash: hash, anchor: anchorNode ? { id: anchorNode.id, label: anchorNode.label, type: anchorNode.type } : null, gas });
 });
 
 /**

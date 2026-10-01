@@ -582,8 +582,24 @@ async function providerError(res: Response): Promise<ProviderRequestError> {
 }
 
 /**
- * Small structured call (query planning, rewrites, Home suggestions). Returns parsed JSON or null. The tier
- * picks the model: `quick` by default; `ideas` for Discover, which goes to the build model.
+ * Room for a thinking model's reasoning on top of the answer in a structured call. Both Kimi (`reasoning_effort`) and
+ * Claude (adaptive thinking) count their thinking against `max_tokens`, so a budget sized for the JSON alone comes
+ * back as thinking with the answer cut off (Discover on Kimi K2.6 spent exactly its 5,000 tokens thinking, every time).
+ */
+const THINKING_ROOM: Record<string, number> = { low: 4000, medium: 8000, high: 16000, xhigh: 24000, max: 32000 };
+/** Models that think before they answer whether or not an effort parameter is sent (Kimi K3 and K2.6 and later, the thinking variants, the reasoning families). */
+function thinkingModel(model: string): boolean { return /k3|k2\.[6-9]|k2-?thinking|thinking|reason|^o[1-9](-|$)|^gpt-5|^gemini-(2\.5|3)|^grok-.*mini|magistral/i.test(model); }
+/** Thinking effort for a structured call: the tier's, capped at medium, since a JSON answer gains little from long deliberation. */
+function jsonEffort(effort: string | null): string | null {
+  if (!effort) return null;
+  return effort === 'high' || effort === 'xhigh' || effort === 'max' ? 'medium' : effort;
+}
+
+/**
+ * Small structured call (query planning, rewrites, Home suggestions, Discover ideas). Returns parsed JSON or null.
+ * The tier picks the model: `quick` by default; `ideas` for Discover, which goes to the build model. `maxTokens` is
+ * the room the answer itself needs; thinking gets its own room on top. A reply cut off by its budget is tried once
+ * more on the same model with twice the room and the least thinking, before the next candidate model is tried.
  */
 export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, tier: Tier = 'quick'): Promise<T | null> {
   if (mockMode()) return null;
@@ -594,19 +610,31 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, ti
     let provider: Provider;
     try { provider = requireProvider(model, tier); } catch { return null; }
     try {
-      let text = '';
-      if (provider.kind === 'anthropic') {
-        const r = await anthropicStream({ provider, model, system: [{ text: system }], messages: [{ role: 'user', content: prompt }], maxTokens, effort: effortFor(tier, model), onText: (d) => { text += d; } });
-        console.log('[json]', JSON.stringify({ model, tier, in: r.usage.in, out: r.usage.out, cacheRead: r.usage.cacheRead }));
-      } else {
-        const body: Record<string, unknown> = { model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
-        const temp = temperatureFor(model, 0.4); if (temp !== undefined) body.temperature = temp;
-        const effort = reasoningFor(tier, model); if (effort) body.reasoning_effort = effort;
-        const j = await chatOnce(provider, body, maxTokens);
-        text = j.choices?.[0]?.message?.content || '';
-        console.log('[json]', JSON.stringify({ model, tier, in: j.usage?.prompt_tokens, out: j.usage?.completion_tokens }));
+      // The effort parameter this model takes (none for a model that thinks on its own terms), and the room its thinking needs either way.
+      let effort = jsonEffort(provider.kind === 'anthropic' ? effortFor(tier, model) : reasoningFor(tier, model));
+      const thinks = !!effort || provider.kind === 'anthropic' || thinkingModel(model);
+      let room = maxTokens + (thinks ? THINKING_ROOM[effort || jsonEffort(DEFAULT_REASONING[tier]) || 'medium'] || 8000 : 0);
+      for (let pass = 0; pass < 2; pass++) {
+        let text = ''; let finish = 'stop'; let out = 0;
+        if (provider.kind === 'anthropic') {
+          const r = await anthropicStream({ provider, model, system: [{ text: system }], messages: [{ role: 'user', content: prompt }], maxTokens: room, effort, onText: (d) => { text += d; } });
+          finish = r.finish; out = r.usage.out;
+          console.log('[json]', JSON.stringify({ model, tier, in: r.usage.in, out, cacheRead: r.usage.cacheRead, finish, effort, room }));
+        } else {
+          const body: Record<string, unknown> = { model, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }] };
+          const temp = temperatureFor(model, 0.4); if (temp !== undefined) body.temperature = temp;
+          if (effort) body.reasoning_effort = effort;
+          const j = await chatOnce(provider, body, room);
+          text = j.choices?.[0]?.message?.content || ''; finish = j.choices?.[0]?.finish_reason || 'stop'; out = j.usage?.completion_tokens || 0;
+          console.log('[json]', JSON.stringify({ model, tier, in: j.usage?.prompt_tokens, out, finish, effort, room }));
+        }
+        const parsed = parseJsonLoosely<T>(text);
+        if (parsed !== null) return parsed;
+        // Cut off by the budget (or thought the whole budget away): once more with twice the room and the least thinking.
+        const cut = finish === 'length' || (!text.trim() && out >= room - 16);
+        if (!cut || pass === 1) { console.warn('[json] no JSON in the reply', JSON.stringify({ model, tier, finish, chars: text.length, out })); break; }
+        effort = effort ? 'low' : null; room = room * 2;
       }
-      return parseJsonLoosely<T>(text);
     } catch (e) {
       const p = describeProviderError(e);
       console.warn('[provider] quickJson failed', JSON.stringify({ model, provider: provider.id, tier, code: p.code, status: p.status, type: p.type, message: p.message }));
@@ -622,7 +650,7 @@ export async function quickJson<T = unknown>(prompt: string, maxTokens = 400, ti
  * One unstreamed chat completion, with the parameter names this model takes: newer OpenAI models want
  * `max_completion_tokens` and no temperature; older ones and most other providers want `max_tokens`.
  */
-async function chatOnce(provider: Provider, body: Record<string, unknown>, maxTokens: number): Promise<{ choices?: Array<{ message?: { content?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
+async function chatOnce(provider: Provider, body: Record<string, unknown>, maxTokens: number): Promise<{ choices?: Array<{ message?: { content?: string }; finish_reason?: string }>; usage?: { prompt_tokens?: number; completion_tokens?: number } }> {
   let tokensParam = 'max_tokens';
   for (let attempt = 0; attempt < 4; attempt++) {
     const res = await fetch(`${provider.baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.key}` }, body: JSON.stringify({ ...body, [tokensParam]: maxTokens }), signal: AbortSignal.timeout(120_000) });

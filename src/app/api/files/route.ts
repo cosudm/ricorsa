@@ -1,7 +1,7 @@
 import { currentUser } from '@/lib/session';
+import { capabilityPlan } from '@/lib/usage';
 import { handle, json, fail, uid } from '@/lib/http';
 import { db, schema } from '@/lib/db';
-import { planFor } from '@/lib/plans';
 import { extractText, FileError, metaOf, mimeFor, sweepPending, ACCEPT } from '@/lib/files';
 import { putFile } from '@/lib/storage';
 
@@ -15,13 +15,13 @@ export const maxDuration = 120;
  */
 export const GET = handle(async () => {
   const user = await currentUser();
-  const caps = planFor(user.plan).caps.files;
+  const caps = capabilityPlan(user).caps.files;
   return json({ accept: ACCEPT, perQuestion: user.admin ? 20 : caps.perQuestion, maxMb: user.admin ? 40 : caps.maxMb });
 });
 
 export const POST = handle(async (req: Request) => {
   const user = await currentUser();
-  const caps = planFor(user.plan).caps.files;
+  const caps = capabilityPlan(user).caps.files;
   // Workers hold the whole upload in memory, so the ceiling stays well under the isolate's 128 MB.
   const maxBytes = (user.admin ? 40 : caps.maxMb) * 1024 * 1024;
   let form: FormData;

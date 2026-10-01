@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { currentUser } from '@/lib/session';
+import { capabilityPlan } from '@/lib/usage';
 import { handle, json, readJson, fail, uid, HttpError } from '@/lib/http';
 import { db, schema } from '@/lib/db';
-import { planFor } from '@/lib/plans';
 import { checkConnector, listConnectors, ownSpaceIds, serverNameFor, toClient } from '@/lib/connectors';
 import { sealJson } from '@/lib/secretbox';
 import { eq } from 'drizzle-orm';
@@ -20,7 +20,7 @@ function randomToken(): string { const b = new Uint8Array(32); crypto.getRandomV
  */
 export const POST = handle(async (req: Request) => {
   const user = await currentUser();
-  const plan = planFor(user.plan); const limit = user.admin ? 100 : plan.caps.connectors;
+  const plan = capabilityPlan(user); const limit = user.admin ? 100 : plan.caps.connectors;
   const existing = await listConnectors(user.id);
   if (limit <= 0) return fail(402, 'Connectors are part of the Essentials, Professional and Enterprise plans.', 'upgrade_required');
   if (existing.length >= limit) return fail(402, `The ${plan.name} plan allows ${limit} connector${limit === 1 ? '' : 's'}. Upgrade for more.`, 'upgrade_required');

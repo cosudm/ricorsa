@@ -120,6 +120,13 @@
       "when": 1790795400631,
       "tag": "0016_browser-sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1790811454081,
+      "tag": "0017_gas",
+      "breakpoints": true
     }
   ]
 }

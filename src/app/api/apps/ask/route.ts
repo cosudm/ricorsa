@@ -2,11 +2,11 @@ import { z } from 'zod';
 import { eq, and } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { fail, readJson, HttpError } from '@/lib/http';
-import { assertQuota, recordUsage } from '@/lib/usage';
+import { assertAppQuota, recordUsage, chargeGas } from '@/lib/usage';
 import { planQueries, retrieve, sourcesBlock, type Source } from '@/lib/search';
 import { loadGraph, graphPromptBlock } from '@/lib/graph';
 import { streamAnswer, describeProviderError, type Msg } from '@/lib/llm';
-import { estimateCostMicros } from '@/lib/plans';
+import { estimateCostMicros, GAS } from '@/lib/plans';
 import { db, schema } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
@@ -32,7 +32,7 @@ const Body = z.object({
  * POST /api/apps/ask — the live line from an app built in the studio to Ricorsa's model. The app, running in
  * its sandboxed frame, asks through window.ricorsa.ask(...); the host page relays the request here with the
  * person's own session. Streamed as server-sent events: meta → status → sources → delta* → done | error.
- * Each call counts as one question against the person's plan.
+ * Each call costs one gas, like a question in the app.
  */
 export async function POST(req: Request) {
   let user; try { user = await currentUser(); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Sign-in check failed'); }
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   const b = parsed.data;
   const build = (await db().select({ id: schema.builds.id, title: schema.builds.title, kind: schema.builds.kind }).from(schema.builds).where(and(eq(schema.builds.id, b.buildId), eq(schema.builds.userId, user.id))).limit(1))[0];
   if (!build) return fail(404, 'This app is not one of yours', 'not_found');
-  try { await assertQuota(user, 'search', 'default'); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Could not start the answer'); }
+  try { await assertAppQuota(user); } catch (e) { return e instanceof HttpError ? fail(e.status, e.message, e.code) : fail(500, 'Could not start the answer'); }
 
   const ctl = new AbortController();
   req.signal?.addEventListener('abort', () => ctl.abort());
@@ -85,8 +85,10 @@ export async function POST(req: Request) {
         text = result.text || text; flush();
         const u = result.usage;
         await recordUsage(user.id, { questions: 1, tokensIn: u.in, tokensOut: u.out, searches, costMicros: estimateCostMicros('default', u.in, u.out, u.cacheRead, searches, result.model, u.cacheWrite) });
+        let gas: { cost: number; remaining: number | null; unlimited: boolean } | null = null;
+        try { const r = await chargeGas(user, GAS.appQuestion); gas = { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited }; } catch (e) { console.warn('[gas] app question not charged', String((e as Error)?.message || e).slice(0, 160)); }
         console.log('[apps] answered', JSON.stringify({ app: build.id, model: result.model, chars: text.length, sources: sources.length, user: user.id }));
-        send('done', { text: visible(text).trim(), sources: sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url })), model: result.model });
+        send('done', { text: visible(text).trim(), sources: sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url })), model: result.model, gas });
       } catch (e) {
         const err = e as { name?: string; message?: string };
         if (err?.name === 'AbortError' || ctl.signal.aborted) { /* the app or the page went away */ }

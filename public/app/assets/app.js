@@ -71,6 +71,7 @@ const ICONS = {
   grid: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16M15 4v16"/>',
   slides: '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M12 17v3M8 20h8"/>',
   doc: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8 13h8M8 17h6"/>',
+  gauge: '<path d="M4.5 16.5a8.5 8.5 0 1 1 15 0"/><path d="M12 15l4-5"/><circle cx="12" cy="15.5" r="1.4" fill="currentColor" stroke="none"/><path d="M6 20h12"/>',
 };
 function icon(name, size = 18, extra = '') {
   const body = ICONS[name] || '';
@@ -142,12 +143,13 @@ async function api(path, opts = {}) {
 }
 function apiToast(e, fallback) {
   const msg = (e && e.message) || fallback || 'Something went wrong';
-  if (e && (e.code === 'upgrade_required' || e.code === 'daily_limit' || e.code === 'monthly_limit' || e.code === 'research_limit' || e.code === 'subscription_inactive')) toast(msg + ' See Pricing to upgrade.', 'bad');
+  if (e && e.code === 'gas_limit') { toast(msg, 'bad'); refreshGas(); }
+  else if (e && (e.code === 'upgrade_required' || e.code === 'daily_limit' || e.code === 'monthly_limit' || e.code === 'research_limit' || e.code === 'subscription_inactive' || e.code === 'browser_limit')) toast(msg + ' See Pricing to upgrade.', 'bad');
   else toast(msg, 'bad');
 }
 async function bootstrap() {
   const me = await api('/api/me');
-  state.user = me.user; state.plan = me.plan; state.usage = me.usage;
+  state.user = me.user; state.plan = me.plan; state.usage = me.usage; state.gas = me.gas || null;
   state.threads = me.threads; state.spaces = me.spaces; state.graph = me.graph; state.graphSize = me.graphSize || 0; state.geo = me.geo || { enabled: true, provider: 'osm' };
   state.settings = Object.assign({}, DEFAULT_SETTINGS, me.user.settings || {});
   state.ready = true;
@@ -542,12 +544,13 @@ function renderSidebar() {
     acct.title = state.user.admin ? 'Admin account: every capability, no limits. Use Settings to demo a plan.' : 'Account: plan, billing, export and sign out';
     const up = $('#upgradeRow');
     if (up) {
-      const k = state.plan ? state.plan.key : 'free'; const next = nextPlanName(k);
+      const k = state.plan && state.plan.subscription ? state.plan.subscription : (state.plan ? state.plan.key : 'free'); const next = nextPlanName(k);
       up.hidden = !next || (state.user && state.user.admin && !(state.settings && state.settings.demoPlan));
       const lbl = up.querySelector('span:last-child'); if (lbl) lbl.textContent = k === 'free' ? 'Start a free trial' : next ? 'Upgrade to ' + next : '';
-      up.title = k === 'free' ? 'Essentials unlocks the full identity graph, Research mode and the Reasoning model' : k === 'essentials' ? 'Professional unlocks Discover: build apps, agents and datasets from your asset' : 'Enterprise: the highest limits, every connector, and a direct line to us';
+      up.title = k === 'free' ? 'Essentials: 2,500 gas a month, the full identity graph, Research mode and the Reasoning model' : k === 'essentials' ? 'Professional: 8,000 gas a month, Discover, the Build studio and the Ricorsa Browser' : 'Enterprise: a gas allowance set for your organization, every connector, and a direct line to us';
     }
   }
+  renderGasGauge();
 }
 function setupSidebar() {
   $$('[data-logo]').forEach(el => el.innerHTML = LOGO_SVG(30));
@@ -570,6 +573,9 @@ function setupSidebar() {
   $('#newThreadBtn').addEventListener('click', () => newThread());
   $('#settingsBtn').addEventListener('click', openSettings);
   $('#acctRow').addEventListener('click', () => { location.href = '/account'; });
+  const gasRow = $('#gasRow'); if (gasRow) gasRow.addEventListener('click', openGasModal);
+  // Coming back to the tab after a while (another device may have spent gas): the gauge is read again.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && state.ready && state.gas && !gasUnlimited()) refreshGas(); });
   $('#scrim').addEventListener('click', closeDrawer);
   $('#sidebar').addEventListener('click', e => { if (e.target.closest('a')) closeDrawer(); });
 }
@@ -870,6 +876,7 @@ const ERROR_COPY = {
   daily_limit: 'You have used today\u2019s questions on your plan.',
   monthly_limit: 'You have used this month\u2019s questions on your plan.',
   research_limit: 'You have used this month\u2019s Research reports.',
+  gas_limit: 'You have used this month\u2019s gas on your plan. Gas refills on the 1st, and Pay-As-You-Go gas is available any time.',
   upgrade_required: 'That needs a paid plan.',
   subscription_inactive: 'Your subscription is not active. Update it on the Account page.',
   browser_limit: 'You have used this month\u2019s browser actions on your plan.',
@@ -878,7 +885,7 @@ const ERROR_COPY = {
   browser_busy: 'The page is busy for a moment. Try again.',
 };
 const BLOCKING = new Set([]);
-const PLAN_CODES = new Set(['daily_limit', 'monthly_limit', 'research_limit', 'upgrade_required', 'subscription_inactive', 'browser_limit']);
+const PLAN_CODES = new Set(['daily_limit', 'monthly_limit', 'research_limit', 'gas_limit', 'upgrade_required', 'subscription_inactive', 'browser_limit']);
 // ---------- Export / copy ----------
 function threadMarkdown(thread) {
   const out = [`# ${thread.title}`, '', `_Exported from Ricorsa · ${new Date().toLocaleString()}_`, ''];
@@ -976,11 +983,11 @@ async function runTurn(thread, turn, { rewrite } = {}) {
         paintBrowsePane(thread, turn); liveRender(thread, turn);
       }
       else if (ev === 'delta') { turn.raw += data.text || ''; applyParsed(turn); liveRender(thread, turn); }
-      else if (ev === 'done') { Object.assign(turn, data.turn, { raw: turn.raw }); if (typeof data.graphEvents === 'number' && state.graph) state.graph.events = data.graphEvents; }
-      else if (ev === 'error') { if (data.turn) Object.assign(turn, data.turn, { raw: turn.raw }); turn.status = 'error'; turn.error = data.code || 'upstream_error'; turn.errorMessage = data.message; }
+      else if (ev === 'done') { Object.assign(turn, data.turn, { raw: turn.raw }); if (typeof data.graphEvents === 'number' && state.graph) state.graph.events = data.graphEvents; if (data.gas) applyGasReceipt(data.gas); }
+      else if (ev === 'error') { if (data.turn) Object.assign(turn, data.turn, { raw: turn.raw }); turn.status = 'error'; turn.error = data.code || 'upstream_error'; turn.errorMessage = data.message; if (data.gas) applyGasReceipt(data.gas); }
     });
     if (turn.status === 'running') { turn.status = 'done'; }
-    if (turn.status === 'done') { state.usage.today++; state.usage.month++; if (turn.mode === 'research') state.usage.research++; if (turn.browser && turn.browser.actions) state.usage.browserActions = (state.usage.browserActions || 0) + turn.browser.actions; refreshGraph(); }
+    if (turn.status === 'done') { if (state.usage) { state.usage.today = (state.usage.today || 0) + 1; state.usage.month = (state.usage.month || 0) + 1; if (turn.mode === 'research') state.usage.research = (state.usage.research || 0) + 1; if (turn.browser && turn.browser.actions) state.usage.browserActions = (state.usage.browserActions || 0) + turn.browser.actions; } refreshGraph(); }
   } catch (e) {
     if (e && e.name === 'AbortError') { applyParsed(turn); turn.status = 'stopped'; }
     else { console.error(e); turn.status = 'error'; turn.error = 'upstream_error'; }
@@ -1058,6 +1065,7 @@ function createComposer(o) {
         <button type="button" class="chip-btn browse" data-browse aria-pressed="false" title="Open the site: Ricorsa opens the website you name in its own browser and works it for you while you watch"></button>
         <button type="button" class="chip-btn" data-tier aria-haspopup="menu" aria-expanded="false" title="Model: which model answers"></button>
         <button type="button" class="chip-btn" data-focus aria-haspopup="menu" aria-expanded="false" title="Focus: what kind of answer you want"></button>
+        <button type="button" class="cost-chip" data-cost title="What this question will cost"></button>
         <button type="button" class="send" data-send aria-label="Ask" title="Send (Enter)" disabled>${icon('arrowRight', 18)}</button>
       </div>
     </div>`;
@@ -1071,8 +1079,13 @@ function createComposer(o) {
     const bb = $('[data-browse]', el); const allowed = canBrowse();
     bb.classList.toggle('on', c.browse); bb.classList.toggle('locked', !allowed); bb.setAttribute('aria-pressed', c.browse);
     bb.innerHTML = icon('globe', 15) + `<span class="lbl">${c.browse ? 'Opening the site' : 'Open the site'}</span>`;
-    bb.title = allowed ? (c.browse ? 'Ricorsa will open the site you name and work it while you watch. Click to turn off.' : 'Open the site: Ricorsa opens the website you name in its own browser and works it for you while you watch') : 'Open the site: part of the Professional and Enterprise plans. Click to see what it does.';
+    bb.title = allowed ? (c.browse ? 'Ricorsa will open the site you name and work it while you watch. Click to turn off.' : 'Open the site: Ricorsa opens the website you name in its own browser and works it for you while you watch') : 'Open the site: part of the Professional and Enterprise plans, and of Pay-As-You-Go gas. Click to see what it does.';
     ta.placeholder = c.browse ? 'Name the site and say what to do there…' : (o.placeholder || 'Ask anything…');
+    // What this question will cost, before it is sent; the browser's actions add theirs as they happen.
+    const cc = $('[data-cost]', el); const cost = questionGasCost(c.mode, c.tier); const per = gasCosts().browserAction;
+    cc.innerHTML = icon('gauge', 13) + `<span>${cost}${c.browse ? `+` : ''}</span>`;
+    cc.title = `${c.mode === 'research' ? 'A Research report' : c.tier === 'complex' ? 'A question on the Reasoning model' : 'This question'} costs ${fmtGas(cost)}${c.browse ? `, plus ${fmtGas(per)} for each action Ricorsa takes in the browser` : ''}.${gasUnlimited() ? '' : ` You have ${fmtGas(state.gas.remaining || 0)} left.`} Click for the full price list.`;
+    cc.classList.toggle('short', !gasUnlimited() && (state.gas.remaining || 0) < cost);
   };
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; if (o.variant === 'compact') el.classList.toggle('multiline', ta.scrollHeight > 44 || c.files.length > 0); };
   const running = () => o.threadId && state.runs.has(o.threadId);
@@ -1148,6 +1161,7 @@ function createComposer(o) {
       align: 'right', onMount: pop => $$('[data-key]', pop).forEach(b => b.addEventListener('click', () => { c.focus = b.dataset.key; paintChips(); closePop(); ta.focus(); }))
     });
   });
+  $('[data-cost]', el).addEventListener('click', () => { closePop(); openGasModal(); });
   attachBtn.addEventListener('click', () => {
     const inp = $('#fileInput'); inp.accept = (state.fileLimits && state.fileLimits.accept.length ? state.fileLimits.accept.join(',') : '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,image/*');
     inp.onchange = () => { addFiles(inp.files); inp.value = ''; ta.focus(); };
@@ -1161,7 +1175,7 @@ function createComposer(o) {
   if (o.initial) { ta.value = o.initial; }
   paintChips(); paintAttach(); paintSend();
   requestAnimationFrame(autosize);
-  el._composer = { el, ta, refresh() { paintSend(); paintAttach(); }, set(v) { ta.value = v; autosize(); paintSend(); ta.focus(); ta.setSelectionRange(v.length, v.length); }, setBrowse(v) { c.browse = !!v; paintChips(); }, setResume(turnId) { c.resume = turnId || null; if (turnId) { c.browse = true; paintChips(); } }, get mode() { return c.mode; }, get browse() { return c.browse; } };
+  el._composer = { el, ta, refresh() { paintSend(); paintAttach(); paintChips(); }, set(v) { ta.value = v; autosize(); paintSend(); ta.focus(); ta.setSelectionRange(v.length, v.length); }, setBrowse(v) { c.browse = !!v; paintChips(); }, setResume(turnId) { c.resume = turnId || null; if (turnId) { c.browse = true; paintChips(); } }, get mode() { return c.mode; }, get browse() { return c.browse; } };
   return el;
 }
 
@@ -1170,7 +1184,7 @@ function caps() { return (state.plan && state.plan.caps) || { graph: 'preview', 
 /** Whether this account may send Ricorsa to a website (Professional and Enterprise; an admin demoing a plan sees that plan's gate). */
 function canBrowse() { return caps().browser === 'full'; }
 function browseUpgradeModal() {
-  openModal(`<h2>${icon('globe', 20)}Ricorsa can go look</h2><p class="sub">Name a website and say what to do there. Ricorsa opens it in its own browser and works it for you, one step at a time, while you watch each step in the thread: find the answer on a page, fill in a form with the details you give it, follow a flow up to the point where it would commit. It never signs in and never touches passwords or card numbers; those stay yours.</p>${upgradeCard('Open the site', 'Professional includes 300 browser actions a month; Enterprise includes 1,000. An action is an open, a click, a typed field or a scroll.', 'Professional')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`);
+  openModal(`<h2>${icon('globe', 20)}Ricorsa can go look</h2><p class="sub">Name a website and say what to do there. Ricorsa opens it in its own browser and works it for you, one step at a time, while you watch each step in the thread: find the answer on a page, fill in a form with the details you give it, follow a flow up to the point where it would commit. It never signs in and never touches passwords or card numbers; those stay yours.</p>${upgradeCard('Open the site', 'Part of the Professional and Enterprise plans, and of Pay-As-You-Go gas. Each action (an open, a click, a typed field, a scroll) costs 1 gas, and so does each minute you spend in control of the page.', 'Professional')}<div class="modal-actions"><button type="button" class="btn" data-close>Close</button></div>`);
 }
 /** Plan names by key, including the keys used before September 2026. */
 const PLAN_NAMES = { free: 'Free', essentials: 'Essentials', professional: 'Professional', enterprise: 'Enterprise', pro: 'Essentials', team: 'Professional' };
@@ -1179,7 +1193,87 @@ function planLabel(key) { return PLAN_NAMES[key] || key || ''; }
 function nextPlanName(key) { const k = key === 'pro' ? 'essentials' : key === 'team' ? 'professional' : key; const i = PLAN_ORDER.indexOf(k); return i >= 0 && i < PLAN_ORDER.length - 1 ? PLAN_NAMES[PLAN_ORDER[i + 1]] : ''; }
 function upgradeCard(title, body, plan) {
   const free = !state.plan || state.plan.key === 'free';
-  return `<div class="upgrade-card">${icon('sparkles', 20)}<div><b>${esc(title)}</b><p>${esc(body)}</p></div><a class="btn primary sm" href="/pricing" title="See plans; every plan starts with a free trial">${free ? `Try ${esc(plan)} free` : `Upgrade to ${esc(plan)}`}</a></div>`;
+  return `<div class="upgrade-card">${icon('sparkles', 20)}<div><b>${esc(title)}</b><p>${esc(body)}</p></div><a class="btn primary sm" href="/pricing" title="See plans; every plan starts with a free trial">${free ? `Try ${esc(plan)} free` : `Upgrade to ${esc(plan)}`}</a>${plan === 'Professional' ? `<a class="btn sm" href="/pricing#gas" title="Pay-As-You-Go gas comes with the Professional features while it lasts">Or buy gas</a>` : ''}</div>`;
+}
+
+// ---------- Gas: the one gauge for everything metered ----------
+// The server prices every metered thing in gas (a question 1, Research 10, a Discover set 25, an app version 250, a browser
+// action or a minute in control 1) and sends what is left with /api/me; each answer, set, version and take-over move brings
+// back a receipt (what it cost, what is left) that moves the gauge at once. The gauge lives in the sidebar on every view.
+const GAS_DEFAULT_COSTS = { question: 1, reasoning: 3, research: 10, browserAction: 1, takeoverMinute: 1, ideaSet: 25, build: 250, appQuestion: 1 };
+function gasCosts() { return (state.gas && state.gas.costs) || GAS_DEFAULT_COSTS; }
+function fmtGas(n) { return `${Math.round(n).toLocaleString('en-US')} gas`; }
+function gasUnlimited() { return !state.gas || state.gas.unlimited || state.gas.remaining === null || state.gas.remaining === undefined; }
+/** What a question will cost before it is sent: its mode and model, plus a note for the browser's actions. */
+function questionGasCost(mode, tier) { const c = gasCosts(); return mode === 'research' ? c.research : tier === 'complex' ? c.reasoning : c.question; }
+/** Refill and reset copy: "refills March 1". */
+function gasResetLabel() { const g = state.gas; if (!g || !g.resetsAt) return ''; return new Date(g.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }); }
+/** Fresh numbers from the server (after a limit, a purchase, or a change of plan). */
+async function refreshGas() { try { const me = await api('/api/me'); state.gas = me.gas || state.gas; state.plan = me.plan || state.plan; state.usage = me.usage || state.usage; renderGasGauge(); } catch {} }
+/**
+ * A receipt from the server after work was charged: the gauge moves to the new remaining figure, the row pulses, and the
+ * month's spent figure follows (the allowance is spent before bought gas, so the split is kept straight here too).
+ */
+function applyGasReceipt(r) {
+  if (!r || !state.gas) return;
+  const g = state.gas;
+  if (r.unlimited) { g.unlimited = true; g.remaining = null; renderGasGauge(); return; }
+  const cost = Math.max(0, Number(r.cost) || 0);
+  if (typeof r.remaining === 'number') {
+    const fromPlan = Math.min(cost, Math.max(0, g.planLeft || 0));
+    g.planLeft = Math.max(0, (g.planLeft || 0) - fromPlan);
+    g.balance = Math.max(0, (g.balance || 0) - (cost - fromPlan));
+    g.used = (g.used || 0) + cost;
+    g.remaining = Math.max(0, r.remaining);
+  }
+  renderGasGauge(cost);
+  const notice = $('[data-notice]'); if (notice) notice.innerHTML = quotaNotice();
+}
+/** The sidebar row: the figure, the bar (how much of this month's allowance is left, bought gas beyond it) and a pulse on a charge. */
+function renderGasGauge(justSpent) {
+  const row = $('#gasRow'); if (!row) return;
+  const g = state.gas;
+  if (!g) { row.hidden = true; return; }
+  row.hidden = false;
+  const n = $('[data-gas-n]', row), fill = $('[data-gas-fill]', row);
+  if (gasUnlimited()) {
+    n.textContent = 'Unlimited'; fill.style.width = '100%'; row.classList.remove('low', 'out'); row.classList.add('unlimited');
+    row.title = state.user && state.user.admin ? 'Gas: admin accounts are not metered. Click to see what each thing costs.' : 'Gas: no ceiling on this account.';
+    return;
+  }
+  row.classList.remove('unlimited');
+  const allowance = g.allowance || 0, planLeft = Math.max(0, g.planLeft || 0), balance = Math.max(0, g.balance || 0), remaining = Math.max(0, g.remaining || 0);
+  const pct = allowance > 0 ? Math.round((planLeft / allowance) * 100) : (balance > 0 ? 100 : 0);
+  n.textContent = `${Math.round(remaining).toLocaleString('en-US')} left`;
+  fill.style.width = `${balance > 0 && planLeft === 0 ? 100 : pct}%`;
+  row.classList.toggle('bought', planLeft === 0 && balance > 0);
+  row.classList.toggle('low', remaining > 0 && remaining <= Math.max(10, allowance * 0.1));
+  row.classList.toggle('out', remaining <= 0);
+  row.title = `Gas left: ${fmtGas(remaining)}${allowance ? ` (${fmtGas(planLeft)} of this month's ${fmtGas(allowance)}${balance ? `, plus ${fmtGas(balance)} you bought` : ''})` : ''}. Refills ${gasResetLabel()}. Click for what each thing costs.`;
+  if (justSpent) { row.classList.remove('pulse'); void row.offsetWidth; row.classList.add('pulse'); const tag = $('[data-gas-spent]', row) || (() => { const s = document.createElement('span'); s.className = 'gas-spent'; s.setAttribute('data-gas-spent', ''); row.appendChild(s); return s; })(); tag.textContent = `−${Math.round(justSpent).toLocaleString('en-US')}`; clearTimeout(row._spentTimer); row._spentTimer = setTimeout(() => tag.remove(), 1800); }
+}
+/** The Gas sheet: where the gauge stands, what each thing costs, and where more comes from. */
+function openGasModal() {
+  const g = state.gas || { allowance: 0, used: 0, balance: 0, planLeft: 0, remaining: 0, unlimited: false, costs: GAS_DEFAULT_COSTS, labels: {}, payg: { usd: 100, gas: 4000 } };
+  const costs = g.costs || GAS_DEFAULT_COSTS; const labels = g.labels || {};
+  const order = ['question', 'reasoning', 'research', 'browserAction', 'takeoverMinute', 'ideaSet', 'build', 'appQuestion'];
+  const names = { question: 'Question (Fast or Best model)', reasoning: 'Question on the Reasoning model', research: 'Research report', browserAction: 'Browser action (an open, a click, a typed field, a scroll)', takeoverMinute: 'Minute in control of the browser', ideaSet: 'Discover idea set', build: 'App version in the Build studio', appQuestion: 'Question asked by one of your built apps' };
+  const unlimited = gasUnlimited();
+  const allowance = g.allowance || 0, planLeft = Math.max(0, g.planLeft || 0), balance = Math.max(0, g.balance || 0), remaining = Math.max(0, g.remaining || 0);
+  const pct = allowance > 0 ? Math.round((planLeft / allowance) * 100) : 0;
+  const planName = state.plan ? state.plan.name : 'Free';
+  const payg = g.payg || { usd: 100, gas: 4000 };
+  openModal(`<h2>${icon('gauge', 20)}Gas</h2>
+    <p class="sub">Everything Ricorsa does for you is priced in gas, so one number tells you where you stand. Your plan refills it every month; gas you buy never expires and is used after the month's allowance.</p>
+    ${unlimited ? `<div class="gas-stand"><b>Unlimited</b><span class="muted">${state.user && state.user.admin ? 'Admin accounts are not metered.' : 'No ceiling on this account.'}</span></div>` : `
+    <div class="gas-stand">
+      <div class="big"><b>${Math.round(remaining).toLocaleString('en-US')}</b><span>gas left</span></div>
+      <div class="gauge" role="img" aria-label="${pct}% of this month's allowance left"><i style="width:${pct}%"></i></div>
+      <div class="gas-facts"><span><b>${fmtGas(planLeft)}</b> of the ${esc(planName)} plan's ${fmtGas(allowance)} this month · refills ${esc(gasResetLabel())}</span><span><b>${fmtGas(g.used || 0)}</b> spent this month</span>${balance ? `<span><b>${fmtGas(balance)}</b> bought, unspent</span>` : ''}</div>
+    </div>`}
+    <table class="gas-table"><thead><tr><th>What</th><th>Costs</th></tr></thead><tbody>${order.filter(k => costs[k] !== undefined).map(k => `<tr><td>${esc(names[k] || labels[k] || k)}</td><td>${fmtGas(costs[k])}</td></tr>`).join('')}</tbody></table>
+    <p class="muted small">A Discover set you have already seen is served again for free. A failed answer costs nothing; the browser actions it took do. Minutes in control of the browser are charged as they pass.</p>
+    <div class="modal-actions"><a class="btn" href="/account">Account</a>${state.user && state.user.admin ? '' : `<a class="btn primary" href="/pricing#gas" title="${fmtGas(payg.gas)} for $${payg.usd}, never expires">Buy gas: ${fmtGas(payg.gas)} for $${payg.usd}</a>`}<button type="button" class="btn" data-close>Close</button></div>`);
 }
 
 // ---------- Home ----------
@@ -1209,11 +1303,15 @@ function learnLine() {
   return `<div class="learn-line">${icon('loop', 15)}<span>Learning from ${g.events} conversation${g.events === 1 ? '' : 's'}${tops.length ? ' · lately: ' + esc(tops.join(', ')) : ''}</span><a href="#/graph">Your graph</a></div>`;
 }
 function quotaNotice() {
-  const p = state.plan, u = state.usage; if (!p) return '';
+  const p = state.plan, g = state.gas; if (!p) return '';
   if (state.user && state.user.admin) return ''; // admins have no counted limits
-  if (p.status && !['ACTIVE', 'APPROVAL_PENDING'].includes(p.status) && p.key !== 'free') return `<div class="notice">${icon('info', 17)}<div>Your subscription is ${esc(String(p.status).toLowerCase())}. <a href="/account">Fix it on the Account page</a> to keep your ${esc(p.name)} limits.</div></div>`;
-  if (u.today >= p.questionsPerDay) return `<div class="notice">${icon('info', 17)}<div>You have used today\u2019s ${p.questionsPerDay} questions on the ${esc(p.name)} plan. ${p.key === 'free' ? '<a href="/pricing">Start a free trial</a> for up to 300 a day.' : 'The counter resets at midnight UTC.'}</div></div>`;
-  if (p.key === 'free' && u.today >= Math.max(1, p.questionsPerDay - 3)) return `<div class="notice info">${icon('info', 17)}<div>${p.questionsPerDay - u.today} free question${p.questionsPerDay - u.today === 1 ? '' : 's'} left today. <a href="/pricing">See plans</a>.</div></div>`;
+  const subKey = p.subscription || p.key;
+  if (p.active === false && subKey !== 'free') return `<div class="notice">${icon('info', 17)}<div>Your subscription is ${esc(String(p.status || 'inactive').toLowerCase())}. <a href="/account">Fix it on the Account page</a> to keep your ${esc(p.name)} gas.${g && g.balance > 0 ? ' Your bought gas still works.' : ''}</div></div>`;
+  if (!g || gasUnlimited()) return '';
+  const remaining = Math.max(0, g.remaining || 0);
+  const buy = `<a href="/pricing#gas">Buy gas</a>`;
+  if (remaining <= 0) return `<div class="notice">${icon('gauge', 17)}<div>You have used this month\u2019s ${fmtGas(g.allowance || 0)} on the ${esc(p.name)} plan. It refills ${esc(gasResetLabel())}. ${subKey === 'free' ? `<a href="/pricing">Start a free trial</a> for 2,500 a month, or ${buy}.` : `${buy} to keep going now${nextPlanName(subKey) ? `, or <a href="/pricing">move up to ${esc(nextPlanName(subKey))}</a>` : ''}.`}</div></div>`;
+  if (remaining <= Math.max(10, (g.allowance || 0) * 0.1)) return `<div class="notice info">${icon('gauge', 17)}<div>${fmtGas(remaining)} left this month${g.balance > 0 ? ', including gas you bought' : ''}. A question costs ${fmtGas(questionGasCost('search', 'default'))}; refills ${esc(gasResetLabel())}. ${buy}.</div></div>`;
   return '';
 }
 function renderHome() {
@@ -1423,8 +1521,10 @@ function paintTurn(sec, thread, t) {
     const open = !running && b && b.live && b.live.until > Date.now();
     noteHtml += `<div class="answer-note browse-note">${icon('globe', 14)}<span>${running ? (n ? `Working in the browser: ${n} action${n === 1 ? '' : 's'} so far` : 'Opening the browser') : n ? `Used the browser: ${n} action${n === 1 ? '' : 's'} across ${pg} page${pg === 1 ? '' : 's'}.${stopped}` : 'The browser was not needed.'}${open ? ' The page is still open, so you can take it over.' : ''}${b && b.steps && b.steps.length ? ` <button type="button" class="linkish" data-browse-show>${open ? 'Show' : 'Show'}</button>` : ''}</span></div>`;
   }
-  if (t.status === 'done') { const files = (t.attachments || []).length, vault = (t.sources || []).filter(s => s.domain === 'VDRPros Vault').length, browsed = t.browse && t.browser ? (t.browser.pages || 0) : 0, web = (t.sources || []).length - vault - browsed; noteHtml += `<div class="answer-note">${icon('info', 14)}${browsed ? `Answered from ${browsed} page${browsed === 1 ? '' : 's'} Ricorsa opened in its browser${web > 0 ? ' and web sources retrieved when you asked' : ''}; the numbered citations open the pages.` : vault && web ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault and web sources retrieved when you asked.` : vault ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault; the numbered citations open the pages.` : files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.</div>`; }
+  if (t.status === 'done') { const files = (t.attachments || []).length, vault = (t.sources || []).filter(s => s.domain === 'VDRPros Vault').length, browsed = t.browse && t.browser ? (t.browser.pages || 0) : 0, web = (t.sources || []).length - vault - browsed; noteHtml += `<div class="answer-note">${icon('info', 14)}${browsed ? `Answered from ${browsed} page${browsed === 1 ? '' : 's'} Ricorsa opened in its browser${web > 0 ? ' and web sources retrieved when you asked' : ''}; the numbered citations open the pages.` : vault && web ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault and web sources retrieved when you asked.` : vault ? `Answered from ${vault} page${vault === 1 ? '' : 's'} in your VDRPros Vault; the numbered citations open the pages.` : files && web ? 'Answered from your files and web sources retrieved when you asked.' : files ? `Answered from ${files === 1 ? 'the file you attached' : 'the files you attached'}; the web was not searched. Ask to search the web if you want outside context.` : 'Sources were retrieved from the web when you asked.'} Ricorsa can still misread them, so verify important details.${typeof t.gas === 'number' && t.gas > 0 ? ` <button type="button" class="gas-tag" data-gas-tag title="What this answer cost${t.browser && t.browser.actions ? `: the question plus ${t.browser.actions} browser action${t.browser.actions === 1 ? '' : 's'}` : ''}. Click for the price list.">${icon('gauge', 11)}${fmtGas(t.gas)}</button>` : ''}</div>`; }
+  else if ((t.status === 'stopped' || t.status === 'error') && typeof t.gas === 'number' && t.gas > 0) noteHtml += `<div class="answer-note"><button type="button" class="gas-tag" data-gas-tag title="What was charged for this attempt. Click for the price list.">${icon('gauge', 11)}${fmtGas(t.gas)}</button></div>`;
   note.innerHTML = noteHtml;
+  $$('[data-gas-tag]', note).forEach(b => b.addEventListener('click', openGasModal));
 
   const actions = $('[data-actions]', sec);
   const canAct = (t.status === 'done' || t.status === 'stopped' || (t.status === 'error' && t.answer)) && !running;
@@ -1548,7 +1648,7 @@ function ensureBrowsePane() {
       <span class="bp-live" data-bp-live hidden>Live</span>
       <span class="bp-live you" data-bp-you hidden>You have the page</span>
     </div>
-    <div class="bp-hint" data-bp-hint hidden>Click, type and scroll on the picture. Your typing goes to the page only. A minute in control counts as one browser action.</div>
+    <div class="bp-hint" data-bp-hint hidden>Click, type and scroll on the picture. Your typing goes to the page only. Each minute in control costs 1 gas.</div>
     <div class="bp-status" data-bp-status></div>
     <ol class="bp-steps" data-bp-steps aria-label="Steps"></ol>
     <div class="bp-foot">Public websites only. Ricorsa itself never signs in and never fills passwords or card numbers; when you take over, you can, and you decide whether a sign-in is kept.</div>`;
@@ -1652,6 +1752,7 @@ function schedulePoll() {
 function applyFrame(frame) {
   const l = liveState(); if (!l || !frame) return;
   l.frame = frame; if (frame.signInSeen) l.signInSeen = true; if (frame.minutes) l.minutes = frame.minutes; noteHost(frame.url);
+  if (frame.gas) applyGasReceipt(frame.gas);
   const cur = currentBrowseTurn(); if (cur) paintBrowsePane(cur.thread, cur.turn);
 }
 /** Moves go to the page one at a time, in the order they were made; typed text waiting in the buffer goes ahead of any other move. */
@@ -1708,6 +1809,7 @@ async function endTakeOver(how) {
   try {
     const r = await takeApi(bp.turnId, { op: 'end', how, remember });
     bp.live = null;
+    if (r.gas) applyGasReceipt(r.gas);
     // The steps the server recorded (took over, handed back, the closing picture) come back with the thread.
     const fresh = await loadThread(cur.thread.id, true).catch(() => null);
     const thread = fresh || cur.thread; const turn = thread.turns.find(x => x.id === bp.turnId) || cur.turn;
@@ -1775,7 +1877,7 @@ function paintBrowsePane(thread, turn) {
     const urlEl = $('[data-bp-url]', pane); const f = live.frame || {};
     urlEl.textContent = f.title ? `${f.title} · ${shortUrl(f.url)}` : shortUrl(f.url || ''); urlEl.title = f.url || '';
     const goInput = $('[data-bp-go]', pane); if (goInput && document.activeElement !== goInput) goInput.value = f.url || '';
-    $('[data-bp-status]', pane).textContent = `You have the page${live.minutes ? ` · ${live.minutes} minute${live.minutes === 1 ? '' : 's'}` : ''}${live.busy ? ' · working' : ''}`;
+    $('[data-bp-status]', pane).textContent = `You have the page${live.minutes ? ` · ${live.minutes} minute${live.minutes === 1 ? '' : 's'} (${fmtGas(live.minutes * gasCosts().takeoverMinute)})` : ''}${live.busy ? ' · working' : ''}`;
     $('[data-bp-steps]', pane).innerHTML = steps.map(st => `<li data-step="${st.n}" class="${st.error ? 'err' : ''}"><span class="n">${st.n}</span><span class="ico">${icon(STEP_ICON[st.action] || 'globe', 13)}</span><span class="d"><span class="a">${esc(st.detail || st.action)}</span>${st.title ? `<span class="t">${esc(st.title)}</span>` : ''}</span></li>`).join('');
     return;
   }
@@ -1876,9 +1978,10 @@ function renderDiscover() {
   const locked = caps().discover !== 'full';
   const AT = anchor ? NODE_TYPES[anchor.type] || {} : {};
   main.innerHTML = `<div class="view">${topbarHtml('Discover')}<div class="scroll"><div class="col wide">
-    <div class="page-h"><h1>${icon('compass', 26)}Discover</h1><div class="disc-tools">${personal ? `<span class="gen-tag">${icon('loop', 14)}Built from your graph</span>` : ''}<button type="button" class="btn sm" data-gen>${icon('sparkles', 15)}<span>${locked ? 'Generate from my graph' : items ? 'Generate again' : 'Generate from my graph'}</span></button></div></div>
-    ${locked ? upgradeCard('Discover builds from your graph on the Professional plan', 'Agents, apps, tools, credentials and data products proposed from your own identity graph, each stamped with a provenance id. Below are examples of what it produces.', 'Professional') : ''}
+    <div class="page-h"><h1>${icon('compass', 26)}Discover</h1><div class="disc-tools">${personal ? `<span class="gen-tag">${icon('loop', 14)}Built from your graph</span>` : ''}<button type="button" class="btn sm" data-gen title="${locked ? 'Generating from your graph is part of the Professional and Enterprise plans, and of Pay-As-You-Go gas' : `A new idea set costs ${fmtGas(gasCosts().ideaSet)}; a set you have already seen is free`}">${icon('sparkles', 15)}<span>${locked ? 'Generate from my graph' : items ? 'Generate again' : 'Generate from my graph'}</span>${locked ? '' : `<span class="cost-note">${gasCosts().ideaSet} gas</span>`}</button></div></div>
+    ${locked ? upgradeCard('Discover builds from your graph on the Professional plan', 'Agents, apps, tools, credentials and data products proposed from your own identity graph, each stamped with a provenance id. Below are examples of what it produces. An idea set costs 25 gas; an app version built from one costs 250.', 'Professional') : ''}
     ${anchor ? `<div class="anchor-row"><span class="anchor-chip" style="--ch:${AT.hex || 'var(--accent)'}"><span class="dot ${AT.shape || 'circle'}"></span><span>Centered on <b>${esc(anchor.label)}</b></span><a class="nchip-x" href="#/discover" aria-label="Remove the anchor" title="Back to ideas from the whole graph">${icon('x', 11)}</a></span><a class="lnk" href="#/graph?node=${encodeURIComponent(anchor.id)}">${icon('brain', 13)}Open it in the brain</a></div>` : ''}
+    ${entry && entry.fallback ? `<div class="notice">${icon('alert', 17)}<div>Ricorsa could not write a set from your graph just now, so these are examples of what Discover produces. Press Generate again in a minute; nothing was charged.</div></div>` : ''}
     <p class="page-sub">What your identity graph can become. ${anchor ? (entry && entry.anchor ? `These ideas center on ${esc(anchor.label)} and combine it with the rest of your graph. Open one to start building it with Ricorsa.` : entry ? `Ideas centered on ${esc(anchor.label)} need a fuller graph (a few more conversations); until then, here is what an identity graph can create.` : `Centering ideas on ${esc(anchor.label)}.`) : nodes >= 3 ? 'These ideas are drawn from the topics, entities, goals and expertise in your graph. Open one to start building it with Ricorsa.' : 'Ask a few questions first and these will be drawn from your own graph; until then, here is what an identity graph can create.'} Every idea carries a cryptographic id tied to the exact state of your graph it came from, so anything built from it can be traced back to its origin.${entry && entry.graphHash ? ` <span class="hash" title="SHA-256 fingerprint of your graph at generation time">${icon('loop', 11)}graph ${esc(shortHash(entry.graphHash))}</span>` : ''}</p>
     ${buildsRowHtml()}
     <div class="cat-row">${DISCOVER_CATS.map(c => `<button type="button" class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
@@ -1895,7 +1998,7 @@ function renderDiscover() {
   $$('[data-build]', main).forEach(b => b.addEventListener('click', () => { const it = items ? items[+b.dataset.build] : null; if (it) startBuild(it, cat); }));
   // The "builds" chips: hovering one lights nothing here, but clicking opens that node in the brain (the link carries it).
   const genBtn = $('[data-gen]', main);
-  if (locked) { genBtn.disabled = true; genBtn.title = 'Generating from your graph is part of the Professional and Enterprise plans'; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items, anchor ? anchor.id : null));
+  if (locked) { genBtn.disabled = true; } else genBtn.addEventListener('click', () => fetchDiscover(cat, !!items, anchor ? anchor.id : null));
   if (!items && !state.discoverTried[key]) { state.discoverTried[key] = true; fetchDiscover(cat, false, anchor ? anchor.id : null); }
   // Arriving from a node panel: the idea it pointed at flashes once.
   if (state.discoverFocus) { const card = main.querySelector(`.disc[data-idea-id="${String(state.discoverFocus).replace(/["\\]/g, '\\$&')}"]`); if (card) { card.classList.add('flash'); setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300); setTimeout(() => card.classList.remove('flash'), 2600); } if (items) state.discoverFocus = null; }
@@ -1919,8 +2022,10 @@ async function fetchDiscover(cat, refresh, anchorId) {
   const btn = $('[data-gen]'); if (btn) { btn.disabled = true; btn.innerHTML = icon('sparkles', 15) + '<span class="dots">Generating</span>'; }
   try {
     const r = await api('/api/discover', { body: { category: cat, refresh, ...(anchorId ? { anchor: anchorId } : {}) } });
-    state.discoverGen[key] = { items: r.items, personal: !!r.personal, graphHash: r.graphHash || null, anchor: r.anchor || null };
-    if (r.limited) toast(r.limited, 'bad');
+    state.discoverGen[key] = { items: r.items, personal: !!r.personal, graphHash: r.graphHash || null, anchor: r.anchor || null, fallback: !!r.fallback };
+    if (r.gas) applyGasReceipt(r.gas);
+    if (r.limited) { toast(r.limited, 'bad'); refreshGas(); }
+    else if (r.fallback) toast('Ricorsa could not write a new set from your graph just now, so these are examples. Try again in a minute.', 'bad');
   } catch (err) { apiToast(err, 'Could not generate ideas right now'); }
   const rq = state.route && state.route.query ? state.route.query.anchor : null;
   const routeAnchor = rq ? findGraphNode(rq) : null;
@@ -1992,6 +2097,7 @@ async function runBuildRequest(body) {
         st.versions = st.versions.filter(x => x.id !== v.id).concat(v);
         st.current = v; st.selected = v.version;
       }
+      if (data.gas) { applyGasReceipt(data.gas); if (data.build) toast(`Version ${data.build.version} written: ${fmtGas(data.gas.cost)}${data.gas.remaining !== null && data.gas.remaining !== undefined ? ` · ${fmtGas(data.gas.remaining)} left` : ''}`, 'ok'); }
       st.live = null;
     }
     else if (ev === 'error') { st.messages.push(data.messageRecord || { id: 'e' + Date.now(), role: 'assistant', text: data.message || 'The build was interrupted', kind: 'error', at: Date.now() }); st.error = data.code || 'upstream_error'; st.live = null; }
@@ -2084,9 +2190,10 @@ function paintStudio(final) {
   root.dataset.tab = st.tab || 'chat';
   if (!root.dataset.ready) {
     root.dataset.ready = '1';
-    root.innerHTML = `<section class="studio-chat"><div class="studio-msgs" data-msgs></div><div class="studio-compose"><div class="studio-hints" data-hints></div><div class="studio-input"><textarea data-compose rows="2" placeholder="Ask for a change, add a screen, or ask how it works"></textarea><button type="button" class="send-btn" data-send aria-label="Send">${icon('arrowUp', 18)}</button></div></div></section>
+    root.innerHTML = `<section class="studio-chat"><div class="studio-msgs" data-msgs></div><div class="studio-compose"><div class="studio-hints" data-hints></div><div class="studio-input"><textarea data-compose rows="2" placeholder="Ask for a change, add a screen, or ask how it works"></textarea><button type="button" class="send-btn" data-send aria-label="Send">${icon('arrowUp', 18)}</button></div><button type="button" class="studio-cost" data-studio-cost title="What the studio costs. Click for the full price list.">${icon('gauge', 12)}<span>A new version costs ${fmtGas(gasCosts().build)}; a question here costs ${fmtGas(gasCosts().question)}</span></button></div></section>
       <section class="studio-app"><div class="studio-bar"><span class="cat-tag" data-s-kind></span><div class="versions" data-versions></div><span class="build-status" data-s-status></span><span class="spacer"></span><div class="seg studio-view" role="radiogroup" aria-label="View" data-s-view><button type="button" class="on" data-view="preview" role="radio" aria-checked="true">${icon('eye', 14)}<span>Preview</span></button><button type="button" data-view="code" role="radio" aria-checked="false">${icon('code', 14)}<span>Code</span></button></div><button type="button" class="btn sm" data-s-open title="Open the app in its own tab">${icon('external', 14)}<span>Open</span></button><button type="button" class="btn sm" data-s-download title="Save the app as a single HTML file">${icon('download', 14)}<span>Download</span></button><button type="button" class="btn sm" data-s-copy title="Copy the app's source">${icon('copy', 14)}<span>Copy</span></button></div><div class="studio-frame-wrap"><iframe class="studio-frame" data-s-frame sandbox="allow-scripts allow-forms allow-modals allow-popups allow-downloads" title="Your app" referrerpolicy="no-referrer"></iframe><div class="studio-code" data-s-code hidden><div class="studio-code-meta" data-s-code-meta></div><pre data-s-code-text></pre></div><div class="build-overlay" data-s-overlay><div class="spinner"></div><div data-s-overlay-text>Building</div></div></div></section>`;
     $$('[data-s-view] [data-view]', root).forEach(b => b.addEventListener('click', () => { if (state.studio) state.studio.view = b.dataset.view; paintStudio(true); }));
+    const costBtn = $('[data-studio-cost]', root); if (costBtn) costBtn.addEventListener('click', openGasModal);
     const ta = $('[data-compose]', root);
     const send = () => { const t = ta.value.trim(); if (!t) return; ta.value = ''; sendBuildMessage(t); };
     $('[data-send]', root).addEventListener('click', () => { if (state.studio && state.studio.live) stopBuild(); else send(); });
@@ -2870,7 +2977,7 @@ function openSettings() {
     <div class="setting"><div class="l"><b>Demo as plan</b><small>Admin only. See Ricorsa the way a Free, Essentials, Professional or Enterprise customer sees it; your own limits stay off.</small></div><select id="stDemo"><option value=""${!s.demoPlan ? ' selected' : ''}>Admin (everything)</option><option value="free"${s.demoPlan === 'free' ? ' selected' : ''}>Free</option><option value="essentials"${s.demoPlan === 'essentials' || s.demoPlan === 'pro' ? ' selected' : ''}>Essentials</option><option value="professional"${s.demoPlan === 'professional' || s.demoPlan === 'team' ? ' selected' : ''}>Professional</option><option value="enterprise"${s.demoPlan === 'enterprise' ? ' selected' : ''}>Enterprise</option></select></div>
     <div class="setting"><div class="l"><b>Grant a plan by email</b><small>Admin only. Give someone Essentials, Professional or Enterprise without a subscription: a consultant, a partner, a pilot. It lands on their account when they sign in with that address.</small></div><button type="button" class="btn sm" data-grants>${icon('key', 14)}Grants</button></div>
     <div class="setting"><div class="l"><b>Model accounts</b><small>Admin only. Add a provider's API key (Anthropic, OpenAI, Google, xAI, Mistral, DeepSeek, Groq, Moonshot, OpenRouter, Together or any compatible endpoint), see what each account answers, and choose the active model for each part of Ricorsa.</small></div><button type="button" class="btn sm" data-models>${icon('zap', 14)}Manage</button></div>` : ''}
-    <div class="setting"><div class="l"><b>Plan and usage</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. No question limits. Today ${state.usage.today} questions, this month ${state.usage.month}${state.usage.research ? `, Research ${state.usage.research}` : ''}.` : `${esc(state.plan ? state.plan.name : 'Free')} plan. Today ${state.usage.today} of ${state.plan ? state.plan.questionsPerDay : 0} questions, this month ${state.usage.month} of ${state.plan ? state.plan.questionsPerMonth : 0}${state.plan && state.plan.researchPerMonth ? `, Research ${state.usage.research} of ${state.plan.researchPerMonth}` : ''}.`}</small></div><a class="btn sm" href="/account">Account</a></div>
+    <div class="setting"><div class="l"><b>Plan and gas</b><small>${state.user && state.user.admin ? `Admin account${s.demoPlan ? `, showing the ${esc(state.plan ? state.plan.name : '')} plan` : ''}. Not metered. This month ${state.usage.month} question${state.usage.month === 1 ? '' : 's'}${state.usage.research ? `, Research ${state.usage.research}` : ''}, ${fmtGas(state.gas ? state.gas.used || 0 : 0)} counted.` : `${esc(state.plan ? state.plan.name : 'Free')} plan: ${fmtGas(state.gas ? state.gas.allowance || 0 : 0)} a month. ${state.gas && !gasUnlimited() ? `${fmtGas(state.gas.remaining || 0)} left${state.gas.balance ? `, including ${fmtGas(state.gas.balance)} you bought` : ''}; refills ${esc(gasResetLabel())}.` : ''}`}</small></div><button type="button" class="btn sm" data-open-gas>Gas</button><a class="btn sm" href="/account">Account</a></div>
     <div class="setting"><div class="l"><b>Export everything</b><small>All threads, Spaces and your graph as one JSON file.</small></div><a class="btn sm" href="/api/account/export">${icon('download', 14)}Export</a></div>
     <div class="setting"><div class="l"><b>Sign out</b><small>Signed in as ${esc(state.user ? (state.user.email || state.user.name || '') : '')}. Sign out to switch to a different account.</small></div><a class="btn sm" href="/auth/logout">Sign out</a></div>
     <div class="about">Threads, Spaces, settings and your identity graph are stored in your Ricorsa account and used only inside your own questions. Sources are retrieved live from the web at the moment you ask.</div>
@@ -2881,6 +2988,7 @@ function openSettings() {
       const demo = $('#stDemo'); if (demo) demo.addEventListener('change', async e => { s.demoPlan = e.target.value; try { await api('/api/me', { method: 'PATCH', body: { demoPlan: e.target.value } }); await bootstrap(); renderSidebar(); render(); toast(e.target.value ? `Showing Ricorsa as a ${state.plan ? state.plan.name : e.target.value} customer` : 'Back to full admin access'); } catch (err) { apiToast(err); } });
       $('#stLearn').addEventListener('change', async e => { try { await setGraphPaused(e.target.value === 'paused'); } catch (err) { apiToast(err); } });
       const gr = $('[data-grants]', ov); if (gr) gr.addEventListener('click', () => grantsModal());
+      const og = $('[data-open-gas]', ov); if (og) og.addEventListener('click', () => openGasModal());
       const mo = $('[data-models]', ov); if (mo) mo.addEventListener('click', () => modelsModal());
       const ac = $('[data-accounts]', ov); if (ac) ac.addEventListener('click', () => accountsModal());
     }

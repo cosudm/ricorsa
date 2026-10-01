@@ -1194,3 +1194,47 @@
   .prov-row .n { flex: none; width: 20px; font: 600 12px var(--mono); color: var(--ink-3); }
   .prov-row .t { font-size: 13px; }
   .prov-row .u { font: 500 11px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+
+  /* ---------- Gas: the gauge in the sidebar, the cost chip in the composer, receipts under answers ---------- */
+  .gas-row { display: flex; flex-direction: column; gap: 6px; width: 100%; margin: 2px 0 4px; padding: 9px 12px 10px; border-radius: 12px; background: var(--surface); color: var(--ink-2); font-size: 12.5px; text-align: left; position: relative; transition: background .12s; }
+  .gas-row:hover { background: var(--surface-2); color: var(--ink); }
+  .gas-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .gas-top .ico { color: var(--ink-3); flex: none; }
+  .gas-lbl { font-weight: 600; color: var(--ink); }
+  .gas-n { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap; }
+  .gas-bar { display: block; height: 5px; border-radius: 999px; background: var(--line); overflow: hidden; }
+  .gas-bar i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--accent); transition: width .5s cubic-bezier(.2,.7,.2,1), background .3s; }
+  .gas-row.bought .gas-bar i { background: var(--rust); }
+  .gas-row.low .gas-bar i { background: var(--warn); }
+  .gas-row.low .gas-n { color: var(--warn); font-weight: 600; }
+  .gas-row.out .gas-bar i { background: var(--bad); }
+  .gas-row.out .gas-n { color: var(--bad); font-weight: 600; }
+  .gas-row.unlimited .gas-bar i { background: var(--good); }
+  .gas-row.pulse .gas-top .ico { animation: gas-pulse .9s ease-out 1; color: var(--accent); }
+  @keyframes gas-pulse { 0% { transform: scale(1); } 30% { transform: scale(1.3); } 100% { transform: scale(1); } }
+  .gas-spent { position: absolute; right: 12px; top: -8px; font: 600 12px var(--mono); color: var(--accent); background: var(--card); border: 1px solid var(--accent-line); border-radius: 999px; padding: 1px 7px; animation: gas-spent 1.8s ease-out forwards; pointer-events: none; }
+  @keyframes gas-spent { 0% { opacity: 0; transform: translateY(6px); } 15% { opacity: 1; transform: none; } 70% { opacity: 1; } 100% { opacity: 0; transform: translateY(-10px); } }
+  #sidebar.collapsed .gas-row { padding: 8px; align-items: center; }
+  #sidebar.collapsed .gas-row .gas-bar, #sidebar.collapsed .gas-row .lbl { display: none; }
+  .cost-chip { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px 0 7px; border-radius: 999px; font: 600 12px var(--mono); color: var(--ink-3); background: var(--surface); border: 1px solid transparent; transition: color .12s, background .12s; }
+  .cost-chip:hover { color: var(--ink); background: var(--surface-2); }
+  .cost-chip.short { color: var(--bad); background: var(--bad-soft); }
+  .composer.compact .cost-chip { height: 24px; }
+  .gas-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap; margin-left: 6px; padding: 1px 7px 1px 5px; border-radius: 999px; font: 600 11px var(--mono); color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); vertical-align: middle; }
+  .gas-tag:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+  .cost-note { margin-left: 6px; padding: 0 6px; border-radius: 999px; font: 600 11px var(--mono); color: var(--ink-3); background: var(--surface); }
+  .studio-cost { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; font-size: 12px; color: var(--ink-3); padding: 0; }
+  .studio-cost:hover { color: var(--accent); }
+  .gas-stand { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); margin: 0 0 14px; }
+  .gas-stand .big { display: flex; align-items: baseline; gap: 8px; }
+  .gas-stand .big b { font: 600 32px/1 var(--sans); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .gas-stand .big span { color: var(--ink-2); }
+  .gas-stand .gauge { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+  .gas-stand .gauge i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+  .gas-facts { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--ink-2); }
+  .gas-facts b { color: var(--ink); font-weight: 600; }
+  .gas-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0 0 10px; }
+  .gas-table th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; padding: 0 0 6px; border-bottom: 1px solid var(--line); }
+  .gas-table td { padding: 7px 0; border-bottom: 1px solid var(--line); color: var(--ink-2); }
+  .gas-table td:last-child, .gas-table th:last-child { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); font-weight: 600; }
+  .muted.small { font-size: 12px; }

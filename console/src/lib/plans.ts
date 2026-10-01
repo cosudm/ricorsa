@@ -1,7 +1,9 @@
 /**
  * Ricorsa's plans as the console names, prices and meters them. Mirrors ricorsa/src/lib/plans.ts; keep them in step.
- * Prices are what PayPal bills: a month, or a year at ten months' price (two months free). The allowances are the
- * plan's monthly ceilings, which the true-up finder compares with an account's usage.
+ * Everything the product meters is priced in one unit, gas (a question 1, a Research report 10, a Discover idea set
+ * 25, an app version 250, a browser action or a minute in control 1); each plan carries a monthly gas allowance, and
+ * Pay-As-You-Go gas is bought outright in $100 blocks of 4,000. Plans bill monthly since October 2026; the annual
+ * subscriptions sold before then keep billing yearly at the price they were sold at, which `priceUsdYear` records.
  */
 export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
 export type BillingCycle = 'monthly' | 'annual';
@@ -10,12 +12,29 @@ export const BILLING_CYCLES: BillingCycle[] = ['monthly', 'annual'];
 /** The keys in use before September 2026; rows and grants stored under them resolve to the plans that replaced them. */
 export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', team: 'professional' };
 
-export type Plan = { key: PlanKey; name: string; priceUsd: number; priceUsdYear: number; questionsPerDay: number; questionsPerMonth: number; researchPerMonth: number; buildsPerMonth: number; ideaSetsPerMonth: number; browserActionsPerMonth: number };
+/** What each metered thing costs in gas; the same table as the product's. */
+export const GAS = { question: 1, reasoning: 3, research: 10, browserAction: 1, takeoverMinute: 1, ideaSet: 25, build: 250, appQuestion: 1 } as const;
+/** Pay-As-You-Go: dollars per block and gas per block. */
+export const PAYG = { usd: 100, gas: 4000 } as const;
+
+export type Plan = {
+  key: PlanKey; name: string;
+  /** The monthly list price; 0 for Free and for Enterprise, which is priced per organization. */
+  priceUsd: number;
+  /** The yearly price of the annual plans sold before October 2026, for the accounts that still hold one. */
+  priceUsdYear: number;
+  /** The monthly price before October 2026, which accounts subscribed then still pay. */
+  legacyPriceUsd: number;
+  /** Gas included every month. */
+  gasPerMonth: number;
+  /** Priced per organization: no online price. */
+  contactSales?: boolean;
+};
 export const PLANS: Record<PlanKey, Plan> = {
-  free: { key: 'free', name: 'Free', priceUsd: 0, priceUsdYear: 0, questionsPerDay: 10, questionsPerMonth: 150, researchPerMonth: 0, buildsPerMonth: 0, ideaSetsPerMonth: 0, browserActionsPerMonth: 0 },
-  essentials: { key: 'essentials', name: 'Essentials', priceUsd: 45, priceUsdYear: 450, questionsPerDay: 300, questionsPerMonth: 1500, researchPerMonth: 40, buildsPerMonth: 0, ideaSetsPerMonth: 0, browserActionsPerMonth: 0 },
-  professional: { key: 'professional', name: 'Professional', priceUsd: 79, priceUsdYear: 790, questionsPerDay: 1000, questionsPerMonth: 5000, researchPerMonth: 150, buildsPerMonth: 30, ideaSetsPerMonth: 60, browserActionsPerMonth: 300 },
-  enterprise: { key: 'enterprise', name: 'Enterprise', priceUsd: 129, priceUsdYear: 1290, questionsPerDay: 3000, questionsPerMonth: 15000, researchPerMonth: 500, buildsPerMonth: 100, ideaSetsPerMonth: 200, browserActionsPerMonth: 1000 },
+  free: { key: 'free', name: 'Free', priceUsd: 0, priceUsdYear: 0, legacyPriceUsd: 0, gasPerMonth: 150 },
+  essentials: { key: 'essentials', name: 'Essentials', priceUsd: 60, priceUsdYear: 450, legacyPriceUsd: 45, gasPerMonth: 2500 },
+  professional: { key: 'professional', name: 'Professional', priceUsd: 150, priceUsdYear: 790, legacyPriceUsd: 79, gasPerMonth: 8000 },
+  enterprise: { key: 'enterprise', name: 'Enterprise', priceUsd: 0, priceUsdYear: 1290, legacyPriceUsd: 129, gasPerMonth: 30000, contactSales: true },
 };
 export const PLAN_KEYS: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
 export const PAID_PLAN_KEYS: PlanKey[] = ['essentials', 'professional', 'enterprise'];
@@ -30,13 +49,18 @@ export function isPlanKey(v: unknown): v is PlanKey { return typeof v === 'strin
 export function planFor(key: string | null | undefined): Plan { return PLANS[normalizePlanKey(key)]; }
 export function planName(key: string | null | undefined): string { return key === 'custom' ? 'Custom' : planFor(key).name; }
 export function isBillingCycle(v: unknown): v is BillingCycle { return v === 'monthly' || v === 'annual'; }
+/** A gas amount for copy: "2,500 gas". */
+export function gasWord(n: number): string { return `${Math.round(n).toLocaleString('en-US')} gas`; }
 
 /**
- * What a paying account is worth a month, in cents: the monthly price, or the annual price spread over twelve
- * months. Every margin and LTV figure in the console is built on this monthly unit, whatever the cycle.
+ * What a paying account is worth a month, in cents: the monthly list price, or the annual price spread over twelve
+ * months. Enterprise accounts paying through PayPal hold a subscription from before the plan went to per-organization
+ * pricing, so they are worth the price they subscribed at. Every margin and LTV figure in the console is built on
+ * this monthly unit, whatever the cycle.
  */
 export function mrrCentsFor(key: string | null | undefined, cycle: BillingCycle | null | undefined): number {
   const p = planFor(key);
   if (p.key === 'free') return 0;
-  return cycle === 'annual' ? Math.round((p.priceUsdYear * 100) / 12) : p.priceUsd * 100;
+  if (cycle === 'annual') return Math.round((p.priceUsdYear * 100) / 12);
+  return (p.priceUsd || p.legacyPriceUsd) * 100;
 }

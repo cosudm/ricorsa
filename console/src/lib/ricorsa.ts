@@ -13,6 +13,8 @@ export type AccountRow = {
   id: string; email: string | null; name: string | null; picture: string | null; plan: string; subscriptionStatus: string | null; planRenewsAt: number | null;
   paypalSubscriptionId: string | null; billingCycle: BillingCycle | null; createdAt: number; lastSeenAt: number;
   questionsMonth: number; researchMonth: number; buildsMonth: number; ideasMonth: number; costMonthMicros: number;
+  /** Gas spent this month, the plan's monthly allowance (raised where the console said so) and bought gas still unspent. */
+  gasMonth: number; gasPerMonth: number; gasBalance: number;
   /** Model cost over the trailing thirty days and the account's monthly worth, so the grid can show margin per account. */
   cost30Micros: number; mrrCents: number; marginCents: number | null;
   allowance: RAllowance | null; customerId: string | null;
@@ -63,6 +65,7 @@ export async function listAccounts(opts: { q?: string; limit?: number; offset?: 
       id: x.id, email: x.email, name: x.name, picture: x.picture, plan: normalizePlanKey(x.plan), subscriptionStatus: x.subscriptionStatus, planRenewsAt: x.planRenewsAt ? x.planRenewsAt.getTime() : null,
       paypalSubscriptionId: x.paypalSubscriptionId, billingCycle: cycle, createdAt: x.createdAt.getTime(), lastSeenAt: x.lastSeenAt.getTime(),
       questionsMonth: us?.questions || 0, researchMonth: us?.research || 0, buildsMonth: us?.builds || 0, ideasMonth: us?.ideas || 0, costMonthMicros: us?.costMicros || 0,
+      gasMonth: us?.gas || 0, gasPerMonth: effectiveLimits(normalizePlanKey(x.plan), x.allowance).gasPerMonth, gasBalance: x.gasBalance || 0,
       cost30Micros: c30, mrrCents, marginCents: paying ? mrrCents - Math.round(c30 / 10000) : null,
       allowance: x.allowance || null,
       customerId: links.find(l => l.ricorsaUserId === x.id)?.id || null,
@@ -81,15 +84,16 @@ export async function accountDetail(userId: string) {
   const r = rdb();
   const user = (await r.select().from(ricorsa.rUsers).where(eq(ricorsa.rUsers.id, userId)).limit(1))[0];
   if (!user) return null;
-  const [subs, usage, threads, builds, spaces, cost30] = await Promise.all([
+  const [subs, usage, threads, builds, spaces, cost30, purchases] = await Promise.all([
     r.select().from(ricorsa.rSubscriptions).where(eq(ricorsa.rSubscriptions.userId, userId)).orderBy(desc(ricorsa.rSubscriptions.updatedAt)),
     r.select().from(ricorsa.rUsage).where(and(eq(ricorsa.rUsage.userId, userId), inArray(ricorsa.rUsage.period, [dayPeriod(), monthPeriod()]))),
     r.select({ n: count() }).from(ricorsa.rThreads).where(eq(ricorsa.rThreads.userId, userId)),
     r.select({ n: count() }).from(ricorsa.rBuilds).where(eq(ricorsa.rBuilds.userId, userId)),
     r.select({ n: count() }).from(ricorsa.rSpaces).where(eq(ricorsa.rSpaces.userId, userId)),
     cost30ByUser([userId]),
+    r.select().from(ricorsa.rGasPurchases).where(eq(ricorsa.rGasPurchases.userId, userId)).orderBy(desc(ricorsa.rGasPurchases.createdAt)).limit(24).catch(() => [] as Array<typeof ricorsa.rGasPurchases.$inferSelect>),
   ]);
-  const pick = (p: string) => usage.find(x => x.period === p) || { questions: 0, research: 0, tokensIn: 0, tokensOut: 0, searches: 0, costMicros: 0, builds: 0, ideas: 0 };
+  const pick = (p: string) => usage.find(x => x.period === p) || { questions: 0, research: 0, tokensIn: 0, tokensOut: 0, searches: 0, costMicros: 0, builds: 0, ideas: 0, browserActions: 0, gas: 0 };
   const plan = planFor(user.plan);
   const paying = isPaying(user); const cycle = paying ? cycleOf(user) : null;
   const mrrCents = paying ? mrrCentsFor(plan.key, cycle) : 0;
@@ -99,20 +103,21 @@ export async function accountDetail(userId: string) {
     planRenewsAt: user.planRenewsAt ? user.planRenewsAt.getTime() : null, paypalSubscriptionId: user.paypalSubscriptionId, billingCycle: cycle,
     createdAt: user.createdAt.getTime(), lastSeenAt: user.lastSeenAt.getTime(),
     usage: { today: pick(dayPeriod()), month: pick(monthPeriod()) },
-    /** The plan's monthly ceilings and the account's effective ones (raised where the console said so). */
-    limits: { plan: { questionsPerDay: plan.questionsPerDay, questionsPerMonth: plan.questionsPerMonth, researchPerMonth: plan.researchPerMonth, buildsPerMonth: plan.buildsPerMonth, ideaSetsPerMonth: plan.ideaSetsPerMonth, browserActionsPerMonth: plan.browserActionsPerMonth }, effective: effectiveLimits(plan.key, user.allowance) },
+    /** The plan's monthly gas and the account's effective allowance (raised where the console said so). */
+    limits: { plan: { gasPerMonth: plan.gasPerMonth }, effective: effectiveLimits(plan.key, user.allowance) },
     allowance: user.allowance || null,
+    /** Where the gauge stands for this account: spent this month, left of the allowance, bought and unspent, and the purchases behind it. */
+    gas: { used: pick(monthPeriod()).gas || 0, allowance: effectiveLimits(plan.key, user.allowance).gasPerMonth, left: Math.max(0, effectiveLimits(plan.key, user.allowance).gasPerMonth - (pick(monthPeriod()).gas || 0)), balance: user.gasBalance || 0, purchases: purchases.map(g => ({ id: g.id, orderId: g.orderId, usdCents: g.usdCents, gas: g.gas, status: g.status, createdAt: g.createdAt.getTime() })) },
     money: { mrrCents, cost30Micros: c30, marginCents: paying ? mrrCents - Math.round(c30 / 10000) : null },
     counts: { threads: threads[0]?.n || 0, builds: builds[0]?.n || 0, spaces: spaces[0]?.n || 0 },
     subscriptions: subs.map(s => ({ id: s.id, plan: normalizePlanKey(s.planKey), billingCycle: s.billingCycle || 'monthly', status: s.status, startedAt: s.startedAt?.getTime() ?? null, nextBillingAt: s.nextBillingAt?.getTime() ?? null, cancelledAt: s.cancelledAt?.getTime() ?? null, updatedAt: s.updatedAt.getTime() })),
   };
 }
 
-/** The monthly ceilings that apply to an account: the plan's, or the allowance the console set for a key. */
-export function effectiveLimits(plan: PlanKey, allowance: RAllowance | null | undefined) {
+/** The monthly gas that applies to an account: the plan's, or the allowance the console set above it. */
+export function effectiveLimits(plan: PlanKey, allowance: RAllowance | null | undefined): { gasPerMonth: number } {
   const p = planFor(plan); const a = allowance || {};
-  const pick = (mine: number | undefined, base: number) => (typeof mine === 'number' && mine >= 0 ? mine : base);
-  return { questionsPerDay: pick(a.questionsPerDay, p.questionsPerDay), questionsPerMonth: pick(a.questionsPerMonth, p.questionsPerMonth), researchPerMonth: pick(a.researchPerMonth, p.researchPerMonth), buildsPerMonth: pick(a.buildsPerMonth, p.buildsPerMonth), ideaSetsPerMonth: pick(a.ideaSetsPerMonth, p.ideaSetsPerMonth), browserActionsPerMonth: pick(a.browserActionsPerMonth, p.browserActionsPerMonth) };
+  return { gasPerMonth: typeof a.gasPerMonth === 'number' && a.gasPerMonth >= 0 ? a.gasPerMonth : p.gasPerMonth };
 }
 
 /**
@@ -135,8 +140,8 @@ export async function grantPlan(userId: string, plan: PlanKey, kind: 'license' |
 }
 
 /**
- * Raise (or clear) an account's monthly allowances above its plan. Only the keys given are written; a key set to
- * the plan's own number is dropped, so an allowance row only ever carries what differs. `clear` removes them all.
+ * Raise (or clear) an account's monthly gas above its plan. A number equal to the plan's own is dropped, so an
+ * allowance row only ever carries what differs (an Enterprise contract's figure, a goodwill raise). `clear` removes it.
  */
 export async function setAllowance(userId: string, input: Partial<RAllowance> & { clear?: boolean }, by: string): Promise<RAllowance | null> {
   const r = rdb();
@@ -145,14 +150,12 @@ export async function setAllowance(userId: string, input: Partial<RAllowance> & 
   let next: RAllowance | null = null;
   if (!input.clear) {
     const p = planFor(user.plan);
-    const merged: RAllowance = { ...(user.allowance || {}) };
-    for (const k of ['buildsPerMonth', 'ideaSetsPerMonth', 'questionsPerMonth', 'questionsPerDay', 'researchPerMonth', 'browserActionsPerMonth'] as const) {
-      const v = input[k];
-      if (typeof v === 'number') { if (v === p[k]) delete merged[k]; else merged[k] = v; }
-    }
+    // Older rows carried per-kind numbers from before gas; only the gas figure is kept from here on.
+    const prior = (user.allowance || {}) as RAllowance;
+    const merged: RAllowance = { ...(typeof prior.gasPerMonth === 'number' ? { gasPerMonth: prior.gasPerMonth } : {}), ...(prior.note ? { note: prior.note } : {}) };
+    if (typeof input.gasPerMonth === 'number') { if (input.gasPerMonth === p.gasPerMonth) delete merged.gasPerMonth; else merged.gasPerMonth = input.gasPerMonth; }
     if (input.note !== undefined) merged.note = input.note;
-    const keys = Object.keys(merged).filter(k => !['note', 'setBy', 'setAt'].includes(k));
-    next = keys.length ? { ...merged, setBy: by, setAt: Date.now() } : null;
+    next = typeof merged.gasPerMonth === 'number' ? { ...merged, setBy: by, setAt: Date.now() } : null;
   }
   await r.update(ricorsa.rUsers).set({ allowance: next }).where(eq(ricorsa.rUsers.id, userId));
   return next;
@@ -236,8 +239,8 @@ export async function cohortStats(): Promise<{ cohorts: Cohort[]; totals: { acco
 
 export type TrueupCandidate = {
   userId: string; email: string | null; name: string | null; plan: PlanKey; billingCycle: BillingCycle; period: string; customerId: string | null;
-  /** Each unit the account used beyond its plan's monthly allowance this period (allowances raised by the console count as the plan's for the true-up, since the raise is what is being paid for). */
-  overage: Array<{ key: 'builds' | 'ideas' | 'questions' | 'research' | 'browser'; label: string; used: number; allowance: number; over: number }>;
+  /** The gas the account spent beyond its plan's monthly allowance this period (an allowance raised by the console is what is being paid for, so the plan's own number is the line). */
+  overage: Array<{ key: 'gas'; label: string; used: number; allowance: number; over: number }>;
   /** Whether a true-up invoice for this account and period has already been drafted. */
   invoiced: boolean;
 };
@@ -261,12 +264,8 @@ export async function trueupCandidates(period = new Date().toISOString().slice(0
     const us = usage.find(x => x.userId === a.id); if (!us) continue;
     const plan = planFor(a.plan);
     const over: TrueupCandidate['overage'] = [];
-    const add = (key: TrueupCandidate['overage'][number]['key'], label: string, used: number, allowance: number) => { if (allowance > 0 && used > allowance) over.push({ key, label, used, allowance, over: used - allowance }); };
-    add('builds', 'app versions', us.builds, plan.buildsPerMonth);
-    add('ideas', 'Discover idea sets', us.ideas, plan.ideaSetsPerMonth);
-    add('questions', 'questions', us.questions, plan.questionsPerMonth);
-    add('research', 'Research reports', us.research, plan.researchPerMonth);
-    add('browser', 'browser actions', us.browserActions || 0, plan.browserActionsPerMonth);
+    const used = us.gas || 0;
+    if (plan.gasPerMonth > 0 && used > plan.gasPerMonth) over.push({ key: 'gas', label: 'gas', used, allowance: plan.gasPerMonth, over: used - plan.gasPerMonth });
     if (!over.length) continue;
     const customerId = links.find(l => l.ricorsaUserId === a.id)?.id || null;
     out.push({ userId: a.id, email: a.email, name: a.name, plan: plan.key, billingCycle: 'annual', period, customerId, overage: over, invoiced: !!customerId && drafted.some(d => d.customerId === customerId) });

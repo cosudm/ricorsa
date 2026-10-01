@@ -21,7 +21,8 @@ import { sealJson } from './secretbox';
 import { putFile } from './storage';
 import { validateSiteUrl } from './sites';
 import { getThreadOwned, saveTurns } from './threads';
-import { recordUsage, assertBrowseQuota } from './usage';
+import { recordUsage, assertBrowseQuota, chargeGas } from './usage';
+import { GAS } from './plans';
 import { connectLive, screenshotJpeg, registrableDomain, shotKey, KEEP_ALIVE_MS, VIEWPORT, type StoredCookie } from './browse';
 import type { CurrentUser } from './session';
 import type { BrowseRecord, BrowseStep } from './db/schema';
@@ -38,8 +39,18 @@ export type LiveAction =
   | { type: 'nav'; url: string }
   | { type: 'back' } | { type: 'forward' } | { type: 'reload' } | { type: 'select_all' };
 
-/** What the person sees after a move: the picture, where the page is, and whether a password field was typed into. */
-export type Frame = { image: string; url: string; title: string; width: number; height: number; at: number; signInSeen: boolean; minutes: number; until: number };
+/** What the gauge hears when a move crosses into a new minute: what it cost and what is left (null: nothing new to pay). */
+export type GasNote = { cost: number; remaining: number | null; unlimited: boolean } | null;
+/** What the person sees after a move: the picture, where the page is, whether a password field was typed into, and the gas. */
+export type Frame = { image: string; url: string; title: string; width: number; height: number; at: number; signInSeen: boolean; minutes: number; until: number; gas?: GasNote };
+
+/** Minutes of control are gas, one each, charged as they pass, so a tab closed without Done still pays its way. */
+async function payMinutes(user: CurrentUser, owed: number): Promise<GasNote> {
+  if (owed <= 0) return null;
+  try { await recordUsage(user.id, { browserActions: owed }); } catch (e) { console.warn('[browse] minutes not counted', e); }
+  try { const r = await chargeGas(user, GAS.takeoverMinute * owed); return { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited }; }
+  catch (e) { console.warn('[gas] minutes not charged', String((e as Error)?.message || e).slice(0, 160)); return null; }
+}
 
 type Row = typeof schema.browseSessions.$inferSelect;
 
@@ -137,12 +148,11 @@ export async function takeOverAct(user: CurrentUser, turnId: string, action: Liv
     const url = page.url();
     if (url && url !== 'about:blank' && !url.startsWith('chrome-error://')) { try { validateSiteUrl(url); } catch { try { await page.goBack({ waitUntil: 'domcontentloaded', timeout: 8_000 }); } catch { /* stay */ } } }
     const now = Date.now();
-    // A minute of control is a browser action: count the minutes as they pass, so a tab closed without Done still pays its way.
+    // A minute of control is one gas: the minutes are charged as they pass.
     const minutes = row.personStartedAt ? Math.max(1, Math.ceil((now - row.personStartedAt) / 60_000)) : 1;
-    const owed = minutes - row.personMinutes;
-    if (owed > 0) { try { await recordUsage(user.id, { browserActions: owed }); } catch (e) { console.warn('[browse] minutes not counted', e); } }
+    const gas = await payMinutes(user, minutes - row.personMinutes);
     await db().update(schema.browseSessions).set({ personLastAt: now, personMinutes: Math.max(row.personMinutes, minutes), signInSeen, expiresAt: now + KEEP_ALIVE_MS, updatedAt: now, url: page.url(), hosts: addHost(row.hosts, page.url()) }).where(eq(schema.browseSessions.turnId, turnId));
-    return await frameOf(page, row, signInSeen);
+    return { ...(await frameOf(page, row, signInSeen)), gas };
   } finally { await letGo(live); }
 }
 
@@ -150,7 +160,7 @@ export async function takeOverAct(user: CurrentUser, turnId: string, action: Liv
  * The person is done: hand the page back for a follow-up (it stays open) or close it. With `remember`, the sign-ins
  * for those sites (registrable domains the person visited while in control) are sealed into the account.
  */
-export async function endTakeOver(user: CurrentUser, turnId: string, how: 'handback' | 'close', remember: string[]): Promise<{ minutes: number; remembered: string[]; url: string; title: string; until: number | null }> {
+export async function endTakeOver(user: CurrentUser, turnId: string, how: 'handback' | 'close', remember: string[]): Promise<{ minutes: number; remembered: string[]; url: string; title: string; until: number | null; gas: GasNote }> {
   const row = await rowFor(user, turnId);
   const live = await reach(row);
   const remembered: string[] = [];
@@ -173,8 +183,7 @@ export async function endTakeOver(user: CurrentUser, turnId: string, how: 'handb
       }
     }
     const minutes = row.personStartedAt ? Math.max(1, Math.ceil((Date.now() - row.personStartedAt) / 60_000)) : 0;
-    const owed = minutes - row.personMinutes;
-    if (owed > 0) { try { await recordUsage(user.id, { browserActions: owed }); } catch (e) { console.warn('[browse] minutes not counted', e); } }
+    const gas = await payMinutes(user, minutes - row.personMinutes);
     // Where the person left things, kept with the answer: one picture, one line.
     let shot = false;
     try { const bytes = await screenshotJpeg(page); const n = await nextStepNumber(user.id, row.threadId, turnId); shot = await putFile(shotKey(user.id, turnId, n), toArrayBuffer(bytes), 'image/jpeg', `browser step ${n}`); } catch { /* the line still goes in */ }
@@ -183,10 +192,10 @@ export async function endTakeOver(user: CurrentUser, turnId: string, how: 'handb
     if (how === 'close') {
       await db().update(schema.browseSessions).set({ mode: 'closed', personMinutes: Math.max(row.personMinutes, minutes), updatedAt: now, url, title }).where(eq(schema.browseSessions.turnId, turnId));
       if (live.shared) { try { await page.close(); } catch { /* gone */ } } else { try { await live.browser.close(); } catch { /* gone */ } }
-      return { minutes, remembered, url, title, until: null };
+      return { minutes, remembered, url, title, until: null, gas };
     }
     await db().update(schema.browseSessions).set({ mode: 'model', personMinutes: Math.max(row.personMinutes, minutes), expiresAt: now + KEEP_ALIVE_MS, updatedAt: now, url, title }).where(eq(schema.browseSessions.turnId, turnId));
-    return { minutes, remembered, url, title, until: now + KEEP_ALIVE_MS };
+    return { minutes, remembered, url, title, until: now + KEEP_ALIVE_MS, gas };
   } finally { if (how !== 'close') await letGo(live); }
 }
 
