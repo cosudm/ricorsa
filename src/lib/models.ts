@@ -181,12 +181,13 @@ export async function refreshModelHealth(force = false): Promise<ModelHealth> {
       const prev = entries[e.id] || { ok: false, via: null, model: null, checkedAt: 0, downSince: null, alertedAt: null, lastError: null, ms: null };
       const home = providersNow().find(p => p.id === e.provider);
       const or = providersNow().find(p => p.id === 'openrouter');
-      let ok = false; let via: 'home' | 'openrouter' | null = null; let model: string | null = null; let lastError: string | null = null; let ms: number | null = null;
+      let ok = false; let via: 'home' | 'openrouter' | null = null; let model: string | null = null; let lastError: string | null = null; let ms: number | null = null; let probed = false;
       // The home provider first: a key and a served id are needed before a probe is worth sending. Under the mock model (local development) a key counts as answering.
       if (home?.key && mockMode()) { ok = true; via = 'home'; model = e.fallbackId; }
       else if (home?.key) {
         const m = await servedId(home, e.match, e.fallbackId, true);
         if (m) {
+          probed = true;
           const r = await probeProvider(home, m).catch(err => ({ ok: false, status: 0, message: String((err as Error)?.message || err), model: m, models: 0, ms: 0 }));
           model = m; ms = r.ms;
           if (r.ok) { ok = true; via = 'home'; markModelSeen(home, m); }
@@ -196,14 +197,16 @@ export async function refreshModelHealth(force = false): Promise<ModelHealth> {
       // The backstop: the same model on OpenRouter, when the home provider failed and OpenRouter carries it.
       const orModel = e.openrouter && or?.key ? await servedId(or, e.openrouter, null, true) : null;
       if (!ok && orModel) {
+        probed = true;
         const r = await probeProvider(or!, orModel).catch(err => ({ ok: false, status: 0, message: String((err as Error)?.message || err), model: orModel, models: 0, ms: 0 }));
         if (r.ok) { ok = true; via = 'openrouter'; model = orModel; ms = r.ms; markModelSeen(or!, orModel); }
         else setModelAside(or!, orModel, `health probe: ${r.message}`, PROBE_ASIDE_MS);
       }
-      // A model nobody serves is not down, only not offered; down means its maker holds a key (or OpenRouter lists it) and it stopped answering.
-      const keyed = !!home?.key || !!orModel;
-      const downSince = ok || !keyed ? null : (prev.downSince || now);
-      let alertedAt = ok || !keyed ? null : prev.alertedAt;
+      // Down means a probe was sent and failed, or a model that answered at its last check is no longer listed anywhere. A model
+      // nobody lists (no key at its maker, or a maker that does not serve it to this account, and not on OpenRouter) is only not offered.
+      const down = !ok && (probed || prev.ok);
+      const downSince = down ? (prev.downSince || now) : null;
+      let alertedAt = down ? prev.alertedAt : null;
       // Down for half an hour and not yet called out: one line in the logs, where an operator's alerting reads it, and the admin screen shows it.
       if (!ok && downSince && now - downSince >= ALERT_AFTER_MS && !alertedAt) {
         alertedAt = now;
