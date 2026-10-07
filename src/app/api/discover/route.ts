@@ -3,6 +3,8 @@ import { and, eq, ne, desc } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail, truncate, plain, HttpError } from '@/lib/http';
 import { assertIdeaQuota, recordUsage, chargeGas, capabilityPlan } from '@/lib/usage';
+import { topUpIfLow } from '@/lib/recharge';
+import { after } from 'next/server';
 import { db, schema } from '@/lib/db';
 import { quickJson } from '@/lib/llm';
 import { loadGraph, topNodes } from '@/lib/graph';
@@ -111,6 +113,7 @@ ${brief}${anchorLine}${avoid.length ? `\n\nShown before (propose different ideas
   // The set is written: 25 gas, and the gauge hears what it cost and what is left.
   let gas: { cost: number; remaining: number | null; unlimited: boolean } | null = null;
   try { const r = await chargeGas(user, GAS.ideaSet); gas = { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited }; } catch (e) { console.warn('[gas] idea set not charged', String((e as Error)?.message || e).slice(0, 160)); }
+  if (gas) { const paid = gas; after(async () => { try { await topUpIfLow(user, paid); } catch (e) { console.warn('[recharge] auto after idea set failed', String((e as Error)?.message || e).slice(0, 160)); } }); }
   await db().insert(schema.discoverCache).values({ category: key, day, items: stamped })
     .onConflictDoUpdate({ target: [schema.discoverCache.category, schema.discoverCache.day], set: { items: stamped } });
   // Older sets for this category (earlier graph states) are no longer needed.

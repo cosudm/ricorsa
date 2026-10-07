@@ -35,21 +35,40 @@ export const users = sqliteTable('users', {
    * more app versions mid-year, a pilot). Only the keys given are overridden; null means the plan's numbers apply.
    */
   allowance: text('allowance', { mode: 'json' }).$type<Allowance | null>(),
-  /** Pay-As-You-Go gas bought and not yet spent; it never expires and is burned after the plan's monthly allowance. */
+  /** Gas on the account: the signup grant and every recharge, less what was spent after any monthly allowance. It never expires. */
   gasBalance: integer('gas_balance').notNull().default(0),
+  /** When the signup gas (RECHARGE.signupGas) was granted; null until it has been, so every account gets it exactly once. */
+  welcomeGasAt: ts('welcome_gas_at'),
+  /** The card on file at Finix (a payment instrument on the buyer identity), with what the Account page shows of it. */
+  finixInstrumentId: text('finix_instrument_id'),
+  cardBrand: text('card_brand'),
+  cardLastFour: text('card_last_four'),
+  /** Auto-recharge: on or off, the balance that triggers it, the dollars it buys, how many charges in a row failed, and when it last ran (at most once a day). */
+  autoRecharge: integer('auto_recharge', { mode: 'boolean' }).notNull().default(false),
+  autoRechargeThreshold: integer('auto_recharge_threshold').notNull().default(200),
+  autoRechargeUsd: integer('auto_recharge_usd').notNull().default(20),
+  autoRechargeFailures: integer('auto_recharge_failures').notNull().default(0),
+  autoRechargeLastAt: ts('auto_recharge_last_at'),
+  /** When the person agreed to the Recharge Agreement, and which version; required before any charge they did not press the button for. */
+  rechargeAgreedAt: ts('recharge_agreed_at'),
+  rechargeAgreementVersion: text('recharge_agreement_version'),
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull().$defaultFn(() => ({})).default(sql`'{}'`),
   createdAt: tsNow('created_at'),
   lastSeenAt: tsNow('last_seen_at'),
 });
 
-/** Gas bought outright (one PayPal order or one Finix card payment each), for the receipts on the Account page and the console. */
+/** Gas credited to an account: a recharge (one PayPal order or one Finix card payment each), an automatic recharge, or the signup grant; the receipts on the Account page and the console. */
 export const gasPurchases = sqliteTable('gas_purchases', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  /** The payment's id at its provider (PayPal's order id, or `finix:` and the transfer id); one credit per payment however many times it is reported. */
+  /** The payment's id at its provider (PayPal's order id, or `finix:` and the transfer id; `welcome:` and the user id for the signup grant); one credit per payment however many times it is reported. */
   orderId: text('order_id').notNull().unique(),
-  /** Who took the payment: paypal or finix. */
-  provider: text('provider').$type<'paypal' | 'finix'>().notNull().default('paypal'),
+  /** Who took the payment: paypal, finix, or ricorsa for gas the product granted. */
+  provider: text('provider').$type<'paypal' | 'finix' | 'ricorsa'>().notNull().default('paypal'),
+  /** What kind of credit: a recharge the person made, an automatic one from the card on file, or the welcome grant. */
+  kind: text('kind').$type<'recharge' | 'auto' | 'welcome'>().notNull().default('recharge'),
+  /** The Recharge Agreement version in force when the person paid (null for the welcome grant). */
+  agreementVersion: text('agreement_version'),
   usdCents: integer('usd_cents').notNull(),
   gas: integer('gas').notNull(),
   status: text('status').notNull().default('completed'),

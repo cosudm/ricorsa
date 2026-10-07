@@ -23,8 +23,10 @@ export const rUsers = sqliteTable('users', {
   billingCycle: text('billing_cycle').$type<'monthly' | 'annual'>(),
   /** A monthly gas allowance the console set above the plan's own; null means the plan's number. */
   allowance: text('allowance', { mode: 'json' }).$type<RAllowance | null>(),
-  /** Pay-As-You-Go gas bought and not yet spent; it never expires and is used after the month's allowance. */
+  /** Gas bought (or granted at signup) and not yet spent; it never expires and is used after any monthly allowance. */
   gasBalance: integer('gas_balance').notNull().default(0),
+  // The card on file and the auto-recharge settings (welcome_gas_at, finix_instrument_id, card_*, auto_recharge_*, recharge_agree*) are
+  // the product's alone; the console does not read them, so they are left out of this mirror on purpose.
   settings: text('settings', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default(sql`'{}'`),
   createdAt: ts('created_at').notNull(),
   lastSeenAt: ts('last_seen_at').notNull(),
@@ -61,13 +63,17 @@ export const rUsage = sqliteTable('usage', {
   gas: integer('gas').notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.userId, t.period] })]);
 
-/** Pay-As-You-Go purchases, one row per captured PayPal order or succeeded card payment. */
+/** Gas credits, one row each: a recharge (a captured PayPal order or a succeeded card payment), an automatic recharge, or the welcome gas. */
 export const rGasPurchases = sqliteTable('gas_purchases', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),
-  /** PayPal's order id, or `finix:<transfer id>` for a card payment. */
+  /** PayPal's order id, `finix:<transfer id>` for a card payment, or `welcome:<user id>` for the signup grant. */
   orderId: text('order_id').notNull(),
-  provider: text('provider').$type<'paypal' | 'finix'>().notNull().default('paypal'),
+  provider: text('provider').$type<'paypal' | 'finix' | 'ricorsa'>().notNull().default('paypal'),
+  /** What kind of credit: a recharge the person made, an automatic one, or the welcome gas. */
+  kind: text('kind').$type<'recharge' | 'auto' | 'welcome'>().notNull().default('recharge'),
+  /** The Recharge Agreement version in force when it was bought; null for the welcome gas. */
+  agreementVersion: text('agreement_version'),
   usdCents: integer('usd_cents').notNull(),
   gas: integer('gas').notNull(),
   status: text('status').notNull().default('completed'),

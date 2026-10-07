@@ -4,8 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 type Buttons = (opts: Record<string, unknown>) => { render: (el: HTMLElement) => Promise<void>; close?: () => void };
 declare global { interface Window { paypalOrders?: { Buttons: Buttons } } }
 
-// The subscription buttons load PayPal's SDK with intent=subscription; a one-time payment needs intent=capture, so this
-// component loads the SDK a second time under its own namespace (PayPal's supported way to run both on one page).
+// The SDK is loaded with intent=capture under its own namespace (the older subscription buttons wanted intent=subscription; PayPal's supported way to run both on one page).
 let sdkPromise: Promise<void> | null = null;
 function loadSdk(clientId: string) {
   if (sdkPromise) return sdkPromise;
@@ -22,31 +21,27 @@ function loadSdk(clientId: string) {
 
 export type BuyGasProps = {
   clientId: string;
-  /** Dollars per block and gas per block. */
-  blockUsd: number; blockGas: number;
-  /** How many blocks at most in one purchase. */
-  maxBlocks?: number;
+  /** The recharge amount in whole US dollars, and the gas it buys. */
+  amountUsd: number; gas: number;
+  /** The person agreed to the Recharge Agreement (recorded with the order). */
+  agree?: boolean;
   /** Where to send the person afterwards. */
   afterHref?: string;
-  /** How many blocks to buy, when the picker lives outside this component (the card checkout shares it). */
-  blocks?: number;
 };
 
 const money = (n: number) => '$' + n.toLocaleString('en-US');
 const gasWord = (n: number) => `${n.toLocaleString('en-US')} gas`;
 
 /**
- * Pay-As-You-Go gas: pick how many blocks, approve in PayPal, and the gas is on the account the moment PayPal confirms the
- * capture. The order is created and captured on our server, so the amount and the account it credits are never the browser's word.
+ * A recharge through PayPal: approve in PayPal and the gas is on the account the moment PayPal confirms the capture.
+ * The order is created and captured on our server, so the amount and the account it credits are never the browser's word.
  */
-export function PayPalBuyGas({ clientId, blockUsd, blockGas, maxBlocks = 10, afterHref = '/app', blocks: outside }: BuyGasProps) {
+export function PayPalBuyGas({ clientId, amountUsd, gas, agree = true, afterHref = '/app' }: BuyGasProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const [own, setBlocks] = useState(1);
-  const blocks = outside ?? own;
-  const blocksRef = useRef(blocks);
+  const amountRef = useRef(amountUsd); amountRef.current = amountUsd;
+  const agreeRef = useRef(agree); agreeRef.current = agree;
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'approving' | 'done' | 'error'>('idle');
   const [msg, setMsg] = useState('');
-  useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -57,7 +52,7 @@ export function PayPalBuyGas({ clientId, blockUsd, blockGas, maxBlocks = 10, aft
       instance = window.paypalOrders.Buttons({
         style: { shape: 'pill', color: 'blue', layout: 'vertical', label: 'pay', height: 44 },
         createOrder: async () => {
-          const res = await fetch('/api/billing/paypal/gas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'create', blocks: blocksRef.current }) });
+          const res = await fetch('/api/billing/paypal/gas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'create', amountUsd: amountRef.current, agree: agreeRef.current ? true : undefined }) });
           const body = await res.json().catch(() => ({}));
           if (!res.ok || !body.orderId) throw new Error(body.error || 'Could not start the payment');
           return body.orderId as string;
@@ -68,7 +63,7 @@ export function PayPalBuyGas({ clientId, blockUsd, blockGas, maxBlocks = 10, aft
           const body = await res.json().catch(() => ({}));
           if (res.ok) {
             setState('done');
-            setMsg(`${gasWord(body.gas || blockGas * blocksRef.current)} added to your account${typeof body.remaining === 'number' ? `: ${gasWord(body.remaining)} to spend` : ''}. Opening Ricorsa.`);
+            setMsg(`${gasWord(body.gas || gas)} added to your account${typeof body.remaining === 'number' ? `: ${gasWord(body.remaining)} to spend` : ''}. Opening Ricorsa.`);
             setTimeout(() => { location.href = afterHref; }, 1400);
           } else { setState('error'); setMsg(body.error || 'PayPal approved the payment but we could not confirm it. If you were charged, the gas is credited within a few minutes; contact support if it is not.'); }
         },
@@ -78,22 +73,14 @@ export function PayPalBuyGas({ clientId, blockUsd, blockGas, maxBlocks = 10, aft
       instance.render(ref.current).then(() => { if (!closed) setState('ready'); }).catch(() => setState('error'));
     }).catch(() => { setState('error'); setMsg('PayPal did not load. Disable ad blockers for this page and reload.'); });
     return () => { closed = true; try { instance?.close?.(); } catch {} };
-  }, [clientId, afterHref, blockGas]);
+  }, [clientId, afterHref, gas]);
 
-  const total = blockUsd * blocks;
   return (
     <div className="buy-gas">
-      {outside === undefined && (
-        <div className="blocks" role="group" aria-label="How much gas">
-          <button type="button" className="btn sm" onClick={() => setBlocks(b => Math.max(1, b - 1))} disabled={blocks <= 1 || state === 'approving'} aria-label="Less">&minus;</button>
-          <div className="amount"><b>{gasWord(blockGas * blocks)}</b><span>{money(total)}</span></div>
-          <button type="button" className="btn sm" onClick={() => setBlocks(b => Math.min(maxBlocks, b + 1))} disabled={blocks >= maxBlocks || state === 'approving'} aria-label="More">+</button>
-        </div>
-      )}
       <div ref={ref} className="paypal-slot" aria-busy={state === 'loading' || state === 'approving'} />
       {state === 'loading' && <div className="note">Loading PayPal</div>}
       {msg && <div className={'notice ' + (state === 'error' ? '' : state === 'done' ? 'good' : 'info')} style={{ marginTop: 8 }}>{msg}</div>}
-      <div className="note" style={{ marginTop: 8 }}>One payment of {money(total)} by PayPal, nothing recurring. The gas is on your account as soon as PayPal confirms it.</div>
+      <div className="note" style={{ marginTop: 8 }}>One payment of {money(amountUsd)} for {gasWord(gas)} by PayPal, nothing recurring. The gas is on your account as soon as PayPal confirms it. Auto-recharge needs a card, so it is not offered with PayPal.</div>
     </div>
   );
 }

@@ -1,9 +1,10 @@
 /**
  * Ricorsa's plans as the console names, prices and meters them. Mirrors ricorsa/src/lib/plans.ts; keep them in step.
  * Everything the product meters is priced in one unit, gas (a question 1, a Research report 10, a Discover idea set
- * 25, an app version 250, a browser action or a minute in control 1); each plan carries a monthly gas allowance, and
- * Pay-As-You-Go gas is bought outright in $100 blocks of 4,000. Plans bill monthly since October 2026; the annual
- * subscriptions sold before then keep billing yearly at the price they were sold at, which `priceUsdYear` records.
+ * 25, an app version 250, a browser action or a minute in control 1). Since October 7, 2026 accounts are prepaid:
+ * every account starts with 500 gas and recharges at 40 gas per dollar ($20 to $5,000); Essentials and Professional are
+ * no longer sold, and the subscriptions from before run until canceled (the annual ones at the yearly price they were
+ * sold at, which `priceUsdYear` records). Enterprise stays a contract tier with an allowance set from this console.
  */
 export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
 export type BillingCycle = 'monthly' | 'annual';
@@ -14,8 +15,8 @@ export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', te
 
 /** What each metered thing costs in gas; the same table as the product's. */
 export const GAS = { question: 1, reasoning: 3, research: 10, browserAction: 1, takeoverMinute: 1, ideaSet: 25, build: 250, appQuestion: 1 } as const;
-/** Pay-As-You-Go: dollars per block and gas per block. */
-export const PAYG = { usd: 100, gas: 4000 } as const;
+/** The recharge rate and bounds, as the product sells gas; mirrors RECHARGE in the product. */
+export const RECHARGE = { gasPerUsd: 40, minUsd: 20, maxUsd: 5000, signupGas: 500 } as const;
 
 export type Plan = {
   key: PlanKey; name: string;
@@ -31,7 +32,7 @@ export type Plan = {
   contactSales?: boolean;
 };
 export const PLANS: Record<PlanKey, Plan> = {
-  free: { key: 'free', name: 'Free', priceUsd: 0, priceUsdYear: 0, legacyPriceUsd: 0, gasPerMonth: 150 },
+  free: { key: 'free', name: 'Free', priceUsd: 0, priceUsdYear: 0, legacyPriceUsd: 0, gasPerMonth: 0 },
   essentials: { key: 'essentials', name: 'Essentials', priceUsd: 60, priceUsdYear: 450, legacyPriceUsd: 45, gasPerMonth: 2500 },
   professional: { key: 'professional', name: 'Professional', priceUsd: 150, priceUsdYear: 790, legacyPriceUsd: 79, gasPerMonth: 8000 },
   enterprise: { key: 'enterprise', name: 'Enterprise', priceUsd: 0, priceUsdYear: 1290, legacyPriceUsd: 129, gasPerMonth: 30000, contactSales: true },

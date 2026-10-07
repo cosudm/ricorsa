@@ -1,16 +1,17 @@
 /**
- * Plans, prices and gas. Free, then Essentials ($60), Professional ($150) and Enterprise (priced per organization),
- * plus Pay-As-You-Go gas bought in $100 blocks. Everything metered runs on one unit, gas: a question costs 1, a
- * Research report 10, a Discover idea set 25, an app version 250, a browser action 1 (see GAS). Each plan carries
- * a monthly gas allowance; bought gas never expires and is burned after the allowance. Prices here are what the
- * app creates on PayPal for itself (src/lib/paypal-setup.ts): PayPal plans are immutable once created, so a price
- * change makes a new PayPal plan and the old one is kept as retired, so people already subscribed keep their price
- * and their access. Plans bill monthly; the annual plans sold before October 2026 stay valid for those who have them.
+ * Gas, recharges and plans. Since October 2026 Ricorsa is prepaid: every account starts with a grant of gas
+ * (RECHARGE.signupGas), everything metered is priced in gas (a question 1, a Research report 10, a Discover idea
+ * set 25, an app version 250, a browser action 1; see GAS), and when the gas runs out the person recharges, $20 to
+ * $5,000 at a time at RECHARGE.gasPerUsd, by card or through PayPal. Bought gas never expires. Every account has
+ * the full feature set (the Professional capabilities below); Enterprise is the contract tier the Manager Console
+ * sets, with a monthly allowance and higher limits. Essentials and Professional are no longer sold: their
+ * definitions stay so the subscriptions taken out before October 7, 2026 keep resolving (PayPal plans are
+ * immutable, so their ids stay in the record as retired) and so the console's figures still read.
  */
 export type PlanKey = 'free' | 'essentials' | 'professional' | 'enterprise';
 /** The keys in use before September 2026. Rows and PayPal ids stored under them resolve to the plans that replaced them. */
 export const LEGACY_PLAN_KEYS: Record<string, PlanKey> = { pro: 'essentials', team: 'professional' };
-/** The plans in order of what they include, for "upgrade to" prompts. */
+/** The plans in order of what they include. */
 export const PLAN_ORDER: PlanKey[] = ['free', 'essentials', 'professional', 'enterprise'];
 /** A first paid subscription starts with a free trial; billing begins when it ends. The default; a plan may carry its own `trialDays`. */
 export const TRIAL_DAYS = 14;
@@ -20,8 +21,47 @@ export function trialDaysFor(plan: Pick<Plan, 'trialDays'>): number { return typ
 export type BillingCycle = 'monthly' | 'annual';
 export const BILLING_CYCLES: BillingCycle[] = ['monthly', 'annual'];
 export const ANNUAL_MONTHS_FREE = 2;
-/** The plans shown on the pricing page: the paid ones. Free is the state of an account with no subscription, not an offer. */
-export const OFFERED_PLANS: PlanKey[] = ['essentials', 'professional', 'enterprise'];
+/**
+ * The plans still offered: Enterprise alone, priced per organization. Essentials and Professional were retired on
+ * October 7, 2026 (nothing new is sold; existing subscriptions run until canceled); the Recharge page sells gas.
+ */
+export const OFFERED_PLANS: PlanKey[] = ['enterprise'];
+/** Plans that are not sold any more; a subscription to one is honored, a new one is refused. */
+export const RETIRED_PLANS: ReadonlySet<PlanKey> = new Set<PlanKey>(['essentials', 'professional']);
+
+/**
+ * Recharges: the rate, the amounts offered, the welcome grant and the auto-recharge defaults. A recharge is one
+ * card payment (or one PayPal order) credited at `gasPerUsd`; the tiles are what the Recharge page offers, with a
+ * custom amount between `minUsd` and `maxUsd`. Auto-recharge charges the card on file for the person's chosen
+ * amount when the balance falls below the threshold, at most once a day, and switches itself off after
+ * `autoFailuresOff` failed charges.
+ */
+export const RECHARGE = {
+  gasPerUsd: 40,
+  minUsd: 20,
+  maxUsd: 5000,
+  tiles: [
+    { usd: 20, label: 'Starting out', recommended: true },
+    { usd: 50, label: 'Quick start' },
+    { usd: 100, label: 'Small project' },
+    { usd: 200, label: 'Full project' },
+    { usd: 500, label: 'Production' },
+    { usd: 1000, label: 'Ample usage' },
+    { usd: 5000, label: 'Ample usage' },
+  ],
+  /** Gas every new account starts with, once. */
+  signupGas: 500,
+  autoThresholdGas: 200,
+  autoUsdDefault: 20,
+  autoMaxPerDay: 1,
+  autoFailuresOff: 3,
+  /** The Recharge Agreement in force; recorded with each purchase and consent. */
+  agreementVersion: '2026-10-07',
+} as const;
+/** Gas for a dollar amount at the current rate. */
+export function gasForUsd(usd: number): number { return Math.round(usd * RECHARGE.gasPerUsd); }
+/** Whether an amount can be recharged: whole dollars within the offered range. */
+export function validRechargeUsd(usd: unknown): usd is number { return typeof usd === 'number' && Number.isInteger(usd) && usd >= RECHARGE.minUsd && usd <= RECHARGE.maxUsd; }
 
 /**
  * Gas: the one unit everything metered is priced in, so one gauge tells the person what they have left and what
@@ -51,7 +91,7 @@ export type GasKind = keyof typeof GAS;
 export const GAS_LABELS: Record<GasKind, string> = {
   question: 'Question (Fast or Best)', reasoning: 'Question on the Reasoning model', research: 'Research report', browserAction: 'Browser action', takeoverMinute: 'Minute in control of the browser', ideaSet: 'Discover idea set', build: 'App version (Build studio)', appQuestion: 'Question from a built app',
 };
-/** Pay-As-You-Go: gas bought outright, in blocks of this size, never expiring, burned after the plan's monthly allowance. */
+/** The $100 block of gas, kept for older clients and the console's copy (a recharge of $100 at the current rate). */
 export const PAYG = { usd: 100, gas: 4000 } as const;
 /** A gas amount for copy: "1 gas", "2,500 gas". */
 export function gas(n: number): string { return `${Math.round(n).toLocaleString('en-US')} gas`; }
@@ -77,6 +117,8 @@ export type Plan = {
   contactSales?: boolean;
   /** The free trial this plan starts with, in days, when it differs from TRIAL_DAYS (Professional: 30). */
   trialDays?: number;
+  /** No longer sold: honored for the subscriptions that hold it, refused for new ones. */
+  retired?: boolean;
   tiers: Array<'quick' | 'default' | 'complex'>; // model tiers this plan may use
   spaces: number;              // max Spaces
   blurb: string;
@@ -93,15 +135,17 @@ export const PLANS: Record<PlanKey, Plan> = {
     name: 'Free',
     priceUsd: 0,
     caps: { graph: 'preview', discover: 'locked', browser: 'locked', connectors: 0, files: { perQuestion: 2, maxMb: 10 } },
-    gasPerMonth: 150,
+    /** No monthly refill since October 2026: an account runs on the gas it was given at signup and the gas it buys. */
+    gasPerMonth: 0,
     tiers: ['quick', 'default'],
     spaces: 1,
-    blurb: 'Try it and let the graph start learning you.',
-    features: ['150 gas a month: about 150 questions', 'Live web citations', 'Attach files to a question, 2 at a time up to 10 MB each: ask anything about a PDF, document or spreadsheet and see the passage highlighted', 'Identity graph preview: it learns you and suggests what to ask next', '1 Space'],
+    blurb: 'The state of an account with no subscription and no gas left.',
+    features: ['500 gas when you sign up', 'Live web citations', 'Attach files to a question', 'The identity graph learns you and suggests what to ask next'],
   },
   essentials: {
     key: 'essentials',
     name: 'Essentials',
+    retired: true,
     priceUsd: 60,
     paypalPlanEnv: 'PAYPAL_PLAN_ESSENTIALS',
     paypalPlanEnvAnnual: 'PAYPAL_PLAN_ESSENTIALS_ANNUAL',
@@ -116,6 +160,7 @@ export const PLANS: Record<PlanKey, Plan> = {
   professional: {
     key: 'professional',
     name: 'Professional',
+    retired: true,
     priceUsd: 150,
     trialDays: 30,
     paypalPlanEnv: 'PAYPAL_PLAN_PROFESSIONAL',
@@ -139,8 +184,8 @@ export const PLANS: Record<PlanKey, Plan> = {
     gasPerMonth: 30000,
     tiers: ['quick', 'default', 'complex'],
     spaces: 100000,
-    blurb: 'Everything in Essentials and Professional, for a firm that runs on research: a gas allowance set for your organization, every connector, and a direct line to us.',
-    features: ['Everything in Essentials and Professional', 'A gas allowance set for your organization, raised as you grow', 'Files: 20 per question, up to 60 MB each', '100 Connectors', 'Unlimited Spaces', 'A direct line to us, with onboarding for your team', 'Seat and floating licenses for organizations, with deployment on your own data and geography'],
+    blurb: 'Everything in Ricorsa, for a firm that runs on research: a gas allowance set for your organization, every connector, and a direct line to us.',
+    features: ['Everything a prepaid account has: the full identity graph, Research, Discover, the Build studio and the Ricorsa Browser', 'A gas allowance set for your organization, raised as you grow', 'Files: 20 per question, up to 60 MB each', '100 Connectors', 'Unlimited Spaces', 'A direct line to us, with onboarding for your team', 'Seat and floating licenses for organizations, with deployment on your own data and geography'],
     licensing: 'Enterprise licensing for organizations: seat licenses or floating licenses shared across a team, with deployment on your own data and geography. Call for pricing: enterprise@ricorsa.com.',
   },
 };
@@ -166,18 +211,19 @@ export function normalizePlanKey(key: string | null | undefined): PlanKey {
 }
 export function planFor(key: string | null | undefined): Plan { return PLANS[normalizePlanKey(key)]; }
 /**
- * The plan whose capabilities apply to an account: its subscription's, or Professional while Pay-As-You-Go gas
- * remains on an account below Professional (bought gas comes with the Professional feature set).
+ * The plan whose capabilities apply to an account. Since October 2026 every account has the full feature set, the
+ * Professional capabilities, whatever it pays or has left (the meter, not a gate, is what says "recharge to
+ * continue"); Enterprise keeps its own, higher limits. The balance argument is kept for callers from before.
  */
-export function capabilityPlanKey(subscriptionPlan: string | null | undefined, gasBalance: number | null | undefined): PlanKey {
-  const key = normalizePlanKey(subscriptionPlan);
-  if ((gasBalance || 0) > 0 && PLAN_ORDER.indexOf(key) < PLAN_ORDER.indexOf('professional')) return 'professional';
-  return key;
+export function capabilityPlanKey(subscriptionPlan: string | null | undefined, _gasBalance?: number | null | undefined): PlanKey {
+  void _gasBalance;
+  return normalizePlanKey(subscriptionPlan) === 'enterprise' ? 'enterprise' : 'professional';
 }
-/** The plan above this one, or null at the top. */
+/** The plan above this one that is still sold, or null: with Essentials and Professional retired there is nothing to move up to online. */
 export function nextPlan(key: string | null | undefined): Plan | null {
   const i = PLAN_ORDER.indexOf(normalizePlanKey(key));
-  return i >= 0 && i < PLAN_ORDER.length - 1 ? PLANS[PLAN_ORDER[i + 1]] : null;
+  for (let j = i + 1; j < PLAN_ORDER.length; j++) { const p = PLANS[PLAN_ORDER[j]]; if (!p.retired && !p.contactSales) return p; }
+  return null;
 }
 
 /**

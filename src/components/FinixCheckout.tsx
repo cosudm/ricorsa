@@ -19,35 +19,42 @@ function loadFinix() {
   return finixPromise;
 }
 
-/** What the card pays for: a plan (with its trial) or a block of Pay-As-You-Go gas. */
+/** What the card is for: a recharge (the amount chosen, with the agreement and the auto-recharge choice) or only saving a new card. */
 export type CardPurpose =
-  | { kind: 'subscribe'; planKey: string; planName: string; priceUsd: number; trialDays: number; replaces?: string | null }
-  | { kind: 'gas'; blocks: number; usd: number; gas: number };
+  | { kind: 'recharge'; usd: number; gas: number; autoRecharge: boolean }
+  | { kind: 'card' };
+
+export type RechargeResult = { ok: boolean; pending?: boolean; gas?: number; usd?: number; balance?: number; remaining?: number | null; card?: { brand: string | null; lastFour: string | null }; message?: string; error?: string };
 
 export type FinixCheckoutProps = {
   env: 'live' | 'sandbox'; applicationId: string;
   purpose: CardPurpose;
-  /** Where to send the person afterwards. */
-  afterHref?: string;
+  /** Where to send the person afterwards (a recharge); omit to stay on the page and call `onDone`. */
+  afterHref?: string | null;
+  /** Told when the server has answered (the recharge or the new card). */
+  onDone?: (r: RechargeResult) => void;
   /** The label on the button that opens the card form. */
   openLabel?: string;
   /** Open with the card fields showing, no button in front. */
   openAtStart?: boolean;
+  /** Whether the person may pay yet (the agreement box); the button explains when not. */
+  disabledReason?: string | null;
 };
 
 const money = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 const gasWord = (n: number) => `${n.toLocaleString('en-US')} gas`;
 
 /**
- * Card checkout on the page itself. The card fields are Finix's own (served from js.finix.com inside iframes), so the
- * number never touches ricorsa.com; what comes back is a one-use token that our server turns into a saved card and a
- * subscription or a one-time gas payment. The form opens behind one button so a pricing card stays a pricing card.
+ * Card fields on the page itself. The fields are Finix's own (served from js.finix.com inside iframes), so the number
+ * never touches ricorsa.com; what comes back is a one-use token that our server turns into the card on file and, for
+ * a recharge, the payment. The form opens behind one button so the page stays readable until the person is ready.
  */
-export function FinixCheckout({ env, applicationId, purpose, afterHref = '/app', openLabel, openAtStart = false }: FinixCheckoutProps) {
+export function FinixCheckout({ env, applicationId, purpose, afterHref = '/app', onDone, openLabel, openAtStart = false, disabledReason = null }: FinixCheckoutProps) {
   const id = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const holder = `finix-form-${id}`;
   const formRef = useRef<FinixForm | null>(null);
   const purposeRef = useRef(purpose); purposeRef.current = purpose;
+  const disabledRef = useRef(disabledReason); disabledRef.current = disabledReason;
   const [open, setOpen] = useState(openAtStart);
   const [state, setState] = useState<'idle' | 'loading' | 'ready' | 'paying' | 'done' | 'error'>('idle');
   const [msg, setMsg] = useState('');
@@ -64,11 +71,12 @@ export function FinixCheckout({ env, applicationId, purpose, afterHref = '/app',
         showLabels: true,
         showPlaceholders: true,
         hidePotentialIssueMessages: true,
-        submitLabel: submitLabelFor(purposeRef.current),
+        submitLabel: purposeRef.current.kind === 'card' ? 'Save card' : 'Pay by card',
         styles: { default: { fontFamily: 'inherit', fontSize: '15px', borderRadius: '10px', padding: '10px 12px' } },
         onLoad: () => { if (!gone) setState('ready'); },
         onSubmit: async (err: unknown, res: { data?: { id?: string } } | undefined) => {
           if (gone) return;
+          if (disabledRef.current) { setState('ready'); setMsg(disabledRef.current); return; }
           if (err || !res?.data?.id) { setState('ready'); setMsg(cardMessage(err)); return; }
           await pay(res.data.id);
         },
@@ -82,33 +90,29 @@ export function FinixCheckout({ env, applicationId, purpose, afterHref = '/app',
 
   const pay = async (token: string) => {
     const p = purposeRef.current;
-    setState('paying'); setMsg(p.kind === 'subscribe' ? 'Checking your card' : 'Charging your card');
-    const url = p.kind === 'subscribe' ? '/api/billing/finix/subscribe' : '/api/billing/finix/gas';
-    const body = p.kind === 'subscribe' ? { token, plan: p.planKey } : { token, blocks: p.blocks };
+    setState('paying'); setMsg(p.kind === 'card' ? 'Saving your card' : 'Charging your card');
+    const url = p.kind === 'card' ? '/api/billing/finix/card' : '/api/billing/finix/recharge';
+    const body = p.kind === 'card' ? { token } : { token, amountUsd: p.usd, agree: true, autoRecharge: p.autoRecharge };
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const out = await res.json().catch(() => ({})) as Record<string, unknown>;
+    const out = await res.json().catch(() => ({})) as RechargeResult;
     if (res.ok) {
       setState('done');
-      if (p.kind === 'subscribe') {
-        const name = String(out.planName || p.planName);
-        const days = Number(out.trialDays || 0);
-        setMsg(out.trial && days > 0 ? `Your ${name} trial has started; nothing is charged for ${days} days. Opening Ricorsa.` : `Your ${name} plan is active. Opening Ricorsa.`);
-      } else if (out.pending) {
-        setMsg(String(out.message || 'The payment is being confirmed; the gas lands on your account as soon as it clears.'));
-      } else {
-        setMsg(`${gasWord(Number(out.gas) || p.gas)} added to your account${typeof out.remaining === 'number' ? `: ${gasWord(out.remaining as number)} to spend` : ''}. Opening Ricorsa.`);
-      }
-      if (!out.pending) setTimeout(() => { location.href = afterHref; }, 1400);
+      if (p.kind === 'card') setMsg(`Card saved${out.card?.lastFour ? `: ${out.card.brand || 'card'} ending ${out.card.lastFour}` : ''}.`);
+      else if (out.pending) setMsg(String(out.message || 'The payment is being confirmed; the gas lands on your account as soon as it clears.'));
+      else setMsg(`${gasWord(Number(out.gas) || p.gas)} added to your account${typeof out.remaining === 'number' ? `: ${gasWord(out.remaining)} to spend` : ''}.${afterHref ? ' Opening Ricorsa.' : ''}`);
+      onDone?.({ ...out, ok: true });
+      if (p.kind === 'recharge' && !out.pending && afterHref) setTimeout(() => { location.href = afterHref; }, 1400);
     } else {
       setState('ready');
       setMsg(String(out.error || 'The card was not accepted. Check the details or try another card.'));
+      onDone?.({ ...out, ok: false });
     }
   };
 
-  const label = openLabel || (purpose.kind === 'subscribe' ? (purpose.trialDays > 0 ? 'Start free trial with a card' : 'Subscribe with a card') : `Pay ${money(purpose.usd)} by card`);
+  const label = openLabel || (purpose.kind === 'card' ? 'Add a card' : `Pay ${money(purpose.usd)} by card`);
   return (
     <div className="card-checkout">
-      {!open && <button type="button" className="btn primary" onClick={() => setOpen(true)}>{label}</button>}
+      {!open && <button type="button" className="btn primary" onClick={() => { if (disabledReason) { setMsg(disabledReason); return; } setOpen(true); }}>{label}</button>}
       {open && (
         <div className="card-form-wrap" aria-busy={state === 'loading' || state === 'paying'}>
           <div id={holder} className="card-form" />
@@ -122,17 +126,9 @@ export function FinixCheckout({ env, applicationId, purpose, afterHref = '/app',
   );
 }
 
-function submitLabelFor(p: CardPurpose): string {
-  // The gas amount can change after the form is up (the picker beside it), so its button stays generic and the line under the form carries the figure.
-  if (p.kind === 'gas') return 'Pay by card';
-  return p.trialDays > 0 ? `Start ${p.trialDays}-day free trial` : `Subscribe for ${money(p.priceUsd)} a month`;
-}
 function terms(p: CardPurpose): string {
-  if (p.kind === 'gas') return `One payment of ${money(p.usd)} for ${gasWord(p.gas)}, nothing recurring. The gas is on your account as soon as the payment clears, usually at once. Your card details go to our card processor and never touch Ricorsa.`;
-  const bill = p.trialDays > 0
-    ? `Your card is checked now and nothing is charged for ${p.trialDays} days; then ${p.planName} is billed ${money(p.priceUsd)} a month.`
-    : `${p.planName} is billed ${money(p.priceUsd)} a month, starting today.`;
-  return `${bill} Cancel any time from your Account page.${p.replaces ? ` Your current ${p.replaces} subscription is canceled when this one starts; the unused part of its period is not refunded.` : ''} Your card details go to our card processor and never touch Ricorsa.`;
+  if (p.kind === 'card') return 'The card is saved for your next recharge and, if you turn it on, for auto-recharge. Nothing is charged now. Your card details go to our card processor and never touch Ricorsa.';
+  return `One payment of ${money(p.usd)} for ${gasWord(p.gas)}. The gas is on your account as soon as the payment clears, usually at once, and never expires.${p.autoRecharge ? ` Auto-recharge is turned on: this card is charged ${money(p.usd)} again whenever your balance falls below the threshold on your Account page.` : ' Nothing recurring.'} Your card details go to our card processor and never touch Ricorsa.`;
 }
 /** A plain sentence for a card Finix.js would not tokenize, from its error without its words. */
 function cardMessage(err: unknown): string {

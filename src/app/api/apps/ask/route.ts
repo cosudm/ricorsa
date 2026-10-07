@@ -3,6 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { fail, readJson, HttpError } from '@/lib/http';
 import { assertAppQuota, recordUsage, chargeGas } from '@/lib/usage';
+import { topUpIfLow } from '@/lib/recharge';
 import { planQueries, retrieve, sourcesBlock, type Source } from '@/lib/search';
 import { loadGraph, graphPromptBlock } from '@/lib/graph';
 import { streamAnswer, describeProviderError, type Msg } from '@/lib/llm';
@@ -89,6 +90,7 @@ export async function POST(req: Request) {
         try { const r = await chargeGas(user, GAS.appQuestion); gas = { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited }; } catch (e) { console.warn('[gas] app question not charged', String((e as Error)?.message || e).slice(0, 160)); }
         console.log('[apps] answered', JSON.stringify({ app: build.id, model: result.model, chars: text.length, sources: sources.length, user: user.id }));
         send('done', { text: visible(text).trim(), sources: sources.map(s => ({ n: s.n, title: s.title, domain: s.domain, url: s.url })), model: result.model, gas });
+        try { await topUpIfLow(user, gas); } catch { /* the gauge refreshes on its own */ }
       } catch (e) {
         const err = e as { name?: string; message?: string };
         if (err?.name === 'AbortError' || ctl.signal.aborted) { /* the app or the page went away */ }

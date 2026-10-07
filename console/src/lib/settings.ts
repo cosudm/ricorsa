@@ -7,7 +7,7 @@ export type EmailSettings = { from: string; replyTo?: string; signature: string 
 export type TrialSettings = { days: number; plan: 'essentials' | 'professional' | 'enterprise' };
 /**
  * The price of a true-up invoice: what an annual account pays per block of 100 gas used beyond its monthly allowance
- * (250 cents a block matches Pay-As-You-Go, $100 for 4,000). The per-kind prices from before gas are kept on old rows and ignored.
+ * (250 cents a block matches the recharge rate, 40 gas per dollar). The per-kind prices from before gas are kept on old rows and ignored.
  */
 export type TrueupSettings = { gasBlockCents: number; dueDays: number; buildCents?: number; ideaSetCents?: number; questionCents?: number; researchCents?: number; browserActionCents?: number };
 

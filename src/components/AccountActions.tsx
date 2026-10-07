@@ -9,7 +9,7 @@ export function CancelButton({ hasSubscription, provider }: { hasSubscription: b
     setBusy(true);
     const res = await fetch('/api/billing/cancel', { method: 'POST' }); const body = await res.json().catch(() => ({}));
     setBusy(false);
-    if (res.ok) { setMsg('Subscription canceled. You are on the Free plan.'); setTimeout(() => location.reload(), 1200); }
+    if (res.ok) { setMsg('Subscription canceled. Your account continues on prepaid gas.'); setTimeout(() => location.reload(), 1200); }
     else setMsg(body.error || (provider === 'paypal' ? 'Could not cancel. Try from your PayPal account.' : 'Could not cancel right now. Please try again in a few minutes.'));
   };
   return (<div><button className="btn danger" disabled={busy} onClick={go}>{busy ? 'Canceling' : armed ? 'Click again to confirm' : 'Cancel subscription'}</button>{msg && <div className="notice info" style={{ marginTop: 8 }}>{msg}</div>}</div>);

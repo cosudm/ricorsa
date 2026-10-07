@@ -13,6 +13,7 @@ import { withKit, stripKit } from '@/lib/app-kit';
 import { runApp, runFindings, seriousFindings, browserRunAvailable } from '@/lib/build-run';
 import { describeProviderError } from '@/lib/llm';
 import { recordUsage, assertBuildQuota, chargeGas, type GasReceipt } from '@/lib/usage';
+import { topUpIfLow } from '@/lib/recharge';
 import { estimateCostMicros } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
@@ -212,7 +213,9 @@ export async function POST(req: Request) {
           // A question: answer in the chat, no new version. It costs what a question costs.
           await recordUsage(user.id, { questions: 1, tokensIn: usage.in, tokensOut: usage.out, costMicros: estimateCostMicros('build', usage.in, usage.out, usage.cacheRead, 0, modelUsed, usage.cacheWrite) });
           const m = await addMessage({ role: 'assistant', text: truncate(p.reply, 4000), kind: 'reply', buildId: null, version: null, model: modelUsed });
-          send('done', { reply: m, build: null, sessionId, gas: await charge(GAS.question) });
+          const paidQ = await charge(GAS.question);
+          send('done', { reply: m, build: null, sessionId, gas: paidQ });
+          try { const top = await topUpIfLow(user, paidQ); if (top) send('gas', top); } catch { /* the gauge refreshes on its own */ }
           return;
         }
         if (!p.html && p.edits && latest?.html) {
@@ -290,6 +293,7 @@ export async function POST(req: Request) {
         await save({ status: 'done', plan: p.plan, html, summary });
         const m = await addMessage({ role: 'assistant', text: p.plan || summary, kind: 'plan', buildId: id, version, next, model: modelUsed, fallback: user.admin && fallback ? fallback : undefined, check, left: rev.findings.slice(0, 8) });
         send('done', { message: m, build: { id, sessionId, version, title: spec.title, kind: spec.kind, status: 'done', plan: p.plan, summary, html, lineage, ideaId, graphHash, parentId: latest ? latest.id : null, createdAt: Date.now() }, next, sessionId, check, model: modelUsed, gas: paid });
+        try { const top = await topUpIfLow(user, paid); if (top) send('gas', top); } catch { /* the gauge refreshes on its own */ }
       } catch (e) {
         const err = e as { name?: string; message?: string };
         const p = parseBuild(raw);

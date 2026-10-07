@@ -3,6 +3,7 @@ import { eq, and } from 'drizzle-orm';
 import { currentUser } from '@/lib/session';
 import { fail, readJson, HttpError } from '@/lib/http';
 import { assertQuota, assertBrowseQuota, recordUsage, chargeGas, questionCost, type GasReceipt, capabilityPlan } from '@/lib/usage';
+import { topUpIfLow } from '@/lib/recharge';
 import { GAS } from '@/lib/plans';
 import { createThread, getThreadOwned, makeTurn, saveTurns } from '@/lib/threads';
 import { searchPlan, planQueries, retrieve, readPages, sourcesBlock, type Source } from '@/lib/search';
@@ -284,6 +285,8 @@ export async function POST(req: Request) {
         await recordUsage(user.id, { questions: 1, research: turn.mode === 'research' ? 1 : 0, searches: result.usage.searches, tokensIn: result.usage.in, tokensOut: result.usage.out, browserActions, costMicros: estimateCostMicros(turn.tier, result.usage.in, result.usage.out, result.usage.cacheRead, result.usage.searches, result.model, result.usage.cacheWrite) });
         const paid = await charge(browserActions, true);
         send('done', { turn, graphEvents: graph.events, gas: receipt(paid) });
+        // Auto-recharge, when the balance has fallen under the person's threshold: the card on file is charged and the gauge told.
+        try { const top = await topUpIfLow(user, receipt(paid)); if (top) send('gas', top); } catch (e) { console.warn('[recharge] auto after answer failed', String((e as Error)?.message || e).slice(0, 160)); }
         // 5. After the answer is on screen: put the places this turn named on the map (the geocoder is slow and polite).
         if (touched && touched.some(n => n.place && !n.geo)) { try { if (await geocodePending(graph)) await saveGraph(user.id, graph); } catch (e) { console.warn('[geo] failed', e); } }
         // 6. Remember: this answer and the files that came with the question become passages a later answer can recall.

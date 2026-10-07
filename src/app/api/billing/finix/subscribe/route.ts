@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { currentUser } from '@/lib/session';
 import { handle, json, readJson, fail } from '@/lib/http';
-import { PLANS, normalizePlanKey, trialDaysFor } from '@/lib/plans';
+import { PLANS, RETIRED_PLANS, normalizePlanKey, trialDaysFor } from '@/lib/plans';
 import { finixProvisioned } from '@/lib/finix-setup';
 import { finixConfigured, createInstrumentFromToken, createSubscription, customerMessageFor, isFinixError } from '@/lib/finix';
 import { buyerIdentity } from '@/lib/finix-buyer';
@@ -23,6 +23,7 @@ export const POST = handle(async (req: Request) => {
   const b = Body.safeParse(await readJson(req)); if (!b.success) return fail(400, 'Invalid request', 'invalid_request');
   const key = normalizePlanKey(b.data.plan);
   const plan = PLANS[key];
+  if (RETIRED_PLANS.has(key)) return fail(410, 'Ricorsa no longer sells subscriptions. Nothing was charged; recharge your gas instead.', 'plans_retired');
   if (key === 'free' || plan.contactSales || !plan.priceUsd) return fail(400, 'That plan is not sold online', 'invalid_request');
   const cfg = await finixProvisioned();
   if (!cfg?.merchantId) return fail(503, 'Card checkout is being set up. Please check back in a moment.', 'checkout_unavailable');

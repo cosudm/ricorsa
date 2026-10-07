@@ -4,6 +4,7 @@ import { db, schema } from './db';
 import { HttpError } from './http';
 import { grantExpired, normalizePlanKey } from './plans';
 import { applyGrant } from './grants';
+import { grantWelcomeGas } from './usage';
 
 export type CurrentUser = typeof schema.users.$inferSelect & { admin?: boolean; effectivePlan?: string };
 
@@ -14,7 +15,7 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   return list.includes(email.toLowerCase());
 }
 
-/** Admins act as Enterprise (or as the plan they chose to demo); everyone else is what PayPal says they are. */
+/** Admins act as Enterprise (or as the plan they chose to demo); everyone else has the full feature set on the gas they hold. */
 function withAccess(u: typeof schema.users.$inferSelect): CurrentUser {
   if (!isAdminEmail(u.email)) return u;
   const demo = (u.settings as { demoPlan?: string } | null)?.demoPlan;
@@ -40,6 +41,8 @@ export async function currentUser(): Promise<CurrentUser> {
   const existing = await d.select().from(schema.users).where(eq(schema.users.id, sub)).limit(1);
   if (existing[0]) {
     let row = existing[0];
+    // The signup gas, once per account: new accounts get it below; accounts from before the prepaid model get it the first time they come back.
+    if (!row.welcomeGasAt) { const bal = await grantWelcomeGas(sub); if (bal !== null) row = { ...row, welcomeGasAt: new Date(), gasBalance: bal }; }
     // A trial or license granted by the Manager Console ends on its date: the account goes back to Free.
     if (grantExpired(row.subscriptionStatus, row.planRenewsAt)) {
       const ended = row.subscriptionStatus === 'TRIAL' ? 'TRIAL_ENDED' : 'LICENSE_ENDED';
@@ -55,7 +58,11 @@ export async function currentUser(): Promise<CurrentUser> {
     return withAccess(row);
   }
   const inserted = await d.insert(schema.users).values({ id: sub, email, name, picture }).onConflictDoNothing().returning();
-  if (inserted[0]) return withAccess(await applyGrant(inserted[0]) || inserted[0]);
+  if (inserted[0]) {
+    const bal = await grantWelcomeGas(sub);
+    const fresh = bal !== null ? { ...inserted[0], welcomeGasAt: new Date(), gasBalance: bal } : inserted[0];
+    return withAccess(await applyGrant(fresh) || fresh);
+  }
   const again = await d.select().from(schema.users).where(eq(schema.users.id, sub)).limit(1);
   return withAccess(again[0]);
 }

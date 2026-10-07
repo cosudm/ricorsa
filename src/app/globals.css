@@ -179,6 +179,64 @@ button { font: inherit; cursor: pointer; }
 .alt-pay .or::before, .alt-pay .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .linkish { background: none; border: 0; padding: 4px 0; color: var(--ink-2); font: inherit; font-size: 13px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; align-self: flex-start; }
 .linkish:hover { color: var(--ink); }
+
+/* recharge: the amount tiles and the pay step on the left, the order summary on the right */
+.recharge { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr); gap: 16px; align-items: start; }
+.recharge-pick { display: flex; flex-direction: column; gap: 14px; }
+.recharge-pick h3, .recharge-sum h3 { margin: 0; font-size: 17px; }
+.tiles-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.tile-amt { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 76px; padding: 12px 8px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); color: var(--ink); text-align: center; transition: border-color .12s, box-shadow .12s; }
+.tile-amt:hover { border-color: var(--accent-line); }
+.tile-amt b { font-size: 18px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.tile-amt > span:not(.tile-tag) { font-size: 12.5px; color: var(--ink-3); line-height: 1.3; }
+.tile-amt.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.tile-amt.on > span:not(.tile-tag) { color: var(--ink-2); }
+.tile-amt .tile-tag { position: absolute; top: -9px; left: 50%; transform: translateX(-50%); font-size: 10.5px; line-height: 1.4; font-weight: 600; letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; background: var(--ink); color: #fff; white-space: nowrap; }
+.tile-amt.on .tile-tag { background: var(--accent); }
+.custom-amt { display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; color: var(--ink-2); }
+.custom-in { display: flex; align-items: center; gap: 6px; height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); max-width: 260px; }
+.custom-in:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.custom-in em { font-style: normal; color: var(--ink-3); font-weight: 500; }
+.custom-in input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 18px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.custom-in input[aria-invalid="true"] { color: var(--bad); }
+.custom-amt small { color: var(--ink-3); font-size: 12.5px; }
+.check { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--ink); cursor: pointer; }
+.check input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--accent); flex: none; cursor: pointer; }
+.check span { display: flex; flex-direction: column; gap: 2px; }
+.check small { font-size: 12.5px; color: var(--ink-3); line-height: 1.4; }
+.recharge-pick .pay { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+.recharge-pick .pay > .btn { width: 100%; justify-content: center; }
+.recharge-sum { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 12px; }
+.recharge-sum dl { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.recharge-sum dl > div { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.recharge-sum dt { margin: 0; }
+.recharge-sum dd { margin: 0; color: var(--ink); }
+.recharge-sum .total { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 2px; font-size: 17px; font-weight: 600; color: var(--ink); }
+.recharge-sum .gets dd { color: var(--accent); font-weight: 600; }
+.recharge-sum .note { margin: 0; }
+.recharge-sum .secure { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--ink-3); font-size: 12.5px; }
+.recharge-sum .secure::before { content: ""; width: 9px; height: 11px; border: 1.5px solid currentColor; border-radius: 2px 2px 3px 3px; box-shadow: inset 0 3px 0 -1.5px currentColor; }
+.contact-price { font-size: 30px; }
+
+/* account: the card on file and auto-recharge rows, and the list of gas added */
+.auto-recharge { display: flex; flex-direction: column; gap: 10px; }
+.auto-recharge .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.auto-recharge .row:first-child { border-top: 0; padding-top: 0; }
+.auto-recharge .row .l { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.auto-recharge .row .l b { font-size: 14px; font-weight: 600; }
+.auto-recharge .row .l small { font-size: 13px; color: var(--ink-2); line-height: 1.4; }
+.auto-recharge .row.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.auto-recharge .field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-3); }
+.auto-recharge .field select { height: 38px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--card); color: var(--ink); font: inherit; font-size: 14px; }
+.auto-recharge .field select:disabled { opacity: .6; }
+.btn.sm { height: 32px; padding: 0 12px; font-size: 13px; border-radius: 8px; }
+.purchases { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; font-size: 13.5px; }
+.purchases li { display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto auto; gap: 12px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.purchases li:first-child { border-top: 0; }
+.purchases .when { color: var(--ink-3); white-space: nowrap; }
+.purchases .what { color: var(--ink-2); }
+.purchases b { font-weight: 600; white-space: nowrap; }
+.purchases .paid { color: var(--ink-3); min-width: 3.5em; text-align: right; white-space: nowrap; }
 .note { font-size: 13px; color: var(--ink-3); }
 .notice { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 12px; background: var(--warn-soft); color: #6E4A0F; font-size: 13.5px; line-height: 1.45; }
 .notice.info { background: var(--accent-soft); color: #234A6A; }
@@ -214,7 +272,11 @@ button { font: inherit; cursor: pointer; }
   .hero-c { min-height: 0; padding: 56px 24px 64px; }
   .hero-c h1 { font-size: 44px; }
   .hero-c .lede { font-size: 17px; }
-  .stages, .plans, .cards, .products, .try-grid, .prod-points, .payg { grid-template-columns: 1fr; }
+  .stages, .plans, .cards, .products, .try-grid, .prod-points, .payg, .recharge { grid-template-columns: 1fr; }
+  .recharge-sum { position: static; }
+  .tiles-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .auto-recharge .row.two { grid-template-columns: 1fr; }
+  .purchases li { grid-template-columns: 5.5em minmax(0, 1fr) auto auto; gap: 8px; font-size: 12.5px; }
   .prod-hero h1 { font-size: 34px; }
   .section-c { padding: 48px 24px; }
   .middle-c .big { font-size: 26px; }

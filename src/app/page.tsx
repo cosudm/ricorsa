@@ -27,7 +27,7 @@ export default async function Landing() {
             <a className="btn primary lg" href={start}>{v ? 'Open Ricorsa' : 'Start free'}</a>
             <a className="btn lg" href="#how">How it works</a>
           </div>
-          <div className="fine">Free to start. Essentials and Professional begin with a 14-day free trial; cancel any time.</div>
+          <div className="fine">Free to start: every account begins with 500 gas, and there is no subscription. Recharge from $20 when it runs out; gas never expires.</div>
         </section>
 
         <section className="section-c wrap" id="how">

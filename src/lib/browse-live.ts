@@ -22,6 +22,7 @@ import { putFile } from './storage';
 import { validateSiteUrl } from './sites';
 import { getThreadOwned, saveTurns } from './threads';
 import { recordUsage, assertBrowseQuota, chargeGas } from './usage';
+import { topUpIfLow } from './recharge';
 import { GAS } from './plans';
 import { connectLive, screenshotJpeg, registrableDomain, shotKey, KEEP_ALIVE_MS, VIEWPORT, type StoredCookie } from './browse';
 import type { CurrentUser } from './session';
@@ -48,8 +49,12 @@ export type Frame = { image: string; url: string; title: string; width: number; 
 async function payMinutes(user: CurrentUser, owed: number): Promise<GasNote> {
   if (owed <= 0) return null;
   try { await recordUsage(user.id, { browserActions: owed }); } catch (e) { console.warn('[browse] minutes not counted', e); }
-  try { const r = await chargeGas(user, GAS.takeoverMinute * owed); return { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited }; }
-  catch (e) { console.warn('[gas] minutes not charged', String((e as Error)?.message || e).slice(0, 160)); return null; }
+  try {
+    const r = await chargeGas(user, GAS.takeoverMinute * owed);
+    const note = { cost: r.cost, remaining: r.unlimited ? null : r.remaining, unlimited: r.unlimited };
+    try { await topUpIfLow(user, note); } catch { /* the gauge refreshes on its own */ }
+    return note;
+  } catch (e) { console.warn('[gas] minutes not charged', String((e as Error)?.message || e).slice(0, 160)); return null; }
 }
 
 type Row = typeof schema.browseSessions.$inferSelect;

@@ -1,17 +1,19 @@
 /**
  * Metering. Everything that costs something to run is priced in gas (GAS in plans.ts): a question 1, a Research
- * report 10, a Discover idea set 25, an app version 250, a browser action 1. Each plan includes gas every month,
- * Pay-As-You-Go gas is bought in blocks and never expires, and the two are spent in that order: the month's
- * allowance first, then the bought balance. One gauge in the app shows what is left and what each thing costs.
+ * report 10, a Discover idea set 25, an app version 250, a browser action 1. Since October 2026 the product is
+ * prepaid: an account starts with the signup gas, recharges when it runs out, and bought gas never expires. The
+ * monthly allowance survives for Enterprise contracts (set from the console) and for the subscriptions taken out
+ * before the plans were retired; it is spent before the balance. One gauge in the app shows what is left and what
+ * each thing costs.
  *
  * The checks here run before the work starts (the feature gates, then enough gas for the cheapest outcome) and the
  * charge lands when the work is done, with the real cost (a browsing answer costs its question plus its actions).
- * Admins skip the counted limits but not the feature gates, so a demo of the Free plan behaves like Free. The
- * messages name the plan, the amount and the reset, never a provider or a cost in dollars.
+ * Admins skip the counted limits but not the feature gates, so a demo of the Free state behaves like it. The
+ * messages name the amount and say "recharge", never a provider or a cost in dollars.
  */
 import { and, eq, sql } from 'drizzle-orm';
 import { db, schema } from './db';
-import { planFor, statusGrants, nextPlan, capabilityPlanKey, GAS, PLANS, PAYG, gas as gasWord, type Plan } from './plans';
+import { planFor, statusGrants, capabilityPlanKey, GAS, PLANS, RECHARGE, gas as gasWord, type Plan } from './plans';
 import type { CurrentUser } from './session';
 import type { Allowance } from './db/schema';
 import { HttpError } from './http';
@@ -24,7 +26,7 @@ export function limitsFor(plan: Plan, allowance?: Allowance | null): Limits {
   return { gasPerMonth, raised: gasPerMonth !== plan.gasPerMonth };
 }
 
-/** The plan whose capabilities apply to this account (Professional while bought gas remains on a lower plan). */
+/** The plan whose capabilities apply to this account: the full feature set for everyone, Enterprise's own for Enterprise (an admin sees the plan they chose to demo). */
 export function capabilityPlan(user: Pick<CurrentUser, 'plan' | 'gasBalance' | 'admin' | 'effectivePlan'>): Plan {
   if (user.admin) return planFor(user.effectivePlan || user.plan);
   return PLANS[capabilityPlanKey(user.plan, user.gasBalance)];
@@ -72,20 +74,22 @@ export async function gasState(user: CurrentUser): Promise<GasState> {
   return { allowance: lim.gasPerMonth, used: u.month.gas, balance, planLeft, remaining: planLeft + balance, resetsAt: nextReset().getTime(), unlimited: !!user.admin };
 }
 
-/** Throws a 429 when the account cannot pay `cost` gas; returns the state otherwise. */
+/** Throws a 429 when the account cannot pay `cost` gas; returns the state otherwise. The message says what to do: recharge. */
 export async function assertGas(user: CurrentUser, cost: number, what: string): Promise<GasState> {
   const st = await gasState(user);
   if (st.unlimited || st.remaining >= cost) return st;
   const plan = planFor(user.plan);
   const active = subscriptionActive(user);
-  if (!active && st.remaining === 0 && plan.key !== 'free') throw new HttpError(402, 'Your subscription is not active. Update your payment method or resubscribe; Pay-As-You-Go gas also works any time.', 'subscription_inactive');
-  const up = nextPlan(active ? plan.key : 'free');
-  const more = `Gas refills on the 1st${up && !up.contactSales ? `; ${up.name} includes ${gasWord(up.gasPerMonth)} a month` : ''}, and Pay-As-You-Go gas (${gasWord(PAYG.gas)} a block) is available any time.`;
-  if (st.remaining <= 0) throw new HttpError(429, `You have used this month's ${gasWord(st.allowance)} on the ${active ? plan.name : 'Free'} plan. ${more}`, 'gas_limit');
-  throw new HttpError(429, `${what[0].toUpperCase() + what.slice(1)} costs ${gasWord(cost)} and you have ${gasWord(st.remaining)} left. ${more}`, 'gas_limit');
+  const recharge = `A recharge adds gas you can use right away ($${RECHARGE.minUsd} buys ${gasWord(RECHARGE.minUsd * RECHARGE.gasPerUsd)}), and it never expires.`;
+  if (!active && st.remaining === 0 && plan.key !== 'free') throw new HttpError(402, `Your subscription is not active, so its monthly gas is paused. ${recharge} You can also set the subscription right on the Account page.`, 'subscription_inactive');
+  if (st.remaining <= 0) {
+    if (st.allowance > 0) throw new HttpError(429, `You have used this month's ${gasWord(st.allowance)}. It refills on the 1st. ${recharge}`, 'gas_limit');
+    throw new HttpError(429, `You are out of gas. ${recharge}`, 'gas_limit');
+  }
+  throw new HttpError(429, `${what[0].toUpperCase() + what.slice(1)} costs ${gasWord(cost)} and you have ${gasWord(st.remaining)} left. ${recharge}`, 'gas_limit');
 }
 
-/** Whether this account may use a feature at all, whatever its gas; the message names the plan that includes it. */
+/** Whether this account may use a feature at all, whatever its gas. Every account has the full set since October 2026; the gate only closes for an admin demoing the Free state. */
 function assertFeature(ok: boolean, message: string) {
   if (!ok) throw new HttpError(402, message, 'upgrade_required');
 }
@@ -99,8 +103,8 @@ export function questionCost(mode: 'search' | 'research', tier: string): number 
 /** Before an answer: the tier and mode gates of the plan, then gas for the question itself. */
 export async function assertQuota(user: CurrentUser, mode: 'search' | 'research', tier: string) {
   const plan = capabilityPlan(user);
-  assertFeature(plan.tiers.includes(tier as never), `The ${tier === 'complex' ? 'Reasoning' : tier} model needs an Essentials plan or above.`);
-  assertFeature(mode !== 'research' || plan.key !== 'free', 'Research mode needs an Essentials plan or above.');
+  assertFeature(plan.tiers.includes(tier as never), `The ${tier === 'complex' ? 'Reasoning' : tier} model is part of every account with gas.`);
+  assertFeature(mode !== 'research' || plan.key !== 'free', 'Research mode is part of every account with gas.');
   const gas = await assertGas(user, questionCost(mode, tier), mode === 'research' ? 'a Research report' : 'a question');
   return { plan, gas };
 }
@@ -108,7 +112,7 @@ export async function assertQuota(user: CurrentUser, mode: 'search' | 'research'
 /** Before the Build studio writes a version: Discover on the plan, then 250 gas. */
 export async function assertBuildQuota(user: CurrentUser) {
   const plan = capabilityPlan(user);
-  assertFeature(plan.caps.discover === 'full', 'Building from Discover is part of the Professional and Enterprise plans, and of Pay-As-You-Go gas.');
+  assertFeature(plan.caps.discover === 'full', 'Building from Discover is part of every account with gas.');
   const gas = await assertGas(user, GAS.build, 'an app version');
   return { plan, gas };
 }
@@ -123,7 +127,7 @@ export async function assertIdeaQuota(user: CurrentUser) {
 /** Before the browser opens a site: the browser on the plan, then at least one action's gas. Returns how many actions the gas allows. */
 export async function assertBrowseQuota(user: CurrentUser) {
   const plan = capabilityPlan(user);
-  assertFeature(plan.caps.browser === 'full', 'Sending Ricorsa to a website is part of the Professional and Enterprise plans, and of Pay-As-You-Go gas.');
+  assertFeature(plan.caps.browser === 'full', 'Sending Ricorsa to a website is part of every account with gas.');
   const gas = await assertGas(user, GAS.browserAction, 'a browser action');
   return { plan, gas, remaining: gas.unlimited ? Number.POSITIVE_INFINITY : Math.floor(gas.remaining / GAS.browserAction) };
 }
@@ -155,16 +159,28 @@ export async function chargeGas(user: CurrentUser, cost: number): Promise<GasRec
 }
 
 /**
- * Credit bought gas to the account (a captured PayPal order or a succeeded card payment), once per order. Returns the
- * new balance, or null when the order was already credited.
+ * Credit gas to the account (a captured PayPal order, a succeeded card payment, an automatic recharge or the signup
+ * grant), once per order id. Returns the new balance, or null when the order was already credited.
  */
-export async function creditGas(userId: string, orderId: string, usdCents: number, amount: number, provider: 'paypal' | 'finix' = 'paypal'): Promise<number | null> {
+export async function creditGas(userId: string, orderId: string, usdCents: number, amount: number, provider: 'paypal' | 'finix' | 'ricorsa' = 'paypal', kind: 'recharge' | 'auto' | 'welcome' = 'recharge', agreementVersion: string | null = null): Promise<number | null> {
   const d = db();
   const dup = await d.select({ id: schema.gasPurchases.id }).from(schema.gasPurchases).where(eq(schema.gasPurchases.orderId, orderId)).limit(1);
   if (dup[0]) return null;
-  await d.insert(schema.gasPurchases).values({ id: crypto.randomUUID().replace(/-/g, '').slice(0, 20), userId, orderId, usdCents, gas: amount, status: 'completed', provider });
+  await d.insert(schema.gasPurchases).values({ id: crypto.randomUUID().replace(/-/g, '').slice(0, 20), userId, orderId, usdCents, gas: amount, status: 'completed', provider, kind, agreementVersion });
   const rows = await d.update(schema.users).set({ gasBalance: sql`${schema.users.gasBalance} + ${amount}` }).where(eq(schema.users.id, userId)).returning({ gasBalance: schema.users.gasBalance });
   return rows[0]?.gasBalance ?? amount;
+}
+
+/**
+ * The signup gas, granted exactly once per account: the first time an account is seen without `welcomeGasAt`. A
+ * claim on the row comes first, so two requests arriving together grant it once; accounts from before October
+ * 2026 get it the first time they come back.
+ */
+export async function grantWelcomeGas(userId: string): Promise<number | null> {
+  const d = db();
+  const claimed = await d.update(schema.users).set({ welcomeGasAt: new Date() }).where(and(eq(schema.users.id, userId), sql`${schema.users.welcomeGasAt} is null`)).returning({ id: schema.users.id });
+  if (!claimed.length) return null;
+  return creditGas(userId, `welcome:${userId}`, 0, RECHARGE.signupGas, 'ricorsa', 'welcome');
 }
 
 export async function recordUsage(userId: string, delta: { questions?: number; research?: number; tokensIn?: number; tokensOut?: number; searches?: number; costMicros?: number; builds?: number; ideas?: number; browserActions?: number; gas?: number }) {

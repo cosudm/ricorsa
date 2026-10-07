@@ -4,7 +4,7 @@ import { finixProvisioned, finixWebhookSecrets } from '@/lib/finix-setup';
 import { verifyWebhookSignature, getSubscription, getTransfer, finixConfigured } from '@/lib/finix';
 import { applyFinixSubscription } from '@/lib/billing';
 import { creditGas } from '@/lib/usage';
-import { PAYG } from '@/lib/plans';
+import { PAYG, RECHARGE, gasForUsd } from '@/lib/plans';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,10 +57,13 @@ export async function POST(req: Request) {
         const transfer = await getTransfer(item.id);
         const t = transfer.tags || tags;
         if (String(transfer.state || '').toUpperCase() !== 'SUCCEEDED' || t.kind !== 'gas' || !t.ricorsa_user) continue;
+        // The gas is on the transfer's tags (a recharge or an automatic one); older transfers carried $100 blocks.
         const blocks = Math.max(1, Math.min(10, Number(t.blocks) || 1));
-        const amount = Number(t.gas) || PAYG.gas * blocks;
-        const credited = await creditGas(t.ricorsa_user, `finix:${transfer.id}`, transfer.amount || PAYG.usd * 100 * blocks, amount, 'finix');
-        if (credited !== null) console.log('[finix] gas credited by webhook', JSON.stringify({ user: t.ricorsa_user, transfer: transfer.id, blocks, gas: amount }));
+        const usdCents = transfer.amount || (t.usd ? Number(t.usd) * 100 : PAYG.usd * 100 * blocks);
+        const amount = Number(t.gas) || gasForUsd(Math.round(usdCents / 100));
+        const kind = t.recharge === 'auto' ? 'auto' : 'recharge';
+        const credited = await creditGas(t.ricorsa_user, `finix:${transfer.id}`, usdCents, amount, 'finix', kind, RECHARGE.agreementVersion);
+        if (credited !== null) console.log('[finix] gas credited by webhook', JSON.stringify({ user: t.ricorsa_user, transfer: transfer.id, kind, gas: amount }));
       }
     }
   } catch (e) {
