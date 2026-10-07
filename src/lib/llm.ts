@@ -168,14 +168,14 @@ export async function resolveModel(tier: Tier, exclude: string[] = []): Promise<
 const modelAside = new Map<string, { until: number; why: string }>();
 /** (provider, model) pairs that have answered in this process: known to be served whatever the provider's list says. */
 const modelSeen = new Set<string>();
-function markModelSeen(p: Provider, model: string): void { modelSeen.add(`${p.id}:${model}`); modelAside.delete(`${p.id}:${model}`); }
+export function markModelSeen(p: Provider, model: string): void { modelSeen.add(`${p.id}:${model}`); modelAside.delete(`${p.id}:${model}`); }
 /** Whether an admin configured this model id for any tier (so it is known to exist, listed or not). */
 function configuredAnywhere(model: string): boolean { return (['quick', 'default', 'complex', 'build', 'ideas'] as Tier[]).some(t => configured(t) === model); }
 export function setModelAside(p: Provider, model: string, why: string, ms: number): void {
   modelAside.set(`${p.id}:${model}`, { until: Date.now() + ms, why });
   console.warn('[provider]', p.id, 'sets aside', model, `for ${Math.round(ms / 60000)} min:`, why.slice(0, 160));
 }
-function modelAsideFor(p: Provider, model: string): { until: number; why: string } | null {
+export function modelAsideFor(p: Provider, model: string): { until: number; why: string } | null {
   const a = modelAside.get(`${p.id}:${model}`);
   return a && Date.now() < a.until ? a : null;
 }
@@ -341,11 +341,13 @@ export async function streamAnswer(opts: {
   onToolResult?: (call: ToolCall, result: { text: string; isError: boolean; structured: unknown; args: Record<string, unknown> }) => string | void;
   /** Told which model is writing, including when a fallback takes over mid-way; `fallback` says which model was wanted and why it could not be used. */
   onModel?: (model: string, fallback?: { wanted: string; why: string }) => void;
+  /** A model the person chose by name (src/lib/models.ts), already resolved to the provider that serves it, with the same model on OpenRouter as the backstop when there is one; when it fails before a word is written the backstop is tried, then the tier's own model takes over, and `onModel` says so. */
+  named?: { provider: Provider; model: string; backstop?: { provider: Provider; model: string } | null } | null;
 }): Promise<StreamResult> {
-  if (mockMode()) return mockStream(opts, modelFor(opts.tier));
-  let model = await resolveModel(opts.tier);
-  let provider = requireProvider(model, opts.tier);
-  const wanted = configured(opts.tier);
+  if (mockMode()) return mockStream(opts, opts.named?.model || modelFor(opts.tier));
+  let model = opts.named ? opts.named.model : await resolveModel(opts.tier);
+  let provider = opts.named ? opts.named.provider : requireProvider(model, opts.tier);
+  const wanted = opts.named ? opts.named.model : configured(opts.tier);
   opts.onModel?.(model, model !== wanted ? { wanted, why: whyNot(wanted, opts.tier) } : undefined);
   const systemText = opts.system.map(b => b.text).join('\n\n');
   const convo: ChatMessage[] = [{ role: 'system', content: systemText }, ...opts.messages.map(m => ({ role: m.role, content: m.content }))];
@@ -359,8 +361,8 @@ export async function streamAnswer(opts: {
 
   let retriedModel = false; let reasoning = reasoningFor(opts.tier, model); let effort = effortFor(opts.tier, model); let noPartial = provider.id !== 'moonshot'; let temperature = temperatureFor(model, opts.temperature); let maxTokens = opts.maxTokens; let overloadRetries = 0;
   let streamUsage = true; let maxTokensParam: 'max_tokens' | 'max_completion_tokens' = 'max_tokens';
-  const switchTo = (next: string, fallback?: { wanted: string; why: string }) => {
-    model = next; provider = requireProvider(next, opts.tier); tried.push(next);
+  const switchTo = (next: string, fallback?: { wanted: string; why: string }, to?: Provider) => {
+    model = next; provider = to || requireProvider(next, opts.tier); tried.push(next);
     reasoning = reasoningFor(opts.tier, next); effort = effortFor(opts.tier, next); temperature = temperatureFor(next, opts.temperature); noPartial = noPartial || provider.id !== 'moonshot'; maxTokens = opts.maxTokens; overloadRetries = 0; streamUsage = true; maxTokensParam = 'max_tokens';
     opts.onModel?.(next, fallback);
   };
@@ -399,8 +401,14 @@ export async function streamAnswer(opts: {
       if (e.status === 401 || e.status === 402 || e.status === 403 || (e.status === 400 && /credit|billing|balance|quota/i.test(msg))) markProviderDown(provider, `HTTP ${e.status}: ${msg.slice(0, 120)}`);
       // An id this account cannot use: set the pair aside for a while and refresh the provider's list once so the next pick is a listed model.
       if (e.status === 404) { setModelAside(provider, model, msg, ASIDE_NOT_FOUND_MS); if (!retriedModel) { retriedModel = true; await listProviderModels(provider, true); } }
-      // Anything the provider refuses before a word is written: hand the tier to the next candidate so the person still gets a result.
+      // Anything the provider refuses before a word is written: the named model's backstop first (the same model through OpenRouter), then the tier's next candidate, so the person still gets a result.
       if (out.length === 0 && tried.length <= MAX_SWITCHES) {
+        const bs = opts.named?.backstop;
+        if (bs && provider.id !== bs.provider.id && !tried.includes(bs.model) && providerUsable(bs.provider) && !modelAsideFor(bs.provider, bs.model)) {
+          const why = `HTTP ${e.status}: ${msg.slice(0, 160)}`;
+          console.warn('[provider]', provider.id, 'failed, backstop', model, '->', bs.provider.id, bs.model, why);
+          switchTo(bs.model, undefined, bs.provider); continue;
+        }
         const next = await resolveModel(opts.tier, tried); const np = providerFor(next, opts.tier);
         if (next !== model && np && providerUsable(np)) {
           const why = `HTTP ${e.status}: ${msg.slice(0, 160)}`;

@@ -71,7 +71,7 @@ export function validRechargeUsd(usd: unknown): usd is number { return typeof us
 export const GAS = {
   /** A Search-mode question on the Fast or Best model. */
   question: 1,
-  /** A question on the Reasoning model. */
+  /** A question on a premium model (the deep models: Claude Fable, GPT, Gemini Pro, Grok); Auto and the standard models cost `question`. */
   reasoning: 3,
   /** A Research report. */
   research: 10,
@@ -89,7 +89,7 @@ export const GAS = {
 export type GasKind = keyof typeof GAS;
 /** What each kind is called on the gauge and in the receipts under an answer. */
 export const GAS_LABELS: Record<GasKind, string> = {
-  question: 'Question (Fast or Best)', reasoning: 'Question on the Reasoning model', research: 'Research report', browserAction: 'Browser action', takeoverMinute: 'Minute in control of the browser', ideaSet: 'Discover idea set', build: 'App version (Build studio)', appQuestion: 'Question from a built app',
+  question: 'Question (Auto or a standard model)', reasoning: 'Question on a premium model', research: 'Research report', browserAction: 'Browser action', takeoverMinute: 'Minute in control of the browser', ideaSet: 'Discover idea set', build: 'App version (Build studio)', appQuestion: 'Question from a built app',
 };
 /** The $100 block of gas, kept for older clients and the console's copy (a recharge of $100 at the current rate). */
 export const PAYG = { usd: 100, gas: 4000 } as const;

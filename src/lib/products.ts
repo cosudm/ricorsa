@@ -41,7 +41,7 @@ export const PRODUCTS: Product[] = [
     points: [
       { title: 'Several searches', text: 'The question is broken into searches. Each one is shown as it runs.' },
       { title: 'Checkable', text: 'Every claim has a citation that opens the page. Send the report to someone who will check it.' },
-      { title: 'Rewrites', text: 'Ask for a shorter version, a longer one, or the Reasoning model. Sources stay in the thread.' },
+      { title: 'Rewrites', text: 'Ask for a shorter version, a longer one, or a deeper model. Sources stay in the thread.' },
       { title: 'Priced in gas', text: 'A report costs 10 gas, where a question costs 1; the gauge in the app shows what is left, and a recharge adds more whenever you need it.' },
     ],
     shot: 'research', shotAlt: 'A Research mode report with a summary, sections and numbered sources',

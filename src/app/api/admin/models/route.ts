@@ -4,6 +4,7 @@ import { handle, json, readJson, fail } from '@/lib/http';
 import { resolveModel, modelFor, providerOf, anthropicStatus, probeAnthropic, type Tier } from '@/lib/llm';
 import { loadProviders, listProviderModels, probeProvider, providerForClient, providerUsable, modelSettings, saveModelSettings, type ModelSettings, type TierChoice } from '@/lib/providers';
 import { browserRunAvailable } from '@/lib/build-run';
+import { catalogForAdmin, refreshModelHealth } from '@/lib/models';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,7 +15,9 @@ const TIERS: Tier[] = ['quick', 'default', 'complex', 'build', 'ideas'];
  * account, or none), the models each one lists, the admin's choice per tier and what each tier resolves to
  * right now. Model lists are fetched for every provider with a key (cached ten minutes). Add ?probe=1 to also
  * send one tiny message to each configured provider, so the exact answer (accepted, key rejected, no credit) is
- * on record; an accepted probe lifts a set-aside, so `tiers` reflects the state after the probes.
+ * on record; an accepted probe lifts a set-aside, so `tiers` reflects the state after the probes. `catalog` is the
+ * list of named models the composer offers, each with where it is served, whether it answered its last probe and for
+ * how long it has been down; ?probe=1 re-probes them all.
  */
 export const GET = handle(async (req: Request) => {
   const user = await currentUser();
@@ -34,7 +37,9 @@ export const GET = handle(async (req: Request) => {
   // The Anthropic block stays for the health banner and older screens; the probe is the one made above when asked for.
   const anthropic = { ...anthropicStatus(), probe: probeAll ? probes.anthropic || null : url.searchParams.get('probe') === 'anthropic' ? await probeAnthropic() : null };
   const providers = list.map(providerForClient).sort((a, b) => Number(b.configured) - Number(a.configured) || a.name.localeCompare(b.name));
-  return json({ providers, probes, tiers, settings, anthropic, available: list.find(p => p.id === 'moonshot')?.models || [], search: !!process.env.BRAVE_API_KEY, browserRun: browserRunAvailable() });
+  if (probeAll) await refreshModelHealth(true);
+  const catalog = await catalogForAdmin();
+  return json({ providers, probes, tiers, settings, anthropic, catalog, available: list.find(p => p.id === 'moonshot')?.models || [], search: !!process.env.BRAVE_API_KEY, browserRun: browserRunAvailable() });
 });
 
 const Choice = z.object({ provider: z.string().regex(/^[a-z][a-z0-9_-]{1,39}$/), model: z.string().trim().min(1).max(160) }).nullable();

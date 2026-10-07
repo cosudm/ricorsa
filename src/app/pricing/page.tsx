@@ -14,8 +14,8 @@ export const dynamic = 'force-dynamic';
 
 /** The price list as the page prints it: each metered thing and what it costs in gas. */
 const COST_ROWS: Array<[string, number]> = [
-  ['A question (Fast or Best model)', GAS.question],
-  ['A question on the Reasoning model', GAS.reasoning],
+  ['A question on Auto or a standard model', GAS.question],
+  ['A question on a premium model (Claude Fable, GPT, Gemini Pro, Grok)', GAS.reasoning],
   ['A Research report', GAS.research],
   ['A Discover idea set (a set you have seen is free)', GAS.ideaSet],
   ['An app version in the Build studio, checked and repaired', GAS.build],

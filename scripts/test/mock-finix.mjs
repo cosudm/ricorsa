@@ -18,12 +18,21 @@
  */
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const FINIX_PORT = Number(process.env.MOCK_FINIX_PORT || 3993);
 const PAYPAL_PORT = Number(process.env.MOCK_PAYPAL_PORT || 3992);
-const SIGNING_KEY = 'whsec_' + crypto.randomBytes(16).toString('hex');
+// The webhook the app registers (and the signing key it was given) outlive a restart of this process, as they would at Finix,
+// so a dev server that already provisioned itself keeps working against a fresh stand-in.
+const KEEP = path.join(os.tmpdir(), `mock-finix-${FINIX_PORT}.json`);
+const kept = (() => { try { return JSON.parse(fs.readFileSync(KEEP, 'utf8')); } catch { return null; } })();
+const SIGNING_KEY = kept?.signingKey || ('whsec_' + crypto.randomBytes(16).toString('hex'));
+const keep = () => { try { fs.writeFileSync(KEEP, JSON.stringify({ signingKey: SIGNING_KEY, webhook: state.webhook })); } catch { /* best effort */ } };
 
 const state = fresh();
+if (kept?.webhook) state.webhook = kept.webhook;
 function fresh() {
   return { identities: [], instruments: new Map(), transfers: [], byIdempotency: new Map(), webhook: null, deliveries: [], orders: new Map(), requests: [] };
 }
@@ -93,7 +102,7 @@ const finix = http.createServer(async (req, res) => {
   if (req.method === 'POST' && path === '/webhooks') {
     const bearer = body?.authentication?.bearer?.token;
     if (!body.url || !bearer) return finixError(res, 400, 'url and authentication.bearer.token are required', 'INVALID_FIELD');
-    state.webhook = { id: id('WH'), url: body.url, bearer, enabled_events: body.enabled_events || [] };
+    state.webhook = { id: id('WH'), url: body.url, bearer, enabled_events: body.enabled_events || [] }; keep();
     return send(res, 201, { id: state.webhook.id, url: body.url, enabled: true, secret_signing_key: SIGNING_KEY, enabled_events: state.webhook.enabled_events, created_at: now() });
   }
   if (req.method === 'POST' && path === '/identities') {

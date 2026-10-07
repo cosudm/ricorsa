@@ -10,6 +10,7 @@ import { searchPlan, planQueries, retrieve, readPages, sourcesBlock, type Source
 import { loadGraph, saveGraph, mergeLearned, graphPromptBlock } from '@/lib/graph';
 import { buildMessages, dynamicSystem, systemBlocks } from '@/lib/prompt';
 import { streamAnswer, describeProviderError } from '@/lib/llm';
+import { catalogEntry, resolveNamed, autoTier, nameForId, displayName, AUTO_ID, type NamedPick } from '@/lib/models';
 import { parseStream } from '@/lib/parse';
 import { estimateCostMicros } from '@/lib/plans';
 import { db, schema } from '@/lib/db';
@@ -34,6 +35,8 @@ const Body = z.object({
   question: z.string().trim().min(1).max(4000).optional(),
   mode: z.enum(['search', 'research']).default('search'),
   tier: z.enum(['quick', 'default', 'complex']).default('default'),
+  /** The model chosen by name ('auto' for Ricorsa's choice); when present the tier is Ricorsa's to decide. */
+  model: z.string().max(40).optional(),
   focus: z.enum(['web', 'academic', 'technical', 'legal', 'writing', 'math', 'code']).default('web'),
   length: z.enum(['concise', 'balanced', 'detailed']).nullable().optional(),
   spaceId: z.string().nullable().optional(),
@@ -62,6 +65,7 @@ export async function POST(req: Request) {
   // Resolve thread + turn
   let thread, turns: Turn[], turn: Turn, history: Turn[];
   let browseCap = 0;
+  let named: NamedPick | null = null; let priceTier: Turn['tier'] = 'default';
   try {
     if (body.rewrite) {
       if (!body.threadId) return fail(400, 'threadId required for a rewrite');
@@ -92,7 +96,22 @@ export async function POST(req: Request) {
       turn.lineage = await chain(prev, { threadId: thread.id, turnId: turn.id, question: turn.q, mode: turn.mode, at: turn.createdAt });
       turns.push(turn);
     }
-    await assertQuota(user, turn.mode, turn.tier);
+    // The model: a named one from the catalog when the person chose it (resolved to the provider serving it now; its tier
+    // and price class follow), else Auto, which picks the tier for this question and costs a standard question whatever it
+    // picks. Research runs its own pipeline on Auto. A rewrite keeps the turn's choice.
+    const requested = body.model !== undefined ? body.model : (turn.pick ?? null);
+    if (requested !== null) {
+      const entry = requested !== AUTO_ID ? catalogEntry(requested) : null;
+      turn.pick = entry ? entry.id : AUTO_ID; turn.modelName = null; turn.fallback = null;
+      if (entry && turn.mode !== 'research') {
+        named = await resolveNamed(entry.id);
+        if (named) { turn.tier = entry.tier; turn.modelName = named.name; priceTier = entry.class === 'premium' ? 'complex' : 'default'; }
+        else turn.fallback = { wanted: displayName(entry, entry.fallbackId) };
+      }
+      if (!named) { turn.tier = body.rewrite?.how === 'complex' ? 'complex' : autoTier(turn.q, turn.mode, turn.focus, turn.attachments?.length || 0); priceTier = 'default'; }
+      if (turn.browse && turn.tier === 'quick') turn.tier = 'default';
+    } else priceTier = turn.tier;
+    await assertQuota(user, turn.mode, priceTier);
     if (turn.browse) {
       const q = await assertBrowseQuota(user);
       browseCap = Math.max(1, Math.min(MAX_ACTIONS_PER_ANSWER, Number.isFinite(q.remaining) ? q.remaining : MAX_ACTIONS_PER_ANSWER));
@@ -128,7 +147,7 @@ export async function POST(req: Request) {
       const finish = async () => { await leavePage(); try { await saveTurns(th, turns); } catch (e) { console.error('save failed', e); } try { controller.close(); } catch {} };
       // The gauge: what this answer cost (the question, plus one gas per browser action) and what is left afterwards.
       const charge = async (browserActions: number, counted: boolean): Promise<GasReceipt | null> => {
-        const cost = (counted ? questionCost(turn.mode, turn.tier) : 0) + GAS.browserAction * browserActions;
+        const cost = (counted ? questionCost(turn.mode, priceTier) : 0) + GAS.browserAction * browserActions;
         if (!cost) return null;
         try { const r = await chargeGas(user, cost); turn.gas = (turn.gas || 0) + r.cost; return r; } catch (e) { console.warn('[gas] not charged', String((e as Error)?.message || e).slice(0, 160)); return null; }
       };
@@ -242,6 +261,8 @@ export async function POST(req: Request) {
         send('status', { text: browse ? 'Opening the browser' : turn.mode === 'research' ? 'Working through the sources' : attached.length ? 'Reading the files and writing' : 'Writing' });
         const result = await streamAnswer({
           tier: turn.tier, system, messages, signal: ctl.signal, search,
+          named: named ? { provider: named.provider, model: named.model, backstop: named.backstop } : null,
+          onModel: (m, fb) => { turn.model = m; if (fb) turn.fallback = { wanted: named && fb.wanted === named.model ? named.name : nameForId(fb.wanted) }; turn.modelName = named || fb ? nameForId(m) : null; },
           mcp: mcp.map(m => ({ name: m.name, label: m.label, url: m.url, token: m.token, allowedTools: m.allowedTools, tools: m.tools })),
           local: browse ? [browse.toolSet()] : null,
           maxToolRounds: browse ? 64 : undefined,

@@ -267,10 +267,10 @@ async function main() {
   const dryMsg = dryJson?.error || (dryText.match(/"message":"([^"]+)"/) || [])[1] || '';
   check('with no gas a question is refused with a recharge sentence that names the price, not a provider or a plan', (dry.status === 429 || /gas_limit/.test(dryText)) && /out of gas/i.test(dryMsg) && /\$20 buys 800 gas/.test(dryMsg) && noProvider(dryMsg) && !/plan|trial|Essentials|Professional/i.test(dryMsg), `${dry.status} ${dryMsg || dryText.slice(0, 300)}`);
   sql('update users set gas_balance = 5 where id = ?', [USER]);
-  const low = await fetch(APP + '/api/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ category: 'Apps', refresh: true }) });
+  const low = await fetch(APP + '/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: 'A report, please', mode: 'research' }) });
   const lowText = await low.text(); let lowJson = null; try { lowJson = JSON.parse(lowText); } catch { /* sse */ }
   const lowMsg = lowJson?.error || (lowText.match(/"message":"([^"]+)"/) || [])[1] || '';
-  check('with 5 gas, a 25-gas idea set is refused: what it costs, what is left, how to recharge', /costs 25 gas and you have 5 gas left/.test(lowMsg) && /recharge/i.test(lowMsg) && noProvider(lowMsg), `${low.status} ${lowMsg || lowText.slice(0, 300)}`);
+  check('with 5 gas, a 10-gas Research report is refused: what it costs, what is left, how to recharge', /costs 10 gas and you have 5 gas left/i.test(lowMsg) && /recharge/i.test(lowMsg) && noProvider(lowMsg), `${low.status} ${lowMsg || lowText.slice(0, 300)}`);
 
   // ---- The pages ----
   // A fresh account with its welcome gas on record, so the Account page has a row to list.

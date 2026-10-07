@@ -103,7 +103,7 @@ export function questionCost(mode: 'search' | 'research', tier: string): number 
 /** Before an answer: the tier and mode gates of the plan, then gas for the question itself. */
 export async function assertQuota(user: CurrentUser, mode: 'search' | 'research', tier: string) {
   const plan = capabilityPlan(user);
-  assertFeature(plan.tiers.includes(tier as never), `The ${tier === 'complex' ? 'Reasoning' : tier} model is part of every account with gas.`);
+  assertFeature(plan.tiers.includes(tier as never), `A ${tier === 'complex' ? 'deeper' : tier === 'quick' ? 'fast' : 'standard'} model is part of every account with gas.`);
   assertFeature(mode !== 'research' || plan.key !== 'free', 'Research mode is part of every account with gas.');
   const gas = await assertGas(user, questionCost(mode, tier), mode === 'research' ? 'a Research report' : 'a question');
   return { plan, gas };

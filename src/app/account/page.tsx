@@ -71,7 +71,7 @@ export default async function Account() {
                   <div className="stat"><b>{gas.used.toLocaleString('en-US')}</b><span>spent this month</span></div>
                   {gas.allowance > 0 && <div className="stat"><b>{gas.balance.toLocaleString('en-US')}</b><span>bought and unspent</span></div>}
                 </div>
-                <p style={{ marginTop: 12 }}>What things cost: a question {GAS.question}, on the Reasoning model {GAS.reasoning}; a Research report {GAS.research}; a browser action or a minute in control {GAS.browserAction}; a Discover idea set {GAS.ideaSet}; an app version {GAS.build}. This month: {usage.month.questions} questions, {usage.month.research} reports, {usage.month.builds} versions, {usage.month.ideas} idea sets, {usage.month.browserActions} browser actions.</p>
+                <p style={{ marginTop: 12 }}>What things cost: a question {GAS.question}, on a premium model {GAS.reasoning}; a Research report {GAS.research}; a browser action or a minute in control {GAS.browserAction}; a Discover idea set {GAS.ideaSet}; an app version {GAS.build}. This month: {usage.month.questions} questions, {usage.month.research} reports, {usage.month.builds} versions, {usage.month.ideas} idea sets, {usage.month.browserActions} browser actions.</p>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><a className="btn primary" href="/pricing">Recharge</a><a className="btn" href="/pricing#costs">What gas buys</a></div>
               </>}
             </div>

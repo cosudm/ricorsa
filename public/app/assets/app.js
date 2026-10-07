@@ -113,7 +113,7 @@ const isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
 const raf = (fn) => { let queued = false; return () => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; fn(); }); }; };
 
 // ---------- State (loaded from the API) ----------
-const DEFAULT_SETTINGS = { mode: 'search', tier: 'default', focus: 'web', length: 'balanced' };
+const DEFAULT_SETTINGS = { mode: 'search', tier: 'default', model: 'auto', focus: 'web', length: 'balanced' };
 const state = {
   user: null, plan: null, usage: { today: 0, month: 0, research: 0 },
   threads: [],            // summaries: {id,title,spaceId,createdAt,updatedAt,turnCount,snippet}
@@ -149,7 +149,7 @@ function apiToast(e, fallback) {
 }
 async function bootstrap() {
   const me = await api('/api/me');
-  state.user = me.user; state.plan = me.plan; state.usage = me.usage; state.gas = me.gas || null;
+  state.user = me.user; state.plan = me.plan; state.usage = me.usage; state.gas = me.gas || null; state.models = me.models || { default: 'auto', list: [] };
   state.threads = me.threads; state.spaces = me.spaces; state.graph = me.graph; state.graphSize = me.graphSize || 0; state.geo = me.geo || { enabled: true, provider: 'osm' };
   state.settings = Object.assign({}, DEFAULT_SETTINGS, me.user.settings || {});
   state.ready = true;
@@ -184,11 +184,21 @@ const MODES = {
   search:   { label: 'Search',   icon: 'search', desc: 'Fast, direct answers with references' },
   research: { label: 'Research', icon: 'book',   desc: 'Deep, structured report, takes longer' },
 };
-const TIERS = {
-  default: { label: 'Best',      icon: 'sparkles', desc: 'Balanced speed and quality' },
-  quick:   { label: 'Fast',      icon: 'zap',      desc: 'Snappy replies for simple questions' },
-  complex: { label: 'Reasoning', icon: 'brain',    desc: 'Most capable; thinks longest' },
-};
+// ---------- Models: Auto, and the named models Ricorsa offers (the server lists the ones answering right now) ----------
+const AUTO_MODEL = { id: 'auto', name: 'Auto', maker: 'Ricorsa', role: 'auto', class: 'standard', gas: 1, blurb: 'Ricorsa picks the model for each question' };
+/** Auto first, then every named model the server says is available; the server supplies the keys, so the list is the company's offer. */
+function modelList() { return [AUTO_MODEL, ...((state.models && state.models.list) || [])]; }
+function modelById(id) { return modelList().find(m => m.id === id) || AUTO_MODEL; }
+function modelIcon(m) { return m.id === 'auto' ? 'sparkles' : m.role === 'fast' ? 'zap' : m.role === 'deep' ? 'brain' : m.role === 'code' ? 'code' : 'layers'; }
+/** The model a saved choice means: the id itself when it is still offered, the deep model for the old Reasoning setting, Auto otherwise. */
+function defaultModel() {
+  const s = state.settings || {};
+  if (s.model && s.model !== 'auto' && modelById(s.model).id === s.model) return s.model;
+  if (s.model === 'auto' || !s.tier) return 'auto';
+  return s.tier === 'complex' ? ((modelList().find(m => m.role === 'deep') || AUTO_MODEL).id) : 'auto';
+}
+/** The model that answers a kind of question, for the labels: Auto when Research runs (it has its own mix) or when nothing was chosen. */
+function modelForMode(mode, id) { return mode === 'research' ? AUTO_MODEL : modelById(id); }
 const FOCI = {
   web:      { label: 'Web',      icon: 'globe',      desc: 'General knowledge, any topic' },
   academic: { label: 'Academic', icon: 'graduation', desc: 'Scholarly framing and precise terms' },
@@ -348,7 +358,7 @@ async function viewerAsk(q) {
   if (!viewer || viewer !== v) return;
   const box = $('[data-va-turns]', v.el); const sub = $('[data-va-sub]', v.el); if (sub) sub.hidden = true;
   // The file rides along as this question's attachment, so the answer treats it as the primary material.
-  followUp(thread, q, { mode: 'search', tier: state.settings.tier, focus: state.settings.focus, attachments: [{ id: att.id, name: att.name, size: att.size || 0, chars: att.chars || 0 }] });
+  followUp(thread, q, { mode: 'search', model: defaultModel(), focus: state.settings.focus, attachments: [{ id: att.id, name: att.name, size: att.size || 0, chars: att.chars || 0 }] });
   const turn = thread.turns[thread.turns.length - 1];
   box.insertAdjacentHTML('beforeend', turnHtml(thread, turn));
   const sec = box.lastElementChild; sec.classList.add('va-turn'); paintTurn(sec, thread, turn); wireTurn(sec, thread, turn);
@@ -751,8 +761,8 @@ async function runConsoleAction(a, thread, btn) {
     if (verb === 'copy') { try { await navigator.clipboard.writeText(String(a.text || '')); toast('Copied'); } catch (e) { toast('Could not copy', 'bad'); } return; }
     if (verb === 'ask') {
       const text = String(a.text || '').trim(); if (!text) return;
-      if (thread) { if (state.runs.has(thread.id)) { toast('Wait for the current answer to finish'); return; } followUp(thread, text, { mode: 'search', tier: state.settings.tier, focus: 'web' }); }
-      else startThread(text, { mode: 'search', tier: state.settings.tier, focus: 'web' });
+      if (thread) { if (state.runs.has(thread.id)) { toast('Wait for the current answer to finish'); return; } followUp(thread, text, { mode: 'search', model: defaultModel(), focus: 'web' }); }
+      else startThread(text, { mode: 'search', model: defaultModel(), focus: 'web' });
       return;
     }
     if (verb === 'build') {
@@ -935,7 +945,7 @@ function applyParsed(turn) {
   if (p.learned) turn.learned = p.learned;
 }
 function makeTurn(q, o) {
-  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.browse && (o.tier || 'default') === 'quick' ? 'default' : (o.tier || 'default'), focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '', attachments: o.attachments || [], browse: !!o.browse, browser: null, resumeTurnId: o.resumeTurnId || null };
+  return { id: 'tmp-' + uid(), q, mode: o.mode || 'search', tier: o.tier || 'default', pick: o.model || defaultModel(), focus: o.focus || 'web', length: o.length || null, createdAt: Date.now(), status: 'pending', raw: '', sources: [], answer: '', related: [], learned: null, learnedMerged: false, truncated: false, tierApplied: null, error: null, statusText: '', attachments: o.attachments || [], browse: !!o.browse, browser: null, resumeTurnId: o.resumeTurnId || null };
 }
 /** Read an SSE response body and dispatch events. Resolves when the stream ends. */
 async function readSse(res, onEvent) {
@@ -961,7 +971,7 @@ async function runTurn(thread, turn, { rewrite } = {}) {
   const ctl = new AbortController();
   state.runs.set(thread.id, ctl);
   liveRender(thread, turn);
-  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, tier: turn.tier, focus: turn.focus, length: turn.length || state.settings.length, attachments: (turn.attachments || []).map(a => a.id).filter(Boolean), browse: !!turn.browse, resumeTurnId: turn.browse && turn.resumeTurnId ? turn.resumeTurnId : undefined };
+  const body = rewrite ? { threadId: thread.id, rewrite } : { threadId: thread.id, question: turn.q, mode: turn.mode, model: turn.pick || defaultModel(), focus: turn.focus, length: turn.length || state.settings.length, attachments: (turn.attachments || []).map(a => a.id).filter(Boolean), browse: !!turn.browse, resumeTurnId: turn.browse && turn.resumeTurnId ? turn.resumeTurnId : undefined };
   try {
     const res = await fetch('/api/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
     if (res.status === 401) { location.href = '/auth/login?returnTo=' + encodeURIComponent('/app#/thread/' + thread.id); return; }
@@ -1052,7 +1062,7 @@ function learnedSummary(L) {
 
 // ---------- Composer ----------
 function createComposer(o) {
-  const c = { mode: o.mode || state.settings.mode, tier: o.tier || state.settings.tier, focus: o.focus || state.settings.focus, files: [], browse: !!o.browse, resume: null };
+  const c = { mode: o.mode || state.settings.mode, model: (o.model && modelById(o.model).id === o.model) ? o.model : defaultModel(), focus: o.focus || state.settings.focus, files: [], browse: !!o.browse, resume: null };
   const el = document.createElement('div');
   el.className = 'composer ' + (o.variant === 'compact' ? 'compact' : 'hero');
   el.innerHTML = `
@@ -1076,8 +1086,9 @@ function createComposer(o) {
   const ta = $('textarea', el), send = $('[data-send]', el), attachBtn = $('[data-attach-btn]', el), attachRow = $('[data-attach]', el);
   const paintChips = () => {
     $$('[data-mode]', el).forEach(b => { const on = b.dataset.mode === c.mode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); });
-    $('[data-tier]', el).innerHTML = icon(TIERS[c.tier].icon, 15) + `<span class="lbl">${TIERS[c.tier].label}</span>` + icon('chevron', 13, 'class="caret"');
-    $('[data-tier]', el).title = `Model: ${TIERS[c.tier].label}. ${TIERS[c.tier].desc}. Click to change.`;
+    const mdl = modelForMode(c.mode, c.model);
+    $('[data-tier]', el).innerHTML = icon(modelIcon(mdl), 15) + `<span class="lbl">${esc(mdl.name)}</span>` + icon('chevron', 13, 'class="caret"');
+    $('[data-tier]', el).title = c.mode === 'research' ? 'Model: Auto. Research runs on Ricorsa\u2019s own mix of models. Click to see the models.' : `Model: ${mdl.name}. ${mdl.blurb}. ${mdl.id === 'auto' ? `Costs ${fmtGas(gasCosts().question)} a question.` : `${fmtGas(mdl.gas)} a question.`} Click to change.`;
     $('[data-focus]', el).title = `Focus: ${FOCI[c.focus].label}. ${FOCI[c.focus].desc}. Click to change.`;
     $('[data-focus]', el).innerHTML = icon(FOCI[c.focus].icon, 15) + (c.focus !== 'web' ? `<span class="lbl">${FOCI[c.focus].label}</span>` : '') + icon('chevron', 13, 'class="caret"');
     const bb = $('[data-browse]', el); const allowed = canBrowse();
@@ -1086,9 +1097,9 @@ function createComposer(o) {
     bb.title = allowed ? (c.browse ? 'Ricorsa will open the site you name and work it while you watch. Click to turn off.' : 'Open the site: Ricorsa opens the website you name in its own browser and works it for you while you watch') : 'Open the site: on for every account with gas. Click to see what it does.';
     ta.placeholder = c.browse ? 'Name the site and say what to do there…' : (o.placeholder || 'Ask anything…');
     // What this question will cost, before it is sent; the browser's actions add theirs as they happen.
-    const cc = $('[data-cost]', el); const cost = questionGasCost(c.mode, c.tier); const per = gasCosts().browserAction;
+    const cc = $('[data-cost]', el); const cost = questionGasCost(c.mode, c.model); const per = gasCosts().browserAction;
     cc.innerHTML = icon('gauge', 13) + `<span>${cost}${c.browse ? `+` : ''}</span>`;
-    cc.title = `${c.mode === 'research' ? 'A Research report' : c.tier === 'complex' ? 'A question on the Reasoning model' : 'This question'} costs ${fmtGas(cost)}${c.browse ? `, plus ${fmtGas(per)} for each action Ricorsa takes in the browser` : ''}.${gasUnlimited() ? '' : ` You have ${fmtGas(state.gas.remaining || 0)} left.`} Click for the full price list.`;
+    cc.title = `${c.mode === 'research' ? 'A Research report' : mdl.class === 'premium' ? `A question on ${mdl.name}, a premium model,` : 'This question'} costs ${fmtGas(cost)}${c.browse ? `, plus ${fmtGas(per)} for each action Ricorsa takes in the browser` : ''}.${gasUnlimited() ? '' : ` You have ${fmtGas(state.gas.remaining || 0)} left.`} Click for the full price list.`;
     cc.classList.toggle('short', !gasUnlimited() && (state.gas.remaining || 0) < cost);
   };
   const autosize = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; if (o.variant === 'compact') el.classList.toggle('multiline', ta.scrollHeight > 44 || c.files.length > 0); };
@@ -1142,21 +1153,24 @@ function createComposer(o) {
     c.files = [];
     ta.value = ''; autosize(); paintAttach(); paintSend(); closePop();
     const resumeTurnId = c.browse && c.resume ? c.resume : null; c.resume = null;
-    o.onSubmit({ text, mode: c.mode, tier: c.tier, focus: c.focus, attachments, browse: c.browse, resumeTurnId });
+    o.onSubmit({ text, mode: c.mode, model: c.model, focus: c.focus, attachments, browse: c.browse, resumeTurnId });
   };
   ta.addEventListener('input', () => { autosize(); paintSend(); if (o.onInput) o.onInput(ta.value); });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
   send.addEventListener('click', submit);
-  $$('[data-mode]', el).forEach(b => b.addEventListener('click', () => { c.mode = b.dataset.mode; if (c.mode === 'research' && c.tier === 'quick') c.tier = 'default'; paintChips(); ta.focus(); }));
+  $$('[data-mode]', el).forEach(b => b.addEventListener('click', () => { c.mode = b.dataset.mode; paintChips(); ta.focus(); }));
   $('[data-browse]', el).addEventListener('click', () => {
     if (!canBrowse()) { browseUpgradeModal(); return; }
-    c.browse = !c.browse; if (c.browse && c.tier === 'quick') c.tier = 'default'; paintChips(); ta.focus();
+    c.browse = !c.browse; paintChips(); ta.focus();
     if (c.browse && !ta.value.trim()) toast('Name the site and say what Ricorsa should do there', 'ok');
   });
   $('[data-tier]', el).addEventListener('click', (e) => {
     const btn = e.currentTarget;
-    openPop(btn, `<div class="pop-h">Model</div>` + menuItems(Object.entries(TIERS).map(([k, t]) => ({ key: k, label: t.label, desc: t.desc, icon: t.icon })), c.tier), {
-      align: 'right', onMount: pop => $$('[data-key]', pop).forEach(b => b.addEventListener('click', () => { c.tier = b.dataset.key; paintChips(); closePop(); ta.focus(); }))
+    const list = modelList();
+    const items = list.map(m => ({ key: m.id, label: m.name, desc: m.id === 'auto' ? `${m.blurb} · ${fmtGas(gasCosts().question)} a question` : `${m.blurb} · ${m.maker} · ${fmtGas(m.gas)}`, icon: modelIcon(m) }));
+    const note = c.mode === 'research' ? `<div class="pop-note">Research runs on Ricorsa\u2019s own mix of models; the choice applies to Search answers.</div>` : list.length === 1 ? `<div class="pop-note">More models appear here as they come online.</div>` : '';
+    openPop(btn, `<div class="pop-h">Model</div>` + note + menuItems(items, c.mode === 'research' ? 'auto' : c.model), {
+      align: 'right', onMount: pop => $$('[data-key]', pop).forEach(b => b.addEventListener('click', () => { c.model = b.dataset.key; paintChips(); closePop(); ta.focus(); }))
     });
   });
   $('[data-focus]', el).addEventListener('click', (e) => {
@@ -1210,11 +1224,11 @@ function gasCosts() { return (state.gas && state.gas.costs) || GAS_DEFAULT_COSTS
 function fmtGas(n) { return `${Math.round(n).toLocaleString('en-US')} gas`; }
 function gasUnlimited() { return !state.gas || state.gas.unlimited || state.gas.remaining === null || state.gas.remaining === undefined; }
 /** What a question will cost before it is sent: its mode and model, plus a note for the browser's actions. */
-function questionGasCost(mode, tier) { const c = gasCosts(); return mode === 'research' ? c.research : tier === 'complex' ? c.reasoning : c.question; }
+function questionGasCost(mode, modelId) { const c = gasCosts(); if (mode === 'research') return c.research; const m = modelById(modelId); return m.class === 'premium' ? c.reasoning : c.question; }
 /** Refill and reset copy: "refills March 1". */
 function gasResetLabel() { const g = state.gas; if (!g || !g.resetsAt) return ''; return new Date(g.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }); }
 /** Fresh numbers from the server (after a limit, a purchase, or a change of plan). */
-async function refreshGas() { try { const me = await api('/api/me'); state.gas = me.gas || state.gas; state.plan = me.plan || state.plan; state.usage = me.usage || state.usage; renderGasGauge(); } catch {} }
+async function refreshGas() { try { const me = await api('/api/me'); state.gas = me.gas || state.gas; state.plan = me.plan || state.plan; state.usage = me.usage || state.usage; if (me.models) state.models = me.models; renderGasGauge(); } catch {} }
 /**
  * A receipt from the server after work was charged: the gauge moves to the new remaining figure, the row pulses, and the
  * month's spent figure follows (the allowance is spent before bought gas, so the split is kept straight here too).
@@ -1289,7 +1303,7 @@ function openGasModal() {
   const g = state.gas || { allowance: 0, used: 0, balance: 0, planLeft: 0, remaining: 0, unlimited: false, costs: GAS_DEFAULT_COSTS, labels: {} };
   const costs = g.costs || GAS_DEFAULT_COSTS; const labels = g.labels || {};
   const order = ['question', 'reasoning', 'research', 'browserAction', 'takeoverMinute', 'ideaSet', 'build', 'appQuestion'];
-  const names = { question: 'Question (Fast or Best model)', reasoning: 'Question on the Reasoning model', research: 'Research report', browserAction: 'Browser action (an open, a click, a typed field, a scroll)', takeoverMinute: 'Minute in control of the browser', ideaSet: 'Discover idea set', build: 'App version in the Build studio', appQuestion: 'Question asked by one of your built apps' };
+  const names = { question: 'Question (Auto or a standard model)', reasoning: 'Question on a premium model', research: 'Research report', browserAction: 'Browser action (an open, a click, a typed field, a scroll)', takeoverMinute: 'Minute in control of the browser', ideaSet: 'Discover idea set', build: 'App version in the Build studio', appQuestion: 'Question asked by one of your built apps' };
   const unlimited = gasUnlimited();
   const allowance = g.allowance || 0, planLeft = Math.max(0, g.planLeft || 0), balance = Math.max(0, g.balance || 0), remaining = Math.max(0, g.remaining || 0);
   const pct = allowance > 0 ? Math.round((planLeft / allowance) * 100) : Math.max(0, Math.min(100, Math.round((remaining / gasReference(g)) * 100)));
@@ -1364,7 +1378,7 @@ function renderHome() {
   const comp = createComposer({
     variant: 'hero', initial: state.composerDraft,
     onInput: v => { state.composerDraft = v; },
-    onSubmit: ({ text, mode, tier, focus, attachments, browse }) => { state.composerDraft = ''; startThread(text, { mode, tier, focus, attachments, browse }); }
+    onSubmit: ({ text, mode, model, focus, attachments, browse }) => { state.composerDraft = ''; startThread(text, { mode, model, focus, attachments, browse }); }
   });
   $('[data-composer]', main).appendChild(comp);
   const wireTiles = () => $$('[data-tile]', main).forEach(b => b.addEventListener('click', () => comp._composer.set(state.prompts[+b.dataset.tile].q)));
@@ -1411,8 +1425,8 @@ function renderThread(id) {
   const last = thread.turns[thread.turns.length - 1];
   if (last && last.browse && last.status === 'running') openBrowsePane(thread, last);
   else if (state.browsePane && state.browsePane.threadId === thread.id) { const t = thread.turns.find(x => x.id === state.browsePane.turnId); if (t) paintBrowsePane(thread, t); }
-  const comp = createComposer({ variant: 'compact', placeholder: 'Ask a follow-up', threadId: thread.id, mode: last ? last.mode : undefined, tier: last ? last.tier : undefined, focus: last ? last.focus : undefined, browse: !!(last && last.browse && canBrowse()),
-    onSubmit: ({ text, mode, tier, focus, attachments, browse, resumeTurnId }) => followUp(thread, text, { mode, tier, focus, attachments, browse, resumeTurnId }) });
+  const comp = createComposer({ variant: 'compact', placeholder: 'Ask a follow-up', threadId: thread.id, mode: last ? last.mode : undefined, model: last ? last.pick : undefined, focus: last ? last.focus : undefined, browse: !!(last && last.browse && canBrowse()),
+    onSubmit: ({ text, mode, model, focus, attachments, browse, resumeTurnId }) => followUp(thread, text, { mode, model, focus, attachments, browse, resumeTurnId }) });
   $('[data-dock]', main).appendChild(comp);
   $('[data-share]', main).addEventListener('click', async () => { const ok = await copyText(threadMarkdown(thread)); toast(ok ? 'Copied the thread as Markdown' : 'Could not copy', ok ? 'ok' : 'bad'); });
   $('[data-more]', main).addEventListener('click', e => threadMenu(e.currentTarget, thread));
@@ -1547,7 +1561,7 @@ function paintTurn(sec, thread, t) {
     noteHtml = `<div class="err-box">${icon('alert', 17)}<div>${esc(t.errorMessage || ERROR_COPY[t.error] || ERROR_COPY.upstream_error)}${planIssue ? ' <a href="/pricing">Recharge</a>.' : ''}</div>${!planIssue ? `<button type="button" class="btn sm" data-retry>${icon('refresh', 14)}Retry</button>` : ''}</div>`;
   }
   if (t.status === 'done' && t.truncated) noteHtml += `<div class="answer-note warn">${icon('alert', 14)}This answer ran unusually long and was trimmed at the end. Ask a follow-up to keep going.</div>`;
-  if (t.status === 'done' && t.tierApplied && t.tier && t.tierApplied !== t.tier) noteHtml += `<div class="answer-note">${icon('info', 14)}Answered with the ${TIERS[t.tierApplied] ? TIERS[t.tierApplied].label : t.tierApplied} model; this account doesn’t include ${TIERS[t.tier] ? TIERS[t.tier].label : t.tier}.</div>`;
+  if (t.status === 'done' && (t.modelName || (t.fallback && t.fallback.wanted))) noteHtml += `<div class="answer-note">${icon('info', 14)}${t.fallback && t.fallback.wanted ? `${esc(t.fallback.wanted)} was unavailable, so ${esc(t.modelName || 'another model')} answered.` : `Answered with ${esc(t.modelName)}.`}</div>`;
   if (t.tools && t.tools.length) {
     const byServer = {}; for (const c of t.tools) (byServer[c.server] = byServer[c.server] || []).push(c);
     noteHtml += `<div class="answer-note tools-note">${icon('plug', 14)}<span>${running ? 'Using' : 'Used'} your connectors: ${Object.entries(byServer).map(([srv, calls]) => `<b>${esc(srv)}</b> (${calls.map(c => esc(c.name.replace(/_/g, ' ')) + (c.error ? ' ✕' : '')).join(', ')})`).join(' · ')}</span></div>`;
@@ -1639,7 +1653,7 @@ function wireTurn(sec, thread, t) {
     const tab = e.target.closest('[data-tab]'); if (tab) { showTab(tab.dataset.tab); return; }
     if (e.target.closest('[data-open-sources]')) { showTab('sources'); return; }
     const cite = e.target.closest('.cite'); if (cite && cite.tagName !== 'A') { showTab('sources'); const card = $(`.source-card[data-src-n="${cite.dataset.n}"]`, sec); if (card) { card.scrollIntoView({ block: 'center', behavior: 'smooth' }); card.style.borderColor = 'var(--accent)'; setTimeout(() => card.style.borderColor = '', 1500); } return; }
-    const rel = e.target.closest('[data-rel]'); if (rel) { if (state.runs.has(thread.id)) { toast('Wait for the current answer to finish'); return; } followUp(thread, t.related[+rel.dataset.rel], { mode: t.mode === 'research' ? 'search' : t.mode, tier: t.tier, focus: t.focus }); return; }
+    const rel = e.target.closest('[data-rel]'); if (rel) { if (state.runs.has(thread.id)) { toast('Wait for the current answer to finish'); return; } followUp(thread, t.related[+rel.dataset.rel], { mode: t.mode === 'research' ? 'search' : t.mode, model: t.pick, focus: t.focus }); return; }
     if (e.target.closest('[data-retry]')) { if (!state.runs.has(thread.id)) runTurn(thread, t); return; }
     if (e.target.closest('[data-browse-show]')) { openBrowsePane(thread, t); return; }
     const act = e.target.closest('[data-act]'); if (!act) return;
@@ -1650,7 +1664,7 @@ function wireTurn(sec, thread, t) {
     if (a === 'up' || a === 'down') { t.vote = t.vote === a ? null : a; recordVote(thread, t, t.vote); paintTurn(sec, thread, t); if (t.vote) toast(t.vote === 'up' ? 'Noted, more like this' : 'Noted, Ricorsa will be more direct'); }
     if (a === 'rewrite') {
       const items = [{ key: 'again', label: 'Try again', desc: 'Same question, fresh answer', icon: 'refresh' }, { key: 'concise', label: 'More concise', desc: 'Shorter, just the essentials', icon: 'zap' }, { key: 'detailed', label: 'More detailed', desc: 'Longer, with more depth', icon: 'book' }];
-      if (t.tier !== 'complex') items.push({ key: 'complex', label: 'Use the Reasoning model', desc: 'Slower, most capable', icon: 'brain' });
+      if (t.tier !== 'complex') items.push({ key: 'complex', label: 'Think it through', desc: 'Slower; a deeper pass on the same question', icon: 'brain' });
       if (t.mode !== 'research') items.push({ key: 'research', label: 'Switch to Research', desc: 'Full structured report', icon: 'book' });
       openPop(act, `<div class="pop-h">Rewrite</div>` + menuItems(items), { onMount: pop => $$('[data-key]', pop).forEach(b => b.addEventListener('click', () => { closePop(); if (state.runs.has(thread.id)) return; rewriteTurn(thread, t, b.dataset.key); })) });
     }
@@ -2030,7 +2044,7 @@ function renderDiscover() {
   $$('[data-q]', main).forEach(b => b.addEventListener('click', () => {
     const it = items ? items[+b.dataset.idx] : null;
     const origin = it && it.id ? { kind: 'discover', ideaId: it.id, graphHash: it.graphHash, category: cat, title: it.title, at: it.at || Date.now() } : null;
-    startThread(b.dataset.q, { mode: 'search', tier: state.settings.tier, focus: 'web', origin });
+    startThread(b.dataset.q, { mode: 'search', model: defaultModel(), focus: 'web', origin });
   }));
   $$('[data-build]', main).forEach(b => b.addEventListener('click', () => { const it = items ? items[+b.dataset.build] : null; if (it) startBuild(it, cat); }));
   // The "builds" chips: hovering one lights nothing here, but clicking opens that node in the brain (the link carries it).
@@ -2412,7 +2426,7 @@ function renderSpace(id) {
     <div class="sec-h" style="margin:22px 0 6px">${icon('library', 17)}Threads in this Space</div>
     ${threads.length ? `<div class="list">${threads.map(t => threadRow(t)).join('')}</div>` : `<div class="empty">${icon('library', 28)}<div>Nothing here yet, ask the first question above.</div></div>`}
   </div></div></div>`;
-  const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, tier, focus, attachments, browse }) => startThread(text, { mode, tier, focus, attachments, browse, spaceId: s.id }) });
+  const comp = createComposer({ variant: 'hero', placeholder: `Ask in ${s.name}…`, onSubmit: ({ text, mode, model, focus, attachments, browse }) => startThread(text, { mode, model, focus, attachments, browse, spaceId: s.id }) });
   $('[data-composer]', main).appendChild(comp);
   $('[data-edit]', main).addEventListener('click', () => spaceModal(s));
   $('[data-del-space-page]', main).addEventListener('click', () => confirmDeleteSpaces([s]));
@@ -2895,7 +2909,7 @@ function nodePanel(n, ctl) {
       const sh = $('#npShow', ov); if (sh) sh.addEventListener('click', () => { closeModal(); showInBrain(n.id, false); });
       const mp = $('#npMap', ov); if (mp) mp.addEventListener('click', () => { closeModal(); showInBrain(n.id, true); });
       const di = $('#npDiscover', ov); if (di) di.addEventListener('click', () => { closeModal(); go('#/discover?anchor=' + encodeURIComponent(n.id)); });
-      const ak = $('#npAsk', ov); if (ak) ak.addEventListener('click', () => { closeModal(); startThread(askQ, { mode: 'search', tier: state.settings.tier, focus: 'web', origin: { kind: 'graph', nodeId: n.id, title: truncate(n.label, 120), at: Date.now() } }); });
+      const ak = $('#npAsk', ov); if (ak) ak.addEventListener('click', () => { closeModal(); startThread(askQ, { mode: 'search', model: defaultModel(), focus: 'web', origin: { kind: 'graph', nodeId: n.id, title: truncate(n.label, 120), at: Date.now() } }); });
       $$('[data-np-node]', ov).forEach(b => b.addEventListener('click', () => { const x = g.nodes[b.dataset.npNode]; if (!x) return; graphViews().forEach(v => { if (v.select) v.select(x.id); }); lightNode(x.id); markChip($('#main'), x.id, 'on'); nodePanel(brainNodeFor(x), ctl); }));
       $$('[data-np-idea]', ov).forEach(b => b.addEventListener('click', () => { closeModal(); const [cat, anchor] = b.dataset.npIdea.split('|'); state.discoverCat = cat; state.discoverFocus = b.dataset.npIdeaId || null; go(anchor ? '#/discover?anchor=' + encodeURIComponent(anchor) : '#/discover'); }));
     }
@@ -3007,7 +3021,7 @@ function openSettings() {
   const sel = (id, opts, cur) => `<select id="${id}">${Object.entries(opts).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(typeof v === 'string' ? v : v.label)}</option>`).join('')}</select>`;
   openModal(`<h2>${icon('settings', 20)}Settings</h2><p class="sub">Defaults for new questions. Each composer can still override them.</p>
     <div class="setting"><div class="l"><b>Default mode</b><small>Search answers fast; Research writes a structured report.</small></div>${sel('stMode', MODES, s.mode)}</div>
-    <div class="setting"><div class="l"><b>Default model</b><small>Best balances speed and depth; Reasoning thinks longest.</small></div>${sel('stTier', TIERS, s.tier)}</div>
+    <div class="setting"><div class="l"><b>Default model</b><small>Auto picks the model for each question. Ricorsa supplies every model listed; the list shows the ones answering right now.</small></div>${sel('stModel', Object.fromEntries(modelList().map(m => [m.id, { label: m.id === 'auto' ? 'Auto' : `${m.name} · ${fmtGas(m.gas)}` }])), defaultModel())}</div>
     <div class="setting"><div class="l"><b>Default focus</b><small>Shapes the framing and the kind of references used.</small></div>${sel('stFocus', FOCI, s.focus)}</div>
     <div class="setting"><div class="l"><b>Answer length</b><small>Applies to Search mode.</small></div>${sel('stLen', LENGTHS, s.length)}</div>
     <div class="setting"><div class="l"><b>Learning loop</b><small>Let each answer update your identity graph, which shapes how later questions are read.</small></div><select id="stLearn"><option value="on"${state.graph && state.graph.paused ? '' : ' selected'}>On</option><option value="paused"${state.graph && state.graph.paused ? ' selected' : ''}>Paused</option></select></div>
@@ -3022,7 +3036,7 @@ function openSettings() {
     <div class="modal-actions"><button type="button" class="btn primary" data-close>Done</button></div>`, {
     onMount: ov => {
       const bind = (id, key) => $(id).addEventListener('change', e => { s[key] = e.target.value; persistSettings(); });
-      bind('#stMode', 'mode'); bind('#stTier', 'tier'); bind('#stFocus', 'focus'); bind('#stLen', 'length');
+      bind('#stMode', 'mode'); bind('#stModel', 'model'); bind('#stFocus', 'focus'); bind('#stLen', 'length');
       const demo = $('#stDemo'); if (demo) demo.addEventListener('change', async e => { s.demoPlan = e.target.value; try { await api('/api/me', { method: 'PATCH', body: { demoPlan: e.target.value } }); await bootstrap(); renderSidebar(); render(); toast(e.target.value ? `Showing Ricorsa as a ${state.plan ? state.plan.name : e.target.value} customer` : 'Back to full admin access'); } catch (err) { apiToast(err); } });
       $('#stLearn').addEventListener('change', async e => { try { await setGraphPaused(e.target.value === 'paused'); } catch (err) { apiToast(err); } });
       const gr = $('[data-grants]', ov); if (gr) gr.addEventListener('click', () => grantsModal());
@@ -3102,8 +3116,11 @@ function paintModels(r) {
     <div class="prov-grid">${cards}
       <button type="button" class="prov-card add" data-add-custom>${icon('plus', 18)}<b>Custom endpoint</b><span>Any OpenAI-compatible API by base URL: a gateway, a proxy, a model you host yourself.</span></button>
     </div>
-    <div class="sec-h" style="margin:18px 0 6px">${icon('settings', 16)}Active models</div>
-    <p class="sub">Automatic uses the server's settings and the best model each account can serve. A choice applies as soon as it is saved; if that provider refuses later, the next one that works takes over so answers keep coming.</p>
+    <div class="sec-h" style="margin:18px 0 6px">${icon('layers', 16)}Named models</div>
+    <p class="sub">What the composer's Model menu offers, beside Auto: each named model resolved to the id its maker serves today, probed every ten minutes, and offered only while it answers. When a maker is refusing, the same model is served through OpenRouter if that key is set. A premium model costs ${fmtGas(gasCosts().reasoning)} a question; the others and Auto ${fmtGas(gasCosts().question)}.</p>
+    <div class="catalog-grid">${(r.catalog || []).map(m => `<div class="catalog-row${m.available ? '' : ' off'}"><span class="dot ${m.available ? 'ok' : 'bad'}"></span><div class="l"><b>${esc(m.name)}</b><small>${esc(m.maker)} · ${esc(m.role)} · ${m.class === 'premium' ? 'premium' : 'standard'}${m.servedId ? ` · ${esc(m.servedId)}` : ''}</small></div><div class="r">${m.available ? `<span class="ok">Answering${m.via === 'openrouter' ? ' via OpenRouter' : ''}</span>${m.ms ? `<small>${m.ms} ms</small>` : ''}` : `<span class="bad">Unavailable</span><small>${esc(m.why || '')}${m.downSince ? ` · down ${relTime(m.downSince)}` : ''}</small>`}</div></div>`).join('') || '<div class="muted small">No named models yet.</div>'}</div>
+    <div class="sec-h" style="margin:18px 0 6px">${icon('settings', 16)}Auto</div>
+    <p class="sub">What Auto uses for each kind of work: the server's settings and the best model each account can serve. A choice applies as soon as it is saved; if that provider refuses later, the next one that works takes over so answers keep coming.</p>
     <div class="tier-grid">${tierRows}</div>
     <div class="models-check" style="margin-top:14px">
       <div class="row"><b>Browser check</b><span>${r.browserRun ? `<span class="ok">On.</span> Every built app is opened in a real browser.` : `<span class="bad">Off.</span> Built apps get a code review only (no Browser Run binding on this deployment).`}</span></div>

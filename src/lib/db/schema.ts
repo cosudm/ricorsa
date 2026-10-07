@@ -125,6 +125,10 @@ export type Turn = {
   error: string | null;
   vote?: 'up' | 'down' | null;
   model?: string;
+  /** The model the person chose by name ('auto' when Ricorsa chose), the display name of the model that answered, and the name of the one wanted when it could not be used. */
+  pick?: string;
+  modelName?: string | null;
+  fallback?: { wanted: string } | null;
   usage?: { in: number; out: number; cacheRead?: number; searches?: number };
   /** What this answer cost in gas (the question plus any browser actions), as the gauge showed it. */
   gas?: number;

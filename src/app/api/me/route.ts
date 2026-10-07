@@ -6,6 +6,7 @@ import { handle, json, readJson, fail } from '@/lib/http';
 import { planFor, normalizePlanKey, GAS, GAS_LABELS, PAYG, RECHARGE, gasForUsd } from '@/lib/plans';
 import { readUsage, gasState, capabilityPlan, subscriptionActive } from '@/lib/usage';
 import { autoRechargeState, autoRechargeIfNeeded } from '@/lib/recharge';
+import { offeredModels, refreshModelHealth, modelHealthStale, catalogEntry, AUTO_ID } from '@/lib/models';
 import { listThreads } from '@/lib/threads';
 import { loadGraph, graphView } from '@/lib/graph';
 import { geocodingEnabled, geocoderIsOsm } from '@/lib/geo';
@@ -30,12 +31,19 @@ export const GET = handle(async () => {
   const auto = autoRechargeState(user);
   // The gauge's refresh is the safety net for auto-recharge: a low balance seen here is topped up after the reply.
   if (auto.on && !gas.unlimited && gas.remaining < auto.thresholdGas) after(async () => { try { await autoRechargeIfNeeded(user); } catch (e) { console.warn('[recharge] auto from /api/me failed', String((e as Error)?.message || e)); } });
+  // The named models the composer offers: Auto and every catalog model that can be served right now. The health loop
+  // runs after the response when its record is more than ten minutes old, so a model that stopped answering drops out.
+  const offered = await offeredModels();
+  if (modelHealthStale()) after(async () => { try { await refreshModelHealth(); } catch (e) { console.warn('[models] health refresh failed', String((e as Error)?.message || e)); } });
+  const settings = (user.settings || {}) as { model?: string };
+  const modelDefault = settings.model && (settings.model === AUTO_ID || catalogEntry(settings.model)) ? settings.model : AUTO_ID;
   return json({
     user: { id: user.id, email: user.email, name: user.name, picture: user.picture, settings: user.settings, admin: !!user.admin },
     plan: { key: plan.key, name: sub.name, subscription: sub.key, capabilities: plan.key, caps: plan.caps, tiers: plan.tiers, gasPerMonth: gas.allowance, spaces: plan.spaces, status: user.subscriptionStatus, active: subscriptionActive(user), cycle: user.billingCycle || null, renewsAt: user.planRenewsAt ? new Date(user.planRenewsAt).getTime() : null, contactSales: !!sub.contactSales },
     usage: { today: usage.day.questions, month: usage.month.questions, research: usage.month.research, builds: usage.month.builds, ideas: usage.month.ideas, browserActions: usage.month.browserActions, gas: usage.month.gas },
     /** The gauge: what is left (the balance, plus any monthly allowance), what each thing costs, and where more comes from. */
     gas: { ...gas, remaining: gas.unlimited ? null : gas.remaining, costs: GAS, labels: GAS_LABELS, payg: PAYG, recharge: { gasPerUsd: RECHARGE.gasPerUsd, minUsd: RECHARGE.minUsd, maxUsd: RECHARGE.maxUsd, minGas: gasForUsd(RECHARGE.minUsd), signupGas: RECHARGE.signupGas }, auto: { on: auto.on, thresholdGas: auto.thresholdGas, usd: auto.usd, off: auto.off, card: auto.card } },
+    models: { default: modelDefault, list: offered.filter(m => m.available).map(m => ({ id: m.id, name: m.name, maker: m.maker, role: m.role, class: m.class, gas: m.gas, blurb: m.blurb })) },
     connectors: { total: connectors.length, active: connectors.filter(c => c.enabled && c.status === 'ok').length, limit: user.admin ? 100 : plan.caps.connectors },
     threads,
     spaces: spaces.map(s => ({ ...s, createdAt: new Date(s.createdAt).getTime() })),
@@ -46,11 +54,12 @@ export const GET = handle(async () => {
   });
 });
 
-const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), focus: z.enum(['web', 'academic', 'technical', 'legal', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional(), demoPlan: z.enum(['free', 'essentials', 'professional', 'enterprise', 'pro', 'team', '']).optional() });
+const Settings = z.object({ mode: z.enum(['search', 'research']).optional(), tier: z.enum(['quick', 'default', 'complex']).optional(), model: z.string().max(40).optional(), focus: z.enum(['web', 'academic', 'technical', 'legal', 'writing', 'math', 'code']).optional(), length: z.enum(['concise', 'balanced', 'detailed']).optional(), demoPlan: z.enum(['free', 'essentials', 'professional', 'enterprise', 'pro', 'team', '']).optional() });
 export const PATCH = handle(async (req: Request) => {
   const user = await currentUser();
   const b = Settings.safeParse(await readJson(req)); if (!b.success) return fail(400, 'Invalid settings');
   const patch: Record<string, unknown> = { ...b.data };
+  if ('model' in patch && patch.model !== AUTO_ID && !catalogEntry(String(patch.model))) patch.model = AUTO_ID;
   if ('demoPlan' in patch) { if (!user.admin) delete patch.demoPlan; else if (!patch.demoPlan) patch.demoPlan = undefined; else patch.demoPlan = normalizePlanKey(String(patch.demoPlan)); }
   const settings = { ...(user.settings || {}), ...patch };
   for (const k of Object.keys(settings)) if (settings[k] === undefined) delete settings[k];
